@@ -1,0 +1,19 @@
+{
+  "name": "@social-media/shared-config",
+  "version": "1.0.0",
+  "private": true,
+  "description": "全栈共享配置层 - 环境变量加载 + 7 平台常量定义 + 配置校验",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

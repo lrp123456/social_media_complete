@@ -1,0 +1,21 @@
+{
+  "name": "@social-media/browser-core",
+  "version": "1.0.0",
+  "private": true,
+  "description": "核心 CDP 浏览器工具链 - HumanActions 委托层 + 反检测底层库",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "patchright": "^1.59.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "patchright": "^1.59.0"
+  }
+}

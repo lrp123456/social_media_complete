@@ -1,0 +1,22 @@
+{
+  "name": "@social-media/selectors",
+  "version": "1.0.0",
+  "private": true,
+  "description": "7 平台三级降级动态 DOM 选择器注册表 - Prisma 持久化 + 热重载",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "prisma": "^6.0.0"
+  },
+  "peerDependencies": {
+    "@prisma/client": "^6.0.0"
+  }
+}
