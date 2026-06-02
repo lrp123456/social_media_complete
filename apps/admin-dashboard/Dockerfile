@@ -2,14 +2,11 @@ FROM node:20-slim
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY apps/admin-dashboard/package.json apps/admin-dashboard/next.config.js apps/admin-dashboard/tsconfig.json apps/admin-dashboard/tailwind.config.js apps/admin-dashboard/postcss.config.js apps/admin-dashboard/.npmrc ./
+COPY apps/admin-dashboard/src/ ./src/
+COPY apps/admin-dashboard/public/ ./public/
 
-COPY next.config.js tsconfig.json tailwind.config.js postcss.config.js ./
-COPY src/ ./src/
-COPY public/ ./public/
-
-RUN npm run build
+RUN npm install && npm run build
 
 EXPOSE 3000
 CMD ["npm", "start"]

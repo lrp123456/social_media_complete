@@ -28,9 +28,9 @@
     "dotenv": "^16.4.0",
     "zod": "^3.23.0",
     "ali-oss": "^6.21.0",
-    "@social-media/browser-core": "workspace:*",
-    "@social-media/shared-config": "workspace:*",
-    "@social-media/selectors": "workspace:*"
+    "@social-media/browser-core": "file:../../packages/browser-core",
+    "@social-media/shared-config": "file:../../packages/shared-config",
+    "@social-media/selectors": "file:../../packages/selectors"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

@@ -70,8 +70,8 @@ services:
   # ============================================================
   ts-api-gateway:
     build:
-      context: ./apps/ts-api-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/ts-api-gateway/Dockerfile
     container_name: sm-ts-api
     network_mode: host
     restart: unless-stopped
@@ -105,8 +105,8 @@ services:
   # ============================================================
   python-worker:
     build:
-      context: ./apps/python-worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/python-worker/Dockerfile
     container_name: sm-python-worker
     network_mode: host
     restart: unless-stopped
@@ -129,8 +129,8 @@ services:
   # ============================================================
   admin-dashboard:
     build:
-      context: ./apps/admin-dashboard
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: apps/admin-dashboard/Dockerfile
     container_name: sm-admin-dashboard
     network_mode: host
     restart: unless-stopped
