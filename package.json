@@ -1,0 +1,37 @@
+{
+  "name": "social-media-matrix-platform",
+  "version": "3.0.0",
+  "private": true,
+  "description": "社交媒体矩阵智能运营系统 - Monorepo",
+  "workspaces": [
+    "packages/*",
+    "apps/ts-api-gateway",
+    "apps/admin-dashboard"
+  ],
+  "scripts": {
+    "dev:ts": "pnpm --filter ts-api-gateway dev",
+    "dev:dashboard": "pnpm --filter admin-dashboard dev",
+    "dev": "concurrently \"pnpm dev:ts\" \"pnpm dev:dashboard\"",
+    "build:ts": "pnpm --filter ts-api-gateway build",
+    "build:dashboard": "pnpm --filter admin-dashboard build",
+    "build": "pnpm build:ts && pnpm build:dashboard",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:push": "prisma db push",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f"
+  },
+  "devDependencies": {
+    "prisma": "^6.0.0",
+    "concurrently": "^9.0.0",
+    "typescript": "^5.5.0"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

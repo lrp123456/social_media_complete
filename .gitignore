@@ -1,0 +1,56 @@
+# Monorepo
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Prisma
+prisma/migrations/
+
+# Docker
+postgres_data/
+redis_data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Build outputs
+.next/
+out/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Original projects (read-only references)
+my_folder_backup/
+n8n_backup/
+
+# OpenCode tooling (not project code)
+.opencode/
+
+# UI prototypes (reference only)
+stitch_ai_media_matrix_admin/

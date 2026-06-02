@@ -1,0 +1,276 @@
+// Prisma Schema - 社交媒体矩阵智能运营系统
+// PostgreSQL 15+ | Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// 一、核心业务表（来自 my_folder TS 项目）
+// ============================================================
+
+model User {
+  id                   Int      @id @default(autoincrement())
+  fingerprintWindowId  String   @map("fingerprint_window_id")
+  wechatUserid         String   @map("wechat_userid")
+  platform             String   @default("douyin")
+  status               String   @default("init") // init | active | blocked | cooldown
+  consecutiveNoUpdate  Int      @default(0) @map("consecutive_no_update")
+  cooldownUntil        BigInt   @default(0) @map("cooldown_until")
+  monitoringEnabled    Boolean  @default(true) @map("monitoring_enabled")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  videos    Video[]
+  @@unique([fingerprintWindowId, platform], name: "idx_users_window_platform")
+  @@map("users")
+}
+
+model Video {
+  id           String   @id
+  userId       Int      @map("user_id")
+  description  String   @default("")
+  createTime   BigInt   @map("create_time")
+  commentCount Int      @default(0) @map("comment_count")
+  metrics      String   @default("{}") // JSON
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comments Comment[]
+
+  @@index([userId], name: "idx_videos_user_id")
+  @@index([userId, createTime(sort: Desc)], name: "idx_videos_user_id_create_time")
+  @@map("videos")
+}
+
+model Comment {
+  id           Int      @id @default(autoincrement())
+  videoId      String   @map("video_id")
+  cid          String   @unique
+  text         String   @default("")
+  userNickname String   @default("") @map("user_nickname")
+  userUid      String   @default("") @map("user_uid")
+  diggCount    Int      @default(0) @map("digg_count")
+  createTime   BigInt   @map("create_time")
+  replyId      String   @default("0") @map("reply_id")
+  isNew        Int      @default(1) @map("is_new")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId], name: "idx_comments_video_id")
+  @@index([cid], name: "idx_comments_cid")
+  @@map("comments")
+}
+
+// ============================================================
+// 二、排期与运行状态表
+// ============================================================
+
+model ScheduleRule {
+  id           Int      @id @default(autoincrement())
+  name         String   @default("")
+  ruleType     String   @default("weekday") @map("rule_type") // weekday | date | daily | all_day
+  enabled      Boolean  @default(false)
+  specificDate String?  @map("specific_date") // YYYY-MM-DD for 'date' type
+  daysOfWeek   String   @default("0,6") @map("days_of_week") // comma-separated: 0=Sun,6=Sat
+  startTime    String   @default("02:00") @map("start_time") // HH:MM
+  endTime      String   @default("08:30") @map("end_time")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("schedule_rules")
+}
+
+model OperationLog {
+  id        Int      @id @default(autoincrement())
+  action    String
+  details   String   @default("{}") // JSON
+  userId    String   @default("") @map("user_id")
+  userName  String   @default("") @map("user_name")
+  result    String   @default("success") // success | failure
+  level     String   @default("info") // info | warn | error
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("operation_logs")
+}
+
+model SystemStatus {
+  id                 Int      @id @default(1)
+  status             String   @default("running") // running | paused | error
+  currentInterval    Int      @default(180000) @map("current_interval") // ms
+  consecutiveChecks  Int      @default(0) @map("consecutive_checks")
+  lastCheckTime      BigInt   @default(0) @map("last_check_time")
+  totalChecks        Int      @default(0) @map("total_checks")
+  isDebugMode        Boolean  @default(false) @map("is_debug_mode")
+  enableWarmup       Boolean  @default(false) @map("enable_warmup")
+  nextCheckAt        BigInt   @default(0) @map("next_check_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  @@map("system_status")
+}
+
+// ============================================================
+// 三、爬取与平台配置表
+// ============================================================
+
+model CrawlSetting {
+  id        Int      @id @default(autoincrement())
+  platform  String   @unique
+  mode      String   @default("deep") // deep | light
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("crawl_settings")
+}
+
+model PlatformConfig {
+  id          Int      @id @default(autoincrement())
+  platform    String
+  configKey   String   @map("config_key")
+  configValue String   @default("") @map("config_value")
+  description String   @default("")
+  version     Int      @default(1)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([platform, configKey], name: "idx_platform_config_key")
+  @@map("platform_configs")
+}
+
+model PlatformConfigAudit {
+  id         Int      @id @default(autoincrement())
+  platform   String
+  configKey  String   @map("config_key")
+  oldValue   String   @default("") @map("old_value")
+  newValue   String   @map("new_value")
+  version    Int
+  action     String   @default("update") // update | create | delete
+  operator   String   @default("system")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("platform_config_audit")
+}
+
+model PageStateCache {
+  id                  Int      @id @default(autoincrement())
+  platform            String   @unique
+  lastRefreshAt       BigInt   @default(0) @map("last_refresh_at")
+  lastPageHash        String   @default("") @map("last_page_hash")
+  lastDataFingerprint String   @default("") @map("last_data_fingerprint")
+  refreshCount        Int      @default(0) @map("refresh_count")
+  consecutiveFailures Int      @default(0) @map("consecutive_failures")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@map("page_state_cache")
+}
+
+// ============================================================
+// 四、Python 端业务表（来自 n8n-backup 项目）
+// ============================================================
+
+model TaskRecord {
+  id        Int      @id @default(autoincrement())
+  taskId    String   @unique @map("task_id") @db.VarChar(64)
+  taskType  String   @map("task_type") @db.VarChar(32)
+  status    String   @default("pending") @db.VarChar(16) // pending | running | completed | failed
+  params    String?  @db.Text
+  result    String?  @db.Text
+  error     String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("task_records")
+}
+
+model Blogger {
+  id        Int      @id @default(autoincrement())
+  platform  String   @db.VarChar(32)
+  userId    String   @map("user_id") @db.VarChar(128)
+  userName  String   @map("user_name") @db.VarChar(128)
+  style     String   @default("") @db.VarChar(64)
+  followers String   @default("") @db.VarChar(32)
+  likes     String   @default("") @db.VarChar(32)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([platform], name: "idx_bloggers_platform")
+  @@map("bloggers")
+}
+
+model BGM {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(255)
+  filename  String   @unique @db.VarChar(255)
+  style     String?  @db.VarChar(50)
+  duration  Float?
+  ossUrl    String   @map("oss_url") @db.VarChar(512)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("bgm")
+}
+
+model VideoCommentRecord {
+  id              Int       @id @default(autoincrement())
+  platform        String    @db.VarChar(20) // douyin | xiaohongshu | bilibili | kuaishou
+  videoId         String    @map("video_id") @db.VarChar(64)
+  commentId       String    @map("comment_id") @db.VarChar(64)
+  userId          String?   @map("user_id") @db.VarChar(64)
+  nickname        String?   @db.VarChar(128)
+  content         String?   @db.Text
+  likeCount       Int       @default(0) @map("like_count")
+  createTime      BigInt?   @map("create_time")
+  createTimestamp DateTime? @map("create_timestamp")
+
+  @@map("video_comments")
+}
+
+model MonitorStatus {
+  id              Int       @id @default(autoincrement())
+  platform        String    @db.VarChar(20)
+  accountId       String    @map("account_id") @db.VarChar(64)
+  lastCheckTime   DateTime? @map("last_check_time")
+  lastVideoCount  Int?      @map("last_video_count")
+  lastCommentCount Int?     @map("last_comment_count")
+  status          String    @default("running") @db.VarChar(20)
+
+  @@map("monitor_status")
+}
+
+model VideoCommentCount {
+  id             Int      @id @default(autoincrement())
+  platform       String   @db.VarChar(20)
+  videoId        String   @map("video_id") @db.VarChar(64)
+  commentCount   Int      @default(0) @map("comment_count")
+  videoTitle     String?  @map("video_title") @db.VarChar(200)
+  lastUpdateTime DateTime @default(now()) @map("last_update_time")
+
+  @@unique([platform, videoId], name: "uq_platform_video")
+  @@map("video_comment_counts")
+}
+
+// ============================================================
+// 五、新增表：动态选择器注册表
+// ============================================================
+
+model CustomSelector {
+  id          Int      @id @default(autoincrement())
+  platform    String   @db.VarChar(32)
+  selectorKey String   @map("selector_key") @db.VarChar(128)
+  selectorValue String  @map("selector_value") @db.Text // JSON: { css_selector?, xpath?, id_selector?, text_selector? }
+  description String   @default("") @db.VarChar(255)
+  version     Int      @default(1)
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([platform, selectorKey], name: "idx_selector_platform_key")
+  @@map("custom_selectors")
+}
