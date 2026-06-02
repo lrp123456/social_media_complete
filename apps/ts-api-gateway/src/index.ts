@@ -12,6 +12,7 @@ import { createLogger } from './lib/logger';
 import webhookRouter from './routes/webhook';
 import publishRouter from './routes/publish';
 import configRouter from './routes/config';
+import pinterestRouter from './routes/pinterest';
 
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
@@ -57,6 +58,7 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/webhook', webhookRouter);
 app.use('/api/v1/publish', publishRouter);
 app.use('/api/v1/config', configRouter);
+app.use('/api/v1/pinterest', pinterestRouter);
 
 // 404
 app.use(notFoundHandler);
