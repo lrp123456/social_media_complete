@@ -22,6 +22,17 @@ class MaterialUpdateRequest(BaseModel):
     user_id: str | None = None
 
 
+class VideoComposeRequest(BaseModel):
+    """视频合成请求"""
+    task_id: str
+    task_type: str = "video_compose"
+    mode: str = "no_narration"  # no_narration | with_narration
+    segments: list[dict]  # [{"path": "/oss/path/1.mp4"}, ...]
+    bgm_oss_url: str | None = None
+    style: str = "modern"
+    narration_config: dict | None = None
+
+
 router = APIRouter(prefix="/api/v1/tasks")
 
 
@@ -77,6 +88,26 @@ async def submit_material_update(req: MaterialUpdateRequest, response: Response)
     )
 
     logger.info(f"MaterialUpdate 任务已入队: {req.task_id}")
+
+    return TaskResponse(
+        accepted=True,
+        task_id=req.task_id,
+        arq_job_id=job.job_id,
+    )
+
+
+@router.post("/compose", status_code=202)
+async def submit_video_compose(req: VideoComposeRequest, response: Response):
+    """提交视频合成任务（无解说/带解说双模式）"""
+    queue = await get_arq_queue()
+
+    job = await queue.enqueue_job(
+        "process_video_compose",
+        req.model_dump(),
+        _job_id=req.task_id,
+    )
+
+    logger.info(f"VideoCompose 任务已入队: {req.task_id} (mode={req.mode})")
 
     return TaskResponse(
         accepted=True,

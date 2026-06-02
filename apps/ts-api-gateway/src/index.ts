@@ -13,9 +13,11 @@ import webhookRouter from './routes/webhook';
 import publishRouter from './routes/publish';
 import configRouter from './routes/config';
 import pinterestRouter from './routes/pinterest';
+import composeRouter from './routes/compose';
 
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
+import { startMonitorScheduler } from './services/monitorService';
 
 // ============================================================
 // 初始化
@@ -59,6 +61,7 @@ app.use('/api/v1/webhook', webhookRouter);
 app.use('/api/v1/publish', publishRouter);
 app.use('/api/v1/config', configRouter);
 app.use('/api/v1/pinterest', pinterestRouter);
+app.use('/api/v1/compose', composeRouter);
 
 // 404
 app.use(notFoundHandler);
@@ -76,6 +79,9 @@ app.listen(PORT, () => {
 
   // 启动超时监控（Webhook 补兜）
   startTimeoutMonitor();
+
+  // 启动监控调度器（定时评论检查）
+  startMonitorScheduler();
 });
 
 // 优雅关闭

@@ -161,13 +161,14 @@ async def process_render(ctx, task_data: dict) -> dict:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# 导入素材更新任务
+# 导入素材更新任务 + 视频合成任务
 from app.workers.material_tasks import process_material_update
+from app.workers.video_compose import process_video_compose
 
 # Worker 配置
 class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = ArqWorkerConfig.redis_settings
-    functions = [process_material, process_render, process_material_update]
+    functions = [process_material, process_render, process_material_update, process_video_compose]
     max_jobs = ArqWorkerConfig.max_jobs
