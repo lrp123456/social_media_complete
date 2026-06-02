@@ -1,12 +1,9 @@
 """
 Python JSON Logger - 结构化日志 + Trace ID 自动注入
-使用 python-json-logger + contextvars
 """
 
 import logging
 import sys
-from datetime import datetime, timezone
-from pythonjsonlogger import json
 from .trace import get_trace_id
 
 
@@ -18,7 +15,7 @@ class TraceIdInjector(logging.Filter):
 
 
 def setup_logger(name: str = "python-worker") -> logging.Logger:
-    """创建结构化 JSON 日志器"""
+    """创建结构化日志器"""
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
 
@@ -26,17 +23,16 @@ def setup_logger(name: str = "python-worker") -> logging.Logger:
         return logger
 
     handler = logging.StreamHandler(sys.stdout)
-    formatter = json.JsonFormatter(
-        fmt="%(timestamp)s %(level)s %(name)s %(message)s",
-        timestamp=True,
+    formatter = logging.Formatter(
+        '{"time": "%(asctime)s", "level": "%(levelname)s", "name": "%(name)s", '
+        '"trace_id": "%(trace_id)s", "message": "%(message)s"}',
+        datefmt="%Y-%m-%dT%H:%M:%S",
     )
     handler.setFormatter(formatter)
-
     logger.addHandler(handler)
     logger.addFilter(TraceIdInjector())
 
     return logger
 
 
-# 根日志器
 logger = setup_logger()
