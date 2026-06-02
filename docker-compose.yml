@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   # ============================================================
   # 基础设施
@@ -52,6 +50,14 @@ services:
       DATABASE_URL: "postgresql://sm_admin:your_postgres_password@postgres:5432/social_media"
       LITELLM_MASTER_KEY: "your_litellm_master_key"
       STORE_MODEL_IN_DB: "true"
+      # 代理（海外 API 走代理，国内直连）
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: "localhost,127.0.0.1,postgres,redis,open.bigmodel.cn"
+      # Provider API Keys（从 .env 继承）
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
     volumes:
       - ./services/litellm/config.yaml:/app/config.yaml:ro
     depends_on:
