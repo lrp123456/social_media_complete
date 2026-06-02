@@ -1,18 +1,21 @@
+# ============================================================
+# 社交媒体矩阵智能运营系统 - Docker Compose
+# 全 host 网络模式：容器直连宿主机端口，可访问 Windows 指纹浏览器
+# ============================================================
+
 services:
   # ============================================================
-  # 基础设施
+  # PostgreSQL 15
   # ============================================================
-
   postgres:
     image: postgres:15-alpine
     container_name: sm-postgres
+    network_mode: host
     restart: unless-stopped
     environment:
       POSTGRES_USER: sm_admin
       POSTGRES_PASSWORD: your_postgres_password
       POSTGRES_DB: social_media
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -21,17 +24,19 @@ services:
       timeout: 5s
       retries: 5
 
+  # ============================================================
+  # Redis 7
+  # ============================================================
   redis:
     image: redis:7-alpine
     container_name: sm-redis
+    network_mode: host
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass your_redis_password
-    ports:
-      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass your_redis_password --port 6379
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "ping"]
+      test: ["CMD", "redis-cli", "-a", "your_redis_password", "--raw", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -39,30 +44,23 @@ services:
   # ============================================================
   # LiteLLM Proxy - 大模型网关
   # ============================================================
-
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     container_name: sm-litellm
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "4000:4000"
     environment:
-      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@postgres:5432/social_media"
+      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/social_media"
       LITELLM_MASTER_KEY: "your_litellm_master_key"
       STORE_MODEL_IN_DB: "true"
-      # 代理（海外 API 走代理，国内直连）
       HTTP_PROXY: ${HTTP_PROXY:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
-      NO_PROXY: "localhost,127.0.0.1,postgres,redis,open.bigmodel.cn"
-      # Provider API Keys（从 .env 继承）
+      NO_PROXY: "localhost,127.0.0.1,open.bigmodel.cn"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
     volumes:
       - ./services/litellm/config.yaml:/app/config.yaml:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
     command: >
       --config /app/config.yaml
       --port 4000
@@ -70,20 +68,17 @@ services:
   # ============================================================
   # TS API Gateway - 大脑与自动化执行官
   # ============================================================
-
   ts-api-gateway:
     build:
       context: ./apps/ts-api-gateway
       dockerfile: Dockerfile
     container_name: sm-ts-api
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "3001:3001"
     environment:
-      # Database
-      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@postgres:5432/social_media"
-      # Redis
-      REDIS_URL: "redis://:your_redis_password@redis:6379"
+      # Database (host 模式下用 localhost)
+      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/social_media"
+      REDIS_URL: "redis://:your_redis_password@localhost:6379"
       # Server
       NODE_ENV: production
       TS_API_PORT: "3001"
@@ -94,75 +89,56 @@ services:
       OSS_ENDPOINT: img.naite.cc
       OSS_ACCESS_KEY_ID: your_oss_access_key_id
       OSS_ACCESS_KEY_SECRET: your_oss_access_key_secret
-      # Python Worker
-      PYTHON_WORKER_URL: "http://python-worker:8000"
-      # LiteLLM
-      LITELLM_URL: "http://litellm:4000"
+      # Python Worker (同 host 网络)
+      PYTHON_WORKER_URL: "http://localhost:8000"
+      # LiteLLM (同 host 网络)
+      LITELLM_URL: "http://localhost:4000"
       LITELLM_API_KEY: "your_litellm_master_key"
-      # Fingerprint Browser
-      ROXY_BROWSER_URL: ""
-      BIT_BROWSER_URL: ""
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      # 指纹浏览器 (Windows 宿主机 IP，通过环境变量注入)
+      # WSL2 中 Windows 宿主机 IP 一般为 /etc/resolv.conf 的 nameserver
+      # 或使用 WSL_HOST_IP 环境变量注入
+      ROXY_BROWSER_URL: ${WSL_HOST_IP:-http://172.0.0.1}:54345
+      BIT_BROWSER_URL: ${WSL_HOST_IP:-http://172.0.0.1}:54346
 
   # ============================================================
   # Python Worker - 肌肉与算力中心
   # ============================================================
-
   python-worker:
     build:
       context: ./apps/python-worker
       dockerfile: Dockerfile
     container_name: sm-python-worker
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     environment:
-      # Database
-      DATABASE_URL: "postgresql+asyncpg://sm_admin:your_postgres_password@postgres:5432/social_media"
-      # Redis
-      REDIS_URL: "redis://:your_redis_password@redis:6379"
-      # Server
+      DATABASE_URL: "postgresql+asyncpg://sm_admin:your_postgres_password@localhost:5432/social_media"
+      REDIS_URL: "redis://:your_redis_password@localhost:6379"
       PYTHON_WORKER_PORT: "8000"
       TZ: Asia/Shanghai
-      # OSS
       OSS_REGION: cn-beijing
       OSS_BUCKET: naite-mes
       OSS_ENDPOINT: img.naite.cc
       OSS_ACCESS_KEY_ID: your_oss_access_key_id
       OSS_ACCESS_KEY_SECRET: your_oss_access_key_secret
-      # TS Webhook
-      TS_WEBHOOK_URL: "http://ts-api-gateway:3001/api/v1/webhook/python-callback"
-      # LiteLLM
-      LITELLM_URL: "http://litellm:4000"
+      TS_WEBHOOK_URL: "http://localhost:3001/api/v1/webhook/python-callback"
+      LITELLM_URL: "http://localhost:4000"
       LITELLM_API_KEY: "your_litellm_master_key"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
   # ============================================================
   # Admin Dashboard - Next.js 前端
   # ============================================================
-
   admin-dashboard:
     build:
       context: ./apps/admin-dashboard
       dockerfile: Dockerfile
     container_name: sm-admin-dashboard
+    network_mode: host
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     environment:
       NEXT_PUBLIC_API_URL: "http://localhost:3001/api/v1"
       NODE_ENV: production
       TZ: Asia/Shanghai
-    depends_on:
-      - ts-api-gateway
+      PORT: "3000"
 
 volumes:
   postgres_data:
