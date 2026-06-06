@@ -31,6 +31,21 @@ export type CommentInfo = {
   reply_id: string;
 };
 
+export interface CommentNode {
+  cid: string;
+  text: string;
+  userNickname: string;
+  userUid: string;
+  createTime: number;
+  diggCount: number;
+  level: 1 | 2;
+  rootId?: string;
+  parentId?: string;
+  replyToName?: string;
+  replyId: string;
+  subComments?: CommentNode[];
+}
+
 export type RiskControlDetection = {
   detected: boolean;
   type: string;
@@ -72,6 +87,11 @@ export interface CommentProcessResult {
   awemeId: string;
   success: boolean;
   comments: CommentInfo[];
+  commentGroups?: Array<{
+    rootComment: CommentNode;
+    subReplies: CommentNode[];
+    newInGroup: CommentNode[];
+  }>;
   error?: string;
 }
 
@@ -700,6 +720,173 @@ export class DouyinCrawler {
     }
   }
 
+  private async expandAllReplies(page: Page, videoId: string, newRootCids: string[]): Promise<Map<string, number>> {
+    const replyCounts = new Map<string, number>();
+    logger.info({ videoId }, '[Expand] Starting reply expansion');
+
+    const lastCounts = await db.getRootCommentCounts(videoId);
+
+    const expandBtnDef = getSelector('comment.expand-replies');
+    const expandSelectors = [
+      expandBtnDef.text,
+      'text=/查看\\d+条回复/',
+      'text=/展开/',
+    ].filter(Boolean) as string[];
+
+    const containerDef = getSelector('comment.container');
+    const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
+
+    const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
+    logger.info({ containerCount: containers.length }, '[Expand] Found comment containers');
+
+    let expandedCount = 0;
+    let skippedCount = 0;
+
+    for (const container of containers) {
+      const containerText = container.text || '';
+
+      let rootCid = '';
+      try {
+        const attrs = await HumanActions.cdpGetAttributes(page, container.nodeId);
+        rootCid = attrs?.['data-cid'] || '';
+      } catch {
+        // skip
+      }
+
+      if (!rootCid) {
+        const isRootComment = !containerText.includes('回复 @');
+        if (!isRootComment) continue;
+        continue;
+      }
+
+      const lastCount = lastCounts.get(rootCid);
+      const isNewRoot = newRootCids.includes(rootCid);
+
+      const replyListDef = getSelector('comment.reply-list');
+      const replyListCss = replyListDef.css || '[class*="reply-list"]';
+      const replyListInContainer = await HumanActions.cdpFindChild(page, container.nodeId, replyListCss);
+
+      const currentReplyCount = replyListInContainer
+        ? await HumanActions.cdpCountChildren(page, replyListInContainer, '[class*="container-sXKyMs"]')
+        : 0;
+
+      replyCounts.set(rootCid, currentReplyCount);
+
+      if (!isNewRoot && lastCount !== undefined && currentReplyCount === lastCount) {
+        skippedCount++;
+        continue;
+      }
+
+      for (const sel of expandSelectors) {
+        const btnClicked = await HumanActions.cdpClickByText(page, sel, { timeout: 3000 });
+        if (btnClicked) {
+          await HumanActions.wait(page, 500, 1000);
+          expandedCount++;
+
+          if (replyListInContainer) {
+            await HumanActions.cdpScrollNode(page, replyListInContainer, 200, 'down');
+            await HumanActions.wait(page, 300, 600);
+
+            const moreClicked = await HumanActions.cdpClickByText(page, 'text=/展开更多/', { timeout: 2000 });
+            if (moreClicked) {
+              await HumanActions.wait(page, 300, 600);
+              expandedCount++;
+            }
+          }
+          break;
+        }
+      }
+
+      if (expandedCount % 5 === 0) {
+        await HumanActions.wait(page, 1000, 2000);
+      }
+    }
+
+    logger.info({ videoId, expandedCount, skippedCount, total: containers.length }, '[Expand] Expansion complete');
+    return replyCounts;
+  }
+
+  private async parseCommentTreeFromDOM(page: Page): Promise<CommentNode[]> {
+    const containerDef = getSelector('comment.container');
+    const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
+
+    const result = await page.evaluate((sel: string) => {
+      const containers = document.querySelectorAll(sel);
+      const comments: any[] = [];
+      const seenCids = new Set<string>();
+
+      containers.forEach((c: Element) => {
+        const cid = (c as HTMLElement).dataset.cid || '';
+        if (!cid || seenCids.has(cid)) return;
+        seenCids.add(cid);
+
+        const textEl = c.querySelector('[class*="comment-content-text"]');
+        const text = textEl?.textContent?.trim() || '';
+
+        const replyToEl = c.querySelector('[class*="reply-to"]');
+        const isSub = !!replyToEl;
+        const replyToName = replyToEl?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+
+        const nicknameEl = c.querySelector('[class*="user-name"], [class*="nickname"], [class*="author-name"]');
+        const userNickname = nicknameEl?.textContent?.trim() || '';
+
+        const comment: any = {
+          cid,
+          text,
+          userNickname,
+          userUid: '',
+          createTime: 0,
+          diggCount: 0,
+          level: isSub ? 2 : 1,
+          replyToName,
+          replyId: '0',
+          subComments: [],
+        };
+
+        if (isSub) {
+          const replyList = c.closest('[class*="reply-list"]');
+          if (replyList) {
+            const rootContainer = replyList.closest(sel);
+            if (rootContainer) {
+              comment.rootId = (rootContainer as HTMLElement).dataset.cid || '';
+            }
+          }
+        } else {
+          const replyList = c.querySelector('[class*="reply-list"]');
+          if (replyList) {
+            const subContainers = replyList.querySelectorAll(sel);
+            subContainers.forEach((sub: Element) => {
+              const subCid = (sub as HTMLElement).dataset.cid || '';
+              if (!subCid) return;
+              const subText = sub.querySelector('[class*="comment-content-text"]')?.textContent?.trim() || '';
+              const subReplyTo = sub.querySelector('[class*="reply-to"]')?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+              const subNick = sub.querySelector('[class*="user-name"], [class*="nickname"]')?.textContent?.trim() || '';
+              comment.subComments.push({
+                cid: subCid,
+                text: subText,
+                userNickname: subNick,
+                userUid: '',
+                createTime: 0,
+                diggCount: 0,
+                level: 2,
+                rootId: cid,
+                parentId: '',
+                replyToName: subReplyTo,
+                replyId: '0',
+              });
+            });
+          }
+        }
+
+        comments.push(comment);
+      });
+
+      return comments;
+    }, containerCss);
+
+    return result;
+  }
+
   async captureRiskScene(page: Page, userId: number, riskType: string): Promise<{ screenshotPath: string | null; htmlPath: string | null }> {
     const sceneDir = path.resolve(process.cwd(), 'data', 'risk_scenes');
     if (!fs.existsSync(sceneDir)) {
@@ -976,6 +1163,9 @@ export class DouyinCrawler {
         logger.info({ awemeId: item.awemeId, reactionDelay: Math.round(reactionDelay) }, '[Phase3] Reaction pause — drawer auto-closes after video selection');
         await HumanActions.wait(page, reactionDelay, reactionDelay + 100);
 
+        // [新] DOM 展开所有子回复
+        const replyCounts = await this.expandAllReplies(page, item.awemeId, []);
+
         const response = await this.waitForCommentResponse(page);
 
         if (!response) {
@@ -987,30 +1177,79 @@ export class DouyinCrawler {
           }
           results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'No API response' });
         } else {
+          // [新] 从 DOM 提取完整评论树 + API 时间元数据
+          const domComments = await this.parseCommentTreeFromDOM(page);
+          const existingCids = await db.getExistingCids(item.awemeId);
           const comments = this.parseCommentList(response.body);
-          logger.info({ awemeId: item.awemeId, totalComments: comments.length }, '[Phase3] Comments parsed from API response');
 
-          const lastCommentTime = await db.getLastCommentTime(item.awemeId);
-          const freshRootComments = comments.filter(
-            c => c.create_time > lastCommentTime && (c.reply_id === '0' || c.reply_id === '' || c.reply_id === null)
-          );
+          const newComments: CommentNode[] = [];
+          const allFlatComments: Array<{
+            cid: string; text: string; user_nickname: string; user_uid: string;
+            digg_count: number; create_time: number; reply_id: string;
+            rootId?: string; parentId?: string; level: number; replyToName?: string;
+          }> = [];
 
-          // 先标记该视频所有旧评论为已通知
-          await db.markCommentsAsNotified(item.awemeId);
+          for (const node of domComments) {
+            const apiComment = comments.find(c => c.cid === node.cid);
+            const createTime = apiComment?.create_time || 0;
+            const isNew = !existingCids.has(node.cid);
 
-          for (const comment of freshRootComments) {
-            db.upsertComment(item.awemeId, comment);
+            allFlatComments.push({
+              cid: node.cid, text: node.text, user_nickname: node.userNickname,
+              user_uid: apiComment?.user_uid || '', digg_count: apiComment?.digg_count || 0,
+              create_time: createTime, reply_id: apiComment?.reply_id || '0',
+              rootId: undefined, parentId: undefined, level: 1,
+              replyToName: undefined,
+            });
+
+            if (isNew) newComments.push({ ...node, createTime, diggCount: apiComment?.digg_count || 0, replyId: apiComment?.reply_id || '0' });
+
+            for (const sub of (node.subComments || [])) {
+              const subApi = comments.find(c => c.cid === sub.cid);
+              const subTime = subApi?.create_time || 0;
+              const subIsNew = !existingCids.has(sub.cid);
+
+              allFlatComments.push({
+                cid: sub.cid, text: sub.text, user_nickname: sub.userNickname,
+                user_uid: subApi?.user_uid || '', digg_count: subApi?.digg_count || 0,
+                create_time: subTime, reply_id: subApi?.reply_id || '0',
+                rootId: node.cid, parentId: undefined, level: 2,
+                replyToName: sub.replyToName,
+              });
+
+              if (subIsNew) newComments.push({ ...sub, createTime: subTime, diggCount: subApi?.digg_count || 0, replyId: subApi?.reply_id || '0' });
+            }
           }
-          db.updateCommentCount(item.awemeId, item.newCount);
+
+          await db.markCommentsAsNotified(item.awemeId);
+          await db.upsertCommentTree(item.awemeId, allFlatComments);
+          await db.updateCommentCount(item.awemeId, item.newCount);
+
+          for (const [rootCid, count] of replyCounts) {
+            await db.upsertRootCommentCount(item.awemeId, rootCid, count);
+          }
+
+          const commentGroups = domComments.map(root => ({
+            rootComment: root,
+            subReplies: root.subComments || [],
+            newInGroup: newComments.filter(nc =>
+              nc.cid === root.cid || (nc.rootId === root.cid)
+            ),
+          }));
 
           logger.info({
             awemeId: item.awemeId,
-            allComments: comments.length,
-            freshRootComments: freshRootComments.length,
-            lastCommentTime,
-          }, '[Phase3] Comments saved to database');
+            totalComments: allFlatComments.length,
+            newComments: newComments.length,
+            groups: commentGroups.length,
+          }, '[Phase3] Comment tree saved');
 
-          results.push({ awemeId: item.awemeId, success: true, comments: freshRootComments });
+          results.push({
+            awemeId: item.awemeId,
+            success: true,
+            comments: newComments,
+            commentGroups,
+          } as any);
         }
 
         if (i < queue.length - 1) {
