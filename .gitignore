@@ -54,3 +54,4 @@ n8n_backup/
 
 # UI prototypes (reference only)
 stitch_ai_media_matrix_admin/
+\n# Git worktrees\n.worktrees/
