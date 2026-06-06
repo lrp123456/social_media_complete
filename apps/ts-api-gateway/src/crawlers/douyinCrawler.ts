@@ -745,30 +745,19 @@ export class DouyinCrawler {
     for (const container of containers) {
       const containerText = container.text || '';
 
-      let rootCid = '';
-      try {
-        const attrs = await HumanActions.cdpGetAttributes(page, container.nodeId);
-        rootCid = attrs?.['data-cid'] || '';
-      } catch {
-        // skip
-      }
+      // 用 container 文本判断是否为根评论（子回复含"回复 @"）
+      const isRootComment = !containerText.includes('回复 @');
+      if (!isRootComment) continue;
 
-      if (!rootCid) {
-        const isRootComment = !containerText.includes('回复 @');
-        if (!isRootComment) continue;
-        continue;
-      }
+      // 用容器文本前 30 字符作为简单的识别 key（替代 data-cid）
+      const rootCid = containerText.slice(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
 
       const lastCount = lastCounts.get(rootCid);
       const isNewRoot = newRootCids.includes(rootCid);
 
-      const replyListDef = getSelector('comment.reply-list');
-      const replyListCss = replyListDef.css || '[class*="reply-list"]';
-      const replyListInContainer = await HumanActions.cdpFindChild(page, container.nodeId, replyListCss);
-
-      const currentReplyCount = replyListInContainer
-        ? await HumanActions.cdpCountChildren(page, replyListInContainer, '[class*="container-sXKyMs"]')
-        : 0;
+      // 检查是否有展开按钮（"查看N条回复"）
+      const hasExpandBtn = containerText.match(/查看\d+条回复/);
+      const currentReplyCount = hasExpandBtn ? parseInt(hasExpandBtn[0].replace(/\D/g, ''), 10) || 0 : 0;
 
       replyCounts.set(rootCid, currentReplyCount);
 
@@ -783,15 +772,13 @@ export class DouyinCrawler {
           await HumanActions.wait(page, 500, 1000);
           expandedCount++;
 
-          if (replyListInContainer) {
-            await HumanActions.cdpScrollNode(page, replyListInContainer, 200, 'down');
-            await HumanActions.wait(page, 300, 600);
+          // 滚动评论区加载更多
+          await HumanActions.humanScroll(page, 200, { minPause: 300, maxPause: 600 });
 
-            const moreClicked = await HumanActions.cdpClickByText(page, 'text=/展开更多/', { timeout: 2000 });
-            if (moreClicked) {
-              await HumanActions.wait(page, 300, 600);
-              expandedCount++;
-            }
+          const moreClicked = await HumanActions.cdpClickByText(page, 'text=/展开更多/', { timeout: 2000 });
+          if (moreClicked) {
+            await HumanActions.wait(page, 300, 600);
+            expandedCount++;
           }
           break;
         }
