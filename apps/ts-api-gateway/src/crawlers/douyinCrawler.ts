@@ -949,22 +949,13 @@ export class DouyinCrawler {
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
-        // 新视频首次入库：如果有评论，也需要获取评论数据
-        if (video.comment_count > 0) {
-          logger.info({
-            awemeId: video.aweme_id,
-            description: video.description,
-            commentCount: video.comment_count,
-          }, '[Phase1] New video with comments — enqueuing for initial comment fetch');
-          commentsQueue.push({
-            awemeId: video.aweme_id,
-            description: video.description,
-            oldCount: 0,
-            newCount: video.comment_count,
-          });
-        } else {
-          logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New video with no comments — skipping');
-        }
+        // 新视频首次入库：仅记入 DB，不入队（避免两个数据源交替时重复入队）
+        // 下一轮监测如果评论数增加，自然会触发入队
+        logger.info({
+          awemeId: video.aweme_id,
+          description: video.description,
+          commentCount: video.comment_count,
+        }, '[Phase1] New video discovered — inserting to DB (no enqueue)');
         continue;
       }
 

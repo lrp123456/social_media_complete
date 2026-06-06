@@ -184,7 +184,7 @@ interface MonitorTask {
 // 爬虫实例（按平台复用）
 // ============================================================
 
-const MAX_MONITOR_VIDEOS = 40;
+const MAX_MONITOR_VIDEOS = 20;
 
 const douyinCrawler = new DouyinCrawler(MAX_MONITOR_VIDEOS);
 const kuaishouCrawler = new KuaishouCrawler(MAX_MONITOR_VIDEOS);
