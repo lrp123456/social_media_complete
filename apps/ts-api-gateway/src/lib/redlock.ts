@@ -11,13 +11,21 @@ export function getRedlock(): Redlock {
   if (!redlockInstance) {
     redlockInstance = new Redlock([getRedis()], {
       driftFactor: 0.01,
-      retryCount: 5,
-      retryDelay: 500,
+      retryCount: 30,        // 多次重试等待锁释放
+      retryDelay: 1000,      // 每次重试间隔1秒
       retryJitter: 200,
       automaticExtensionThreshold: 500,
     });
 
     redlockInstance.on('error', (err) => {
+      // 忽略锁释放相关的错误（锁已过期或已被其他进程释放）
+      if (err.message.includes('0 of the 1 requested resources')) {
+        return;
+      }
+      // 忽略锁获取超时错误（正常竞争）
+      if (err.message.includes('quorum')) {
+        return;
+      }
       console.error('Redlock 错误:', err.message);
     });
   }
@@ -30,7 +38,7 @@ export function getRedlock(): Redlock {
  * 锁定 window_id，确保同一时间只有一个任务操控该窗口
  */
 export class WindowMutex {
-  private static readonly LOCK_TTL = 600_000; // 10 分钟（发布操作超时）
+  private static readonly LOCK_TTL = 180_000; // 3 分钟（足够单个平台监控完成，避免崩溃后长时间阻塞）
   private static readonly LOCK_PREFIX = 'window_lock:';
 
   static lockKey(windowId: string): string {
@@ -74,7 +82,7 @@ export class WindowMutex {
         return await WindowMutex.acquire(windowId);
       } catch {
         if (i < maxRetries - 1) {
-          const delay = Math.min(60_000 * Math.pow(2, i), 120_000); // 1min, 2min, 4min
+          const delay = Math.min(5_000 * Math.pow(2, i), 30_000); // 5s, 10s, 20s
           console.log(`[Redlock] 窗口 ${windowId} 锁重试 #${i + 1}, ${delay / 1000}s 后重试`);
           await new Promise((resolve) => setTimeout(resolve, delay));
         }
