@@ -994,8 +994,8 @@ export class DouyinCrawler {
     }
 
     logger.info({ userId, videoCount: videos.length }, '[Phase1] Comparison done, upserting videos to database');
-    db.upsertVideosBatch(userId, videos);
-    db.truncateVideosByUser(userId, this.maxMonitorVideos);
+    await db.upsertVideosBatch(userId, videos);
+    await db.truncateVideosByUser(userId, this.maxMonitorVideos);
 
     if (commentsQueue.length === 0) {
       logger.info({ userId }, '[Phase1] No comment updates found — task complete');
