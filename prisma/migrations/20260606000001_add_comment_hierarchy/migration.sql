@@ -14,10 +14,8 @@ CREATE TABLE IF NOT EXISTS "video_root_comment_counts" (
     "video_id" text NOT NULL,
     "cid" text NOT NULL,
     "reply_count" integer NOT NULL DEFAULT 0,
+    "created_at" timestamp(3) without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" timestamp(3) without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "video_root_comment_counts_pkey" PRIMARY KEY ("id"),
     CONSTRAINT "video_root_comment_counts_video_id_cid_key" UNIQUE ("video_id", "cid")
 );
-
--- Create index on video_id for VideoRootCommentCount
-CREATE INDEX IF NOT EXISTS "idx_video_root_comment_counts_video_id" ON "video_root_comment_counts"("video_id");
