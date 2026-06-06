@@ -60,7 +60,10 @@
       },
       "menus": {
         "nav_to_creator_center": {
-          "purposes": ["monitor", "publish"],
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
           "primary": "getByText(\"创作者服务平台\")",
           "fallbacks": [
             "a[href*=\"creator\"]:visible",
@@ -619,30 +622,50 @@
           "description": "抖音登录QR码"
         },
         "btn_drawer_confirm": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByRole(\"button\", name=\"确定\")",
-          "fallbacks": ["button:has-text(\"确定\")", "button:has-text(\"确认\")", ".semi-button-primary:has-text(\"确\")"],
+          "fallbacks": [
+            "button:has-text(\"确定\")",
+            "button:has-text(\"确认\")",
+            ".semi-button-primary:has-text(\"确\")"
+          ],
           "selectorType": "role",
           "description": "抖音评论管理-抽屉确认按钮"
         },
         "btn_expand_replies": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "text=/查看\\d+条回复/",
-          "fallbacks": ["text=/展开/", "[class*='expand-reply']"],
+          "fallbacks": [
+            "text=/展开/",
+            "[class*='expand-reply']"
+          ],
           "selectorType": "text",
           "description": "抖音评论区--展开子回复按钮"
         },
         "btn_reply_comment": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "text=回复",
-          "fallbacks": ["[class*='reply-btn']"],
+          "fallbacks": [
+            "[class*='reply-btn']"
+          ],
           "selectorType": "text",
           "description": "抖音评论区--回复按钮"
         },
         "btn_reply_submit": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "[class*='submit-btn']",
-          "fallbacks": ["button[class*='submit']", "div[class*='submit']"],
+          "fallbacks": [
+            "button[class*='submit']",
+            "div[class*='submit']"
+          ],
           "selectorType": "css",
           "description": "抖音评论区--回复发送按钮"
         }
@@ -732,93 +755,147 @@
           "selectorType": "css",
           "description": "发布成功提示"
         },
-         "region_upload_progress": {
-           "purposes": [
-             "publish"
-           ],
-           "primary": "[class*=upload-progress]:visible",
-           "fallbacks": [
-             "[class*=upload][class*=progress]:visible",
-             "[class*=progress-bar]:visible"
-           ],
-           "selectorType": "css",
-            "description": "上传进度条（避开 video 播放器的 progress）"
-          },
-          "region_drawer_portal": {
-            "purposes": ["monitor"],
-            "primary": ".douyin-creator-interactive-portal",
-            "fallbacks": ["[class*=\"semi-sidesheet\"]", "[class*=\"drawer\"]"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉容器portal"
-          },
-          "region_drawer_sidesheet": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"semi-sidesheet\"][class*=\"right\"]",
-            "fallbacks": [".semi-sidesheet-visible", "[class*=\"sidesheet\"]"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉侧面板"
-          },
-          "region_drawer_mask": {
-            "purposes": ["monitor"],
-            "primary": ".douyin-creator-interactive-sidesheet-mask",
-            "fallbacks": ["[class*=\"semi-sidesheet-mask\"]", "[class*=\"mask\"]"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉遮罩层"
-          },
-          "region_drawer_content": {
-            "purposes": ["monitor"],
-            "primary": ".douyin-creator-interactive-sidesheet-body",
-            "fallbacks": ["[class*=\"sidesheet-body\"]", "[class*=\"side-sheet-body\"]", ".semi-sidesheet-body"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉内容区（可滚动）"
-          },
-          "region_drawer_video_item": {
-            "purposes": ["monitor"],
-            "primary": ".container-Lkxos9",
-            "fallbacks": [".content-UQiIKV", "[class*=\"video-item\"]", "[class*=\"work-item\"]", "[class*=\"content-item\"]"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉内视频条目容器"
-          },
-          "region_drawer_video_title": {
-            "purposes": ["monitor"],
-            "primary": ".title-LUOP3b",
-            "fallbacks": ["[class*=\"title\"]", "[class*=\"desc\"]"],
-            "selectorType": "css",
-            "description": "抖音评论管理-抽屉内视频标题"
-          },
-          "region_sidebar": {
-            "purposes": ["monitor", "publish"],
-            "primary": ".douyin-creator-master-navigation-list",
-            "fallbacks": ["nav", "[class*=\"navigation\"]", "[class*=\"sidebar\"]"],
-            "selectorType": "css",
-            "description": "抖音侧边栏导航列表"
-          },
-          "region_reply_list": {
-            "purposes": ["monitor"],
-            "primary": "[class*='reply-list']",
-            "selectorType": "css",
-            "description": "抖音评论区--子回复列表容器"
-          },
-          "region_comment_container": {
-            "purposes": ["monitor"],
-            "primary": "[class*='container-sXKyMs']",
-            "selectorType": "css",
-            "description": "抖音评论区--评论容器"
-          },
-          "region_reply_input": {
-            "purposes": ["monitor"],
-            "primary": "div[contenteditable=\"true\"]",
-            "selectorType": "css",
-            "description": "抖音评论区--回复输入框"
-          },
-          "region_sidebar_scroll": {
-            "purposes": ["monitor", "publish"],
-            "primary": ".douyin-creator-master-navigation-list",
-            "fallbacks": ["[class*='navigation-list']"],
-            "selectorType": "css",
-            "description": "抖音侧边栏滚动容器"
-          }
-       },
+        "region_upload_progress": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "[class*=upload-progress]:visible",
+          "fallbacks": [
+            "[class*=upload][class*=progress]:visible",
+            "[class*=progress-bar]:visible"
+          ],
+          "selectorType": "css",
+          "description": "上传进度条（避开 video 播放器的 progress）"
+        },
+        "region_drawer_portal": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".douyin-creator-interactive-portal",
+          "fallbacks": [
+            "[class*=\"semi-sidesheet\"]",
+            "[class*=\"drawer\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉容器portal"
+        },
+        "region_drawer_sidesheet": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"semi-sidesheet\"][class*=\"right\"]",
+          "fallbacks": [
+            ".semi-sidesheet-visible",
+            "[class*=\"sidesheet\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉侧面板"
+        },
+        "region_drawer_mask": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".douyin-creator-interactive-sidesheet-mask",
+          "fallbacks": [
+            "[class*=\"semi-sidesheet-mask\"]",
+            "[class*=\"mask\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉遮罩层"
+        },
+        "region_drawer_content": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".douyin-creator-interactive-sidesheet-body",
+          "fallbacks": [
+            "[class*=\"sidesheet-body\"]",
+            "[class*=\"side-sheet-body\"]",
+            ".semi-sidesheet-body"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内容区（可滚动）"
+        },
+        "region_drawer_video_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".container-Lkxos9",
+          "fallbacks": [
+            ".content-UQiIKV",
+            "[class*=\"video-item\"]",
+            "[class*=\"work-item\"]",
+            "[class*=\"content-item\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内视频条目容器"
+        },
+        "region_drawer_video_title": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".title-LUOP3b",
+          "fallbacks": [
+            "[class*=\"title\"]",
+            "[class*=\"desc\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内视频标题"
+        },
+        "region_sidebar": {
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
+          "primary": ".douyin-creator-master-navigation-list",
+          "fallbacks": [
+            "nav",
+            "[class*=\"navigation\"]",
+            "[class*=\"sidebar\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音侧边栏导航列表"
+        },
+        "region_reply_list": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*='reply-list']",
+          "selectorType": "css",
+          "description": "抖音评论区--子回复列表容器",
+          "fallbacks": []
+        },
+        "region_comment_container": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*='container-sXKyMs']",
+          "selectorType": "css",
+          "description": "抖音评论区--评论容器",
+          "fallbacks": []
+        },
+        "region_reply_input": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[contenteditable=\"true\"]",
+          "selectorType": "css",
+          "description": "抖音评论区--回复输入框",
+          "fallbacks": []
+        },
+        "region_sidebar_scroll": {
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
+          "primary": ".douyin-creator-master-navigation-list",
+          "fallbacks": [
+            "[class*='navigation-list']"
+          ],
+          "selectorType": "css",
+          "description": "抖音侧边栏滚动容器"
+        }
+      },
       "textboxes": {
         "tb_title": {
           "purposes": [
@@ -928,7 +1005,10 @@
       },
       "menus": {
         "nav_to_creator_center": {
-          "purposes": ["monitor", "publish"],
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
           "primary": "getByText(\"创作者中心\")",
           "fallbacks": [
             "a[href*=\"cp.kuaishou\"]:visible",
@@ -1360,7 +1440,9 @@
           "description": "快手选择视频弹窗中的视频条目"
         },
         "btn_page_next": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "button.btn-next:visible",
           "fallbacks": [
             ".btn-next:visible",
@@ -1627,51 +1709,85 @@
             "[class*=progress]:visible"
           ],
           "selectorType": "css",
-            "description": "快手转码进度条"
-          },
-          "region_drawer": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"drawer\"]:visible",
-            "fallbacks": ["[class*=\"sidesheet\"]:visible", "[class*=\"modal\"]:visible"],
-            "selectorType": "css",
-            "description": "快手评论管理-抽屉容器"
-          },
-          "region_drawer_sidesheet": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"sidesheet\"]:visible",
-            "fallbacks": ["[class*=\"drawer\"]:visible"],
-            "selectorType": "css",
-            "description": "快手评论管理-抽屉侧面板"
-          },
-          "region_drawer_mask": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"mask\"]:visible",
-            "fallbacks": ["[class*=\"overlay\"]:visible", "[class*=\"modal-mask\"]:visible"],
-            "selectorType": "css",
-            "description": "快手评论管理-抽屉遮罩层"
-          },
-          "region_drawer_video_item": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"video-item\"]:visible",
-            "fallbacks": ["[class*=\"work-item\"]:visible", "[class*=\"content-item\"]:visible", "[class*=\"photo-item\"]:visible"],
-            "selectorType": "css",
-            "description": "快手评论管理-抽屉内视频条目"
-          },
-          "region_sidebar": {
-            "purposes": ["monitor", "publish"],
-            "primary": "section > ul",
-            "fallbacks": ["nav ul", "[class*=\"sidebar\"] ul", "[class*=\"menu\"]"],
-            "selectorType": "css",
-            "description": "快手侧边栏导航列表"
-          },
-          "region_work_list_table_body": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"table\"] [class*=\"body\"]",
-            "fallbacks": [".ant-table-body", "[class*=\"list-scroll\"]", "[class*=\"scroll\"]", "[class*=\"work\"] [class*=\"list\"]"],
-            "selectorType": "css",
-            "description": "快手作品管理-表格滚动区域"
-          }
-       },
+          "description": "快手转码进度条"
+        },
+        "region_drawer": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"drawer\"]:visible",
+          "fallbacks": [
+            "[class*=\"sidesheet\"]:visible",
+            "[class*=\"modal\"]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手评论管理-抽屉容器"
+        },
+        "region_drawer_sidesheet": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"sidesheet\"]:visible",
+          "fallbacks": [
+            "[class*=\"drawer\"]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手评论管理-抽屉侧面板"
+        },
+        "region_drawer_mask": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"mask\"]:visible",
+          "fallbacks": [
+            "[class*=\"overlay\"]:visible",
+            "[class*=\"modal-mask\"]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手评论管理-抽屉遮罩层"
+        },
+        "region_drawer_video_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"video-item\"]:visible",
+          "fallbacks": [
+            "[class*=\"work-item\"]:visible",
+            "[class*=\"content-item\"]:visible",
+            "[class*=\"photo-item\"]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手评论管理-抽屉内视频条目"
+        },
+        "region_sidebar": {
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
+          "primary": "section > ul",
+          "fallbacks": [
+            "nav ul",
+            "[class*=\"sidebar\"] ul",
+            "[class*=\"menu\"]"
+          ],
+          "selectorType": "css",
+          "description": "快手侧边栏导航列表"
+        },
+        "region_work_list_table_body": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"table\"] [class*=\"body\"]",
+          "fallbacks": [
+            ".ant-table-body",
+            "[class*=\"list-scroll\"]",
+            "[class*=\"scroll\"]",
+            "[class*=\"work\"] [class*=\"list\"]"
+          ],
+          "selectorType": "css",
+          "description": "快手作品管理-表格滚动区域"
+        }
+      },
       "textboxes": {
         "tb_description": {
           "purposes": [
@@ -1759,7 +1875,10 @@
       },
       "menus": {
         "nav_to_creator_center": {
-          "purposes": ["monitor", "publish"],
+          "purposes": [
+            "monitor",
+            "publish"
+          ],
           "primary": "getByText(\"创作中心\")",
           "fallbacks": [
             "a[href*=\"creator\"]:visible",
@@ -2131,18 +2250,18 @@
           "selectorType": "css",
           "description": "数据看板-内容分析-滚动区域"
         },
-         "region_upload_progress": {
-           "purposes": [
-             "publish"
-           ],
-           "primary": "[class*=upload-progress]:visible",
-           "fallbacks": [
-             "[class*=upload][class*=progress]:visible",
-             "[class*=progress-bar]:visible"
-           ],
-           "selectorType": "css",
-           "description": "小红书上传进度条（避开 video 播放器的 progress）"
-         },
+        "region_upload_progress": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "[class*=upload-progress]:visible",
+          "fallbacks": [
+            "[class*=upload][class*=progress]:visible",
+            "[class*=progress-bar]:visible"
+          ],
+          "selectorType": "css",
+          "description": "小红书上传进度条（避开 video 播放器的 progress）"
+        },
         "region_success_toast": {
           "purposes": [
             "publish"
@@ -2154,23 +2273,36 @@
             "[class*=toast]:visible"
           ],
           "selectorType": "text",
-            "description": "小红书发布成功提示"
-          },
-          "region_note_list": {
-            "purposes": ["monitor"],
-            "primary": "[class*=\"note-list\"]:visible",
-            "fallbacks": ["[class*=\"waterfall\"]:visible", "[class*=\"infinite\"]:visible", "[class*=\"list-container\"]:visible", "[class*=\"content-list\"]:visible"],
-            "selectorType": "css",
-            "description": "小红书笔记管理-笔记列表区域"
-          },
-          "region_note_list_scroll": {
-            "purposes": ["monitor"],
-            "primary": "#content-area > main > div:nth-child(3) > div > div > div.d-tabs.d-tabs-top > div.d-tabs-pane > div",
-            "fallbacks": ["#content-area main [class*=\"scroll\"]", "#content-area main [class*=\"list\"]", "[class*=\"table\"] [class*=\"body\"]"],
-            "selectorType": "css",
-            "description": "小红书笔记管理-可滚动容器"
-          }
-       },
+          "description": "小红书发布成功提示"
+        },
+        "region_note_list": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"note-list\"]:visible",
+          "fallbacks": [
+            "[class*=\"waterfall\"]:visible",
+            "[class*=\"infinite\"]:visible",
+            "[class*=\"list-container\"]:visible",
+            "[class*=\"content-list\"]:visible"
+          ],
+          "selectorType": "css",
+          "description": "小红书笔记管理-笔记列表区域"
+        },
+        "region_note_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "#content-area > main > div:nth-child(3) > div > div > div.d-tabs.d-tabs-top > div.d-tabs-pane > div",
+          "fallbacks": [
+            "#content-area main [class*=\"scroll\"]",
+            "#content-area main [class*=\"list\"]",
+            "[class*=\"table\"] [class*=\"body\"]"
+          ],
+          "selectorType": "css",
+          "description": "小红书笔记管理-可滚动容器"
+        }
+      },
       "textboxes": {
         "tb_title": {
           "purposes": [
