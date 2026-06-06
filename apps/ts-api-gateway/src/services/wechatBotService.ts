@@ -190,6 +190,19 @@ class WeChatBotManager {
     logger.info(`发送消息给 ${userids.join(', ')}: ${content.substring(0, 50)}...`);
   }
 
+  async sendTemplateCard(userids: string[], card: any): Promise<void> {
+    if (!this.client) throw new Error('机器人未连接');
+
+    for (const userid of userids) {
+      await this.client.sendMessage(userid, {
+        msgtype: 'template_card',
+        template_card: card,
+      });
+    }
+
+    logger.info(`发送模板卡片给 ${userids.join(', ')}`);
+  }
+
   async replyMessage(frame: any, content: string): Promise<void> {
     if (!this.client) throw new Error('机器人未连接');
 
