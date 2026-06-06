@@ -12,14 +12,18 @@ COPY packages/ packages/
 COPY apps/ts-api-gateway/ apps/ts-api-gateway/
 
 # 安装 workspace 包的依赖
-RUN cd /app/packages/browser-core && npm install
-RUN cd /app/packages/shared-config && npm install
-RUN cd /app/packages/selectors && npm install
+# 使用 --omit=dev 跳过 devDependencies（prisma CLI、typescript），避免 dev 树中
+# 传递依赖（prisma → c12 → citty → vitest peer）触发 ERESOLVE 冲突
+# 使用 --legacy-peer-deps 兼容 pnpm file: 链的 peer dep
+RUN cd /app/packages/browser-core && npm install --omit=dev --legacy-peer-deps
+RUN cd /app/packages/shared-config && npm install --omit=dev --legacy-peer-deps
+RUN cd /app/packages/selectors && npm install --omit=dev --legacy-peer-deps
 
 WORKDIR /app/apps/ts-api-gateway
-RUN npm install
+RUN npm install --legacy-peer-deps
+RUN npm install @wecom/aibot-node-sdk --legacy-peer-deps
 
-# 生成 Prisma Client
+# 生成 Prisma Client + 同步数据库结构
 RUN npx prisma generate --schema /app/prisma/schema.prisma
 
-CMD ["npx", "tsx", "src/index.ts"]
+CMD npx prisma db push --schema /app/prisma/schema.prisma --accept-data-loss && npx tsx src/index.ts
