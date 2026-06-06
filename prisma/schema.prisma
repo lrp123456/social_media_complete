@@ -60,13 +60,30 @@ model Comment {
   createTime   BigInt   @map("create_time")
   replyId      String   @default("0") @map("reply_id")
   isNew        Int      @default(1) @map("is_new")
+  rootId       String?  @map("root_id")
+  parentId     String?  @map("parent_id")
+  level        Int      @default(1) @map("level")
+  replyToName  String?  @map("reply_to_name")
   createdAt    DateTime @default(now()) @map("created_at")
 
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([videoId], name: "idx_comments_video_id")
   @@index([cid], name: "idx_comments_cid")
+  @@index([videoId, rootId], name: "idx_comments_video_root")
   @@map("comments")
+}
+
+model VideoRootCommentCount {
+  id         String   @id @default(uuid())
+  videoId    String   @map("video_id")
+  cid        String
+  replyCount Int      @default(0) @map("reply_count")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@unique([videoId, cid])
+  @@index([videoId])
+  @@map("video_root_comment_counts")
 }
 
 // ============================================================
