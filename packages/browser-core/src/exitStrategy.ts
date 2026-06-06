@@ -25,8 +25,8 @@ export class ExitStrategy {
   }
 
   static getQuerySource(): QuerySource {
-    const source: QuerySource = 'item_list';
-    logger.info({ source, disabled: ['work_list'] }, 'Query source chosen (work_list disabled due to bug)');
+    const source: QuerySource = Math.random() < 0.5 ? 'work_list' : 'item_list';
+    logger.info({ source }, 'Query source randomly chosen');
     return source;
   }
 

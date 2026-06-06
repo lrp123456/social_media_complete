@@ -523,8 +523,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask): Promise<MonitorRe
     await kuaishouCrawler.navigateToHome(page);
   }
 
-  // Phase 1
-  const source: 'work_list' | 'photo_analysis' = 'photo_analysis';
+  // Phase 1 — 随机选择数据源
+  const source: 'work_list' | 'photo_analysis' = Math.random() < 0.5 ? 'work_list' : 'photo_analysis';
   const phase1Result = await kuaishouCrawler.checkForUpdates(page, task.userId, source);
 
   kuaishouCrawler.unregisterListener();
@@ -537,7 +537,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask): Promise<MonitorRe
   }
 
   if (phase1Result.commentsQueue.length === 0) {
-    await kuaishouCrawler.executeExitStrategy(page, 'kuaishou_content' as any);
+    const exitPage = source === 'work_list' ? 'kuaishou_content' : 'kuaishou_data_center';
+    await kuaishouCrawler.executeExitStrategy(page, exitPage as any);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
