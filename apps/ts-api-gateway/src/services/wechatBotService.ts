@@ -39,6 +39,13 @@ class WeChatBotManager {
   };
   private messageHandlers: MessageHandler[] = [];
   private pendingLinks = new Map<string, { resolve: (userid: string) => void; timeout: NodeJS.Timeout }>();
+  private pendingReplies = new Map<string, {
+    videoId: string;
+    awemeId: string;
+    userId: number;
+    windowId: string;
+    timeout: NodeJS.Timeout;
+  }>();
 
   async start(config: BotConfig): Promise<BotStatus> {
     if (this.client && this.status.connected) {
@@ -160,6 +167,33 @@ class WeChatBotManager {
     };
   }
 
+  setPendingReply(
+    commentCid: string,
+    context: { videoId: string; awemeId: string; userId: number; windowId: string },
+    timeoutMs = 300_000,
+  ): void {
+    const existing = this.pendingReplies.get(commentCid);
+    if (existing) clearTimeout(existing.timeout);
+
+    const timeout = setTimeout(() => {
+      this.pendingReplies.delete(commentCid);
+      logger.info({ commentCid }, '待回复上下文超时，已清除');
+    }, timeoutMs);
+
+    this.pendingReplies.set(commentCid, { ...context, timeout });
+    logger.info({ commentCid, ...context }, '已设置待回复上下文');
+  }
+
+  getPendingReply(commentCid: string) {
+    return this.pendingReplies.get(commentCid);
+  }
+
+  clearPendingReply(commentCid: string): void {
+    const existing = this.pendingReplies.get(commentCid);
+    if (existing) clearTimeout(existing.timeout);
+    this.pendingReplies.delete(commentCid);
+  }
+
   createLinkRequest(timeoutMs = 120_000): { code: string; promise: Promise<string> } {
     const code = String(Math.floor(100000 + Math.random() * 900000));
 
@@ -225,6 +259,78 @@ async function autoStartBot(): Promise<void> {
     try {
       await botManager.start({ botId, secret });
       logger.info(`🤖 企业微信机器人自动连接成功: botId=${botId}`);
+
+      // 注册评论回复消息处理器
+      botManager.onMessage(async (msg: any) => {
+        const userid = msg.body?.from?.userid;
+        const content = (msg.body?.text?.content || '').trim();
+        if (!userid || !content) return;
+
+        // 匹配回复意图: 格式 "回复 <awemeId> <commentCid>"（来自 jump_list type=3）
+        const replySetup = content.match(/^回复\s+(\S+)\s+(\S+)$/);
+        if (replySetup) {
+          const awemeId = replySetup[1];
+          const commentCid = replySetup[2];
+
+          // 动态导入 prisma（避免循环依赖）
+          const { prisma } = await import('../lib/prisma');
+          const user = await prisma.user.findFirst({
+            where: { wechatUserid: userid },
+            select: { id: true },
+          }).catch(() => null);
+
+          if (!user) return;
+
+          const window = await (prisma as any).browserWindow?.findFirst({
+            where: { userId: user.id, platform: 'douyin' },
+            select: { fingerprintWindowId: true },
+          }).catch(() => null);
+
+          if (!window) {
+            await botManager.sendTextMessage([userid], '❌ 未找到关联的浏览器窗口');
+            return;
+          }
+
+          botManager.setPendingReply(commentCid, {
+            videoId: awemeId, awemeId, userId: user.id, windowId: window.fingerprintWindowId,
+          });
+
+          await botManager.sendTextMessage([userid], `💬 已选择回复评论，请直接发送回复内容（5分钟内有效）`);
+          return;
+        }
+
+        // 匹配实际回复文本（用户不在"回复"前缀模式下直接发送文本）
+        for (const [commentCid, ctx] of botManager['pendingReplies']) {
+          const { prisma } = await import('../lib/prisma');
+          const user = await prisma.user.findFirst({
+            where: { wechatUserid: userid },
+            select: { id: true },
+          }).catch(() => null);
+
+          if (user && ctx.userId === user.id) {
+            botManager.clearPendingReply(commentCid);
+
+            // 入队回复任务
+            const { monitorQueue } = await import('./monitorService');
+            await (monitorQueue as any).add('execute_reply', {
+              taskId: `reply_${Date.now()}_${commentCid}`,
+              userId: ctx.userId,
+              platform: 'douyin',
+              windowId: ctx.windowId,
+              fingerprintWindowId: ctx.windowId,
+              replyData: {
+                videoId: ctx.videoId,
+                commentCid,
+                text: content,
+              },
+            });
+
+            const preview = content.length > 50 ? content.slice(0, 50) + '...' : content;
+            await botManager.sendTextMessage([userid], `✅ 回复已提交: "${preview}"`);
+            return;
+          }
+        }
+      });
     } catch (err) {
       logger.warn({ err: (err as Error).message }, '企业微信机器人自动连接失败');
     }

@@ -212,6 +212,16 @@ export const monitorWorker = new Worker<MonitorTask>(
   'monitor',
   async (job: Job<MonitorTask>) => {
     const task = job.data;
+
+    // 回复任务特殊处理
+    if (job.name === 'execute_reply') {
+      const replyData = (task as any).replyData;
+      if (replyData) {
+        await executeReplyAction(task, replyData);
+      }
+      return;
+    }
+
     logger.info(`🔍 监控任务开始: ${task.taskId} → ${task.platform}:${task.userId}`);
 
     let lock: any = null;
@@ -817,6 +827,91 @@ export function restartMonitorScheduler(): void {
   const cfg = getMonitorConfig();
   logger.info(`🔄 重启监控调度器 (高频: ${cfg.activeMin}-${cfg.activeMax}秒, 空闲: ${cfg.idleMin}-${cfg.idleMax}秒, 阈值: ${cfg.idleThreshold})`);
   startMonitorScheduler();
+}
+
+// ============================================================
+// 回复执行
+// ============================================================
+
+async function executeReplyAction(
+  task: MonitorTask,
+  replyData: { videoId: string; commentCid: string; text: string },
+): Promise<void> {
+  const bm = getBrowserManager();
+  const { page } = await bm.connect(String(task.windowId), '', task.platform);
+
+  try {
+    const currentUrl = page.url();
+    if (!currentUrl.includes('creator.douyin.com')) {
+      await douyinCrawler.navigateToCreatorHome(page);
+    }
+
+    const navSuccess = await douyinCrawler.navigateToCommentManage(page);
+    if (!navSuccess) {
+      logger.error('回复失败：无法导航到评论管理');
+      return;
+    }
+
+    const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
+    if (!drawerOpened) {
+      logger.error('回复失败：无法打开作品选择抽屉');
+      return;
+    }
+
+    await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, '');
+    await HumanActions.wait(page, 1500, 3000);
+
+    const containerCss = '[class*="container-sXKyMs"]';
+    const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
+    let targetNodeId: number | null = null;
+
+    for (const c of containers) {
+      if (c.text && c.text.includes(replyData.commentCid)) {
+        targetNodeId = c.nodeId;
+        break;
+      }
+    }
+
+    if (!targetNodeId) {
+      logger.warn({ commentCid: replyData.commentCid }, '回复：未精确匹配目标评论，尝试用第一个评论容器');
+      if (containers.length > 0) targetNodeId = containers[0].nodeId;
+      else {
+        logger.error('回复失败：未找到任何评论容器');
+        return;
+      }
+    }
+
+    const replyBtnClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
+    if (!replyBtnClicked) {
+      logger.error('回复失败：无法点击回复按钮');
+      return;
+    }
+    await HumanActions.wait(page, 500, 1000);
+
+    const inputCss = 'div[contenteditable="true"]';
+    const inputClicked = await HumanActions.cdpClick(page, inputCss, { timeout: 5000 });
+    if (!inputClicked) {
+      logger.error('回复失败：无法定位输入框');
+      return;
+    }
+    await HumanActions.wait(page, 300, 500);
+
+    for (const char of replyData.text) {
+      await HumanActions.cdpKeyPress(page, char, char, char.charCodeAt(0));
+      await HumanActions.wait(page, 50, 150);
+    }
+
+    await HumanActions.cdpClick(page, '[class*="submit"]', { timeout: 5000 });
+    await HumanActions.wait(page, 1000, 2000);
+
+    logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '回复执行成功');
+  } catch (err: any) {
+    logger.error({ err: err.message }, '回复执行失败');
+  } finally {
+    try {
+      await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+    } catch {}
+  }
 }
 
 function evaluateRules(rules: any[]): boolean {
