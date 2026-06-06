@@ -291,3 +291,73 @@ model CustomSelector {
   @@unique([platform, selectorKey], name: "idx_selector_platform_key")
   @@map("custom_selectors")
 }
+
+// ============================================================
+// 六、用户与窗口管理表
+// ============================================================
+
+/// 操作员（企业微信用户）——系统的管理单位
+model Operator {
+  id            Int      @id @default(autoincrement())
+  wechatUserId  String   @unique @map("wechat_user_id") @db.VarChar(64) // 企业微信用户ID
+  displayName   String   @map("display_name") @db.VarChar(64)
+  phone         String?  @db.VarChar(20)
+  role          String   @default("operator") @db.VarChar(20) // admin | operator
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  windows       BrowserWindow[]
+  platforms     OperatorPlatform[]
+
+  @@map("operators")
+}
+
+/// 指纹浏览器窗口——通过 BitBrowser / RoxyBrowser API 同步
+model BrowserWindow {
+  id              Int      @id @default(autoincrement())
+  externalId      String   @map("external_id") @db.VarChar(128) // 浏览器API返回的窗口ID
+  browserVendor   String   @map("browser_vendor") @db.VarChar(20) // bitbrowser | roxybrowser
+  windowName      String   @map("window_name") @default("") @db.VarChar(255)
+  workspaceId     String?  @map("workspace_id") @db.VarChar(64) // RoxyBrowser 需要
+  boundOperatorId Int?     @map("bound_operator_id") // 绑定的操作员ID
+  status          String   @default("available") @db.VarChar(20) // available | bound | error
+  rawConfig       String?  @map("raw_config") @db.Text // JSON: 原始窗口配置
+  syncedAt        DateTime @default(now()) @map("synced_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  operator Operator? @relation(fields: [boundOperatorId], references: [id], onDelete: SetNull)
+
+  @@unique([externalId, browserVendor], name: "idx_window_external_vendor")
+  @@map("browser_windows")
+}
+
+/// 操作员-平台绑定关系——记录每个用户管理哪些平台
+model OperatorPlatform {
+  id              Int      @id @default(autoincrement())
+  operatorId      Int      @map("operator_id")
+  platform        String   @db.VarChar(32) // douyin | kuaishou | xiaohongshu | ...
+  loginStatus     String   @default("unknown") @map("login_status") @db.VarChar(20) // unknown | logged_in | not_logged_in | checking
+  lastVerifiedAt  DateTime? @map("last_verified_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  operator Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+
+  @@unique([operatorId, platform], name: "idx_operator_platform")
+  @@map("operator_platforms")
+}
+
+/// 登录验证记录——记录每次验证的结果
+model LoginVerification {
+  id              Int      @id @default(autoincrement())
+  operatorId      Int      @map("operator_id")
+  platform        String   @db.VarChar(32)
+  status          String   @db.VarChar(20) // logged_in | not_logged_in | qr_sent | error
+  detail          String?  @db.Text // JSON: 验证详情（截图URL、QR码URL等）
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([operatorId, platform], name: "idx_verification_operator_platform")
+  @@map("login_verifications")
+}
