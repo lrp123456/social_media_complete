@@ -949,11 +949,28 @@ export class KuaishouCrawler {
           _userId: userId,
         });
       } else {
-        logger.info({
-          awemeId: video.aweme_id,
-          current: video.comment_count,
-          stored: dbVideo.commentCount,
-        }, '[Phase1] Kuaishou comment count unchanged');
+        // 评论数未变，但检查是否需要首次深度爬取（无 VideoRootCommentCount 记录）
+        const snapshots = await db.getRootCommentCounts(video.aweme_id);
+        if (snapshots.size === 0 && video.comment_count > 0) {
+          logger.info({
+            awemeId: video.aweme_id,
+            description: video.description,
+          }, '[Phase1] Existing kuaishou video without snapshots — enqueuing for initial deep crawl');
+          commentsQueue.push({
+            awemeId: video.aweme_id,
+            description: video.description,
+            oldCount: dbVideo.commentCount,
+            newCount: video.comment_count,
+            isFirstCrawl: true,
+            _userId: userId,
+          });
+        } else {
+          logger.info({
+            awemeId: video.aweme_id,
+            current: video.comment_count,
+            stored: dbVideo.commentCount,
+          }, '[Phase1] Kuaishou comment count unchanged');
+        }
       }
     }
 
