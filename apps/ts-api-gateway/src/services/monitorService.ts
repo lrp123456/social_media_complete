@@ -162,6 +162,12 @@ async function sendMonitorNotification(
       }
     }
 
+    // 跟踪通知，用户后续任意交互将标记这些视频的评论为已读
+    if (type === 'new_comments' && data && targets.length > 0) {
+      const videoIds = data.commentGroups.map((g) => g.awemeId);
+      botManager.trackNotification(targets[0], videoIds);
+    }
+
     logger.info({ userId, platform, type, targets }, '已发送企业微信通知');
   } catch (err) {
     logger.error({ userId, platform, type, err }, '发送企业微信通知失败');

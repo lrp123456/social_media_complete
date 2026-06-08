@@ -46,6 +46,10 @@ class WeChatBotManager {
     windowId: string;
     timeout: NodeJS.Timeout;
   }>();
+  private pendingNotifications = new Map<string, {
+    videoIds: string[];
+    timestamp: number;
+  }>();
 
   async start(config: BotConfig): Promise<BotStatus> {
     if (this.client && this.status.connected) {
@@ -194,6 +198,24 @@ class WeChatBotManager {
     this.pendingReplies.delete(commentCid);
   }
 
+  trackNotification(userid: string, videoIds: string[]): void {
+    this.pendingNotifications.set(userid, { videoIds, timestamp: Date.now() });
+    // Auto-expire after 24 hours
+    setTimeout(() => {
+      this.pendingNotifications.delete(userid);
+    }, 24 * 60 * 60 * 1000);
+    logger.info({ userid, videoIds }, '已跟踪评论通知，等待用户交互');
+  }
+
+  consumeNotification(userid: string): { videoIds: string[]; timestamp: number } | undefined {
+    const pending = this.pendingNotifications.get(userid);
+    if (pending) {
+      this.pendingNotifications.delete(userid);
+      return pending;
+    }
+    return undefined;
+  }
+
   createLinkRequest(timeoutMs = 120_000): { code: string; promise: Promise<string> } {
     const code = String(Math.floor(100000 + Math.random() * 900000));
 
@@ -328,6 +350,25 @@ async function autoStartBot(): Promise<void> {
             const preview = content.length > 50 ? content.slice(0, 50) + '...' : content;
             await botManager.sendTextMessage([userid], `✅ 回复已提交: "${preview}"`);
             return;
+          }
+        }
+
+        // 用户发送任意消息 → 标记通知中的评论为已读
+        const notification = botManager.consumeNotification(userid);
+        if (notification) {
+          try {
+            const { prisma } = await import('../lib/prisma');
+            let totalMarked = 0;
+            for (const videoId of notification.videoIds) {
+              const result = await prisma.comment.updateMany({
+                where: { videoId, isNew: 1 },
+                data: { isNew: 0 },
+              });
+              totalMarked += result.count;
+            }
+            logger.info({ userid, videoIds: notification.videoIds, totalMarked }, '用户已读通知中的评论');
+          } catch (err) {
+            logger.warn({ err: (err as Error).message, userid }, '标记通知评论已读失败');
           }
         }
       });
