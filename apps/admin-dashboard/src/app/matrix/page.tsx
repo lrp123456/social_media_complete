@@ -1507,10 +1507,15 @@ function MonitorTab() {
                         <div
                           key={video.id}
                           className={cn(
-                            'bg-surface border border-outline-variant rounded-xl p-4 hover:shadow-md transition-all',
+                            'bg-surface border border-outline-variant rounded-xl p-4 hover:shadow-md transition-all cursor-pointer',
                             hasNew && 'border-amber-500/30 bg-amber-500/[0.03]',
                             `border-l-3 ${pc.border}`,
                           )}
+                            onClick={() => {
+                              const isSame = selectedVideoId === video.id;
+                              setSelectedVideoId(isSame ? null : video.id);
+                              if (!isSame) markAllRead.mutate({ videoId: video.id } as any);
+                            }}
                         >
                           <div className="flex items-start gap-4">
                             {/* Video thumbnail placeholder */}
@@ -1568,6 +1573,43 @@ function MonitorTab() {
                           </div>
                         </div>
                       );
+                      {selectedVideoId === video.id && (
+                        <div className="ml-4 border-l-2 border-primary/30 pl-3 pb-2 mt-2">
+                          {videoCommentsData?.data ? (
+                            videoCommentsData.data.length === 0 ? (
+                              <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
+                            ) : (
+                              <div className="flex flex-col gap-2 pt-1">
+                                {videoCommentsData.data.map((root: any) => (
+                                  <div key={root.cid} className="bg-surface-variant/50 rounded-lg p-2.5 border-l-2 border-amber-500/40">
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
+                                      {root.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                    </div>
+                                    <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
+                                    {root.replies?.length > 0 && (
+                                      <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
+                                        {root.replies.map((sub: any) => (
+                                          <div key={sub.cid} className="py-0.5">
+                                            <div className="flex items-start gap-1.5">
+                                              <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
+                                              {sub.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                              {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
+                                            </div>
+                                            <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )
+                          ) : (
+                            <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
+                          )}
+                        </div>
+                      )}
                     })}
                   </div>
                 )}
