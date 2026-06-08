@@ -56,6 +56,7 @@ const CRAWLER_KEY_MAP: Record<string, Record<string, { category: SelectorCategor
     'page.select-work-btn': { category: 'buttons', name: 'btn_select_works' },
     'scroll.main-content': { category: 'regions', name: 'region_works_analysis_scroll' },
     'scroll.drawer': { category: 'regions', name: 'region_works_pick_scroll' },
+    'region.work-list-scroll': { category: 'regions', name: 'region_work_list_item' },
     // 抽屉相关选择器（评论管理）
     'drawer.portal': { category: 'regions', name: 'region_drawer_portal' },
     'drawer.sidesheet': { category: 'regions', name: 'region_drawer_sidesheet' },

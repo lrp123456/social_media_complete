@@ -412,21 +412,24 @@ export class DouyinCrawler {
 
   private async smartScrollListContainer(page: Page): Promise<void> {
     try {
-      const mainContentSelector = getSelector('scroll.main-content').css || '';
+      // 作品管理页使用 region_work_list_item 作为滚动容器（优先用 CSS fallback）
+      const scrollRegionDef = getSelector('region.work-list-scroll');
+      // entryToDef 把 primary 映射到 css，但 xpath 选择器不能被 querySelector 使用
+      // 回退使用 card-gkf5WW 作为 CSS 选择器
+      const mainContentSelector = (
+        scrollRegionDef.css?.startsWith('.') || scrollRegionDef.css?.startsWith('#')
+          ? scrollRegionDef.css
+          : '.card-gkf5WW'
+      );
 
-      if (mainContentSelector) {
-        logger.info({ selector: mainContentSelector }, 'Attempting main content area scroll');
-        await HumanActions.cdpSmartScroll(page, [mainContentSelector], 300, 'down');
-        return;
-      }
-
-      logger.info('No main content selector configured, using viewport center scroll');
-      await HumanActions.cdpSmartScroll(page, [], 400, 'down');
+      logger.info({ selector: mainContentSelector }, 'Attempting work-list scroll container');
+      await HumanActions.cdpSmartScroll(page, [mainContentSelector], 300, 'down');
 
       await HumanActions.wait(page, 300, 800);
     } catch (error: any) {
-      logger.warn({ error: error.message }, 'Smart scroll failed, using CDP scroll fallback');
-      await HumanActions.humanScroll(page, 300);
+      logger.warn({ error: error.message }, 'Smart scroll failed, using viewport center scroll');
+      await HumanActions.cdpSmartScroll(page, [], 400, 'down');
+      await HumanActions.wait(page, 300, 800);
     }
   }
 
@@ -1636,6 +1639,10 @@ export class DouyinCrawler {
           } as any);
         }
 
+        // 每个视频处理后，滚回页面顶部，确保"选择作品"按钮在可视范围内
+        await page.evaluate(() => { window.scrollTo(0, 0); });
+        await HumanActions.wait(page, 300, 500);
+
         if (i < queue.length - 1) {
           const transitionDelay = 1200 + Math.random() * 1300;
           logger.info({ delayMs: Math.round(transitionDelay) }, '[Phase3] Transition pause before next video (human reaction time)');
@@ -1786,7 +1793,8 @@ export class DouyinCrawler {
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      const containerElements = await HumanActions.queryElementsWithInfo(page, '.container-Lkxos9');
+      const containerSelector = getSelector('drawer.video-item').css || '.container-Lkxos9';
+      const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
       if (!containerElements || containerElements.length === 0) {
         logger.info({ scrollAttempt }, '[Drawer] No video containers found in current viewport');
         if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
@@ -1862,7 +1870,8 @@ export class DouyinCrawler {
 
       logger.info('[Drawer] Container click failed, trying title node');
 
-      const titleEls = await HumanActions.queryElementsWithInfo(page, '.title-LUOP3b');
+      const titleSelector = getSelector('drawer.video-title').css || '.title-LUOP3b';
+      const titleEls = await HumanActions.queryElementsWithInfo(page, titleSelector);
       if (titleEls) {
         for (const titleEl of titleEls) {
           if (titleEl.text && (titleEl.text.includes(descLower) || titleEl.text.includes(descPrefix))) {
@@ -1884,14 +1893,14 @@ export class DouyinCrawler {
   private async scrollDrawerForMore(page: Page, scrollAttempt: number): Promise<void> {
     logger.info({ scrollAttempt }, '[Drawer] Scrolling drawer to load more videos');
 
+    // 使用选择器配置中的 drawer scroll 选择器
+    const drawerScrollDef = getSelector('scroll.drawer');
     const drawerContentDef = getSelector('drawer.content');
+
     const drawerScrollSelectors = [
-      drawerContentDef.css,
-      '.semi-sidesheet-body > div:nth-child(2)',
-      '.semi-sidesheet-body > div',
-      '[class*="semi-sidesheet"] [class*="list"]',
-      '[class*="semi-sidesheet"] [class*="scroll"]',
-      '[class*="semi-sidesheet"] [class*="body"]',
+      drawerScrollDef.css || drawerScrollDef.text || '',
+      drawerContentDef.css || drawerContentDef.text || '',
+      '.douyin-creator-interactive-sidesheet-body',
     ].filter(Boolean) as string[];
 
     const scrollContainer = await HumanActions.cdpFindScrollContainer(page, drawerScrollSelectors);
@@ -1899,8 +1908,8 @@ export class DouyinCrawler {
       logger.info({ selector: scrollContainer.sel }, '[Drawer] Scrolling drawer container');
       await HumanActions.cdpSmartScroll(page, [scrollContainer.sel], 250, 'down');
     } else {
-      logger.info('[Drawer] No scroll container found, trying CDP wheel on drawer body');
       const bodyCss = drawerContentDef.css || '.douyin-creator-interactive-sidesheet-body';
+      logger.info({ fallback: bodyCss }, '[Drawer] No scroll container found, trying fallback on drawer body');
       await HumanActions.cdpSmartScroll(page, [bodyCss], 250, 'down');
     }
 
