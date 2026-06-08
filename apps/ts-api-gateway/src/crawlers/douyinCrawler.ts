@@ -3,6 +3,7 @@ import { RequestInterceptor, HumanActions, BrowserManager, ExitStrategy, PageTyp
 import { getSelector, getSelectorChain, getRandomExitSubmenuKey, getSubmenuKeyForPageType, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
+import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import fs from 'fs';
 import path from 'path';
@@ -19,6 +20,8 @@ export type VideoInfo = {
   create_time: number;
   comment_count: number;
   metrics: Record<string, any>;
+  authorUid?: string;       // 新增：作者抖音 uid
+  authorNickname?: string;  // 新增：作者昵称
 };
 
 export type CommentInfo = {
@@ -81,6 +84,8 @@ export interface CommentQueueItem {
   description: string;
   oldCount: number;
   newCount: number;
+  isFirstCrawl: boolean;  // true = 新视频首次采集（全量展开+建快照）
+  _userId?: number;        // 内部用，携带 userId
 }
 
 export interface CommentProcessResult {
@@ -277,7 +282,11 @@ export class DouyinCrawler {
     await this.scrollToLoadMoreWithDualStop(page, pattern);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
-    const sliced = allItems.slice(0, this.maxMonitorVideos);
+    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
+      ...item,
+      authorUid: item.author?.uid || '',
+      authorNickname: item.author?.nickname || '',
+    }));
 
     logger.info({
       source,
@@ -931,6 +940,10 @@ export class DouyinCrawler {
       };
     }
 
+    // 查询当前用户，判断是否需要提取平台作者 ID
+    const user = await db.getUserById(userId);
+    let needAuthorId = !user?.platformAuthorId; // 如果还没存过 authorId 就标记需要提取
+
     logger.info({ userId }, '[Phase1] Fetching video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
 
@@ -983,10 +996,29 @@ export class DouyinCrawler {
             description: video.description,
             oldCount: 0,
             newCount: video.comment_count,
+            isFirstCrawl: true,
+            _userId: userId,
           });
         } else {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New video with no comments — skipping');
         }
+
+        // 提取作者 ID
+        if (needAuthorId && video.authorUid) {
+          const userForUpdate = await db.getUserById(userId);
+          if (userForUpdate && !userForUpdate.platformAuthorId) {
+            await prisma.user.update({
+              where: { id: userId },
+              data: {
+                platformAuthorId: video.authorUid,
+                platformAuthorName: video.authorNickname || '',
+              },
+            });
+            needAuthorId = false;
+            logger.info({ userId, authorUid: video.authorUid }, '[Phase1] Extracted platform author ID');
+          }
+        }
+
         continue;
       }
 
@@ -1005,6 +1037,8 @@ export class DouyinCrawler {
           description: video.description,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
+          isFirstCrawl: false,
+          _userId: userId,
         });
       } else {
         logger.info({
