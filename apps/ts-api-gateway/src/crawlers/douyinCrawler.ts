@@ -1,6 +1,6 @@
 import { Page } from 'patchright';
 import { RequestInterceptor, HumanActions, BrowserManager, ExitStrategy, PageType } from '@social-media/browser-core';
-import { getSelector, getSelectorChain, getRandomExitSubmenuKey, getSubmenuKeyForPageType, SelectorDef } from './menuSelectors';
+import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
@@ -715,25 +715,6 @@ export class DouyinCrawler {
       }));
   }
 
-  /**
-   * 等待评论 API 响应并保存根评论快照到数据库
-   */
-  private async saveRootCommentSnapshots(videoId: string): Promise<RootCommentSnapshot[]> {
-    const response = await this.waitForCommentResponse(this.page!);
-    if (!response?.body) {
-      logger.warn({ videoId }, 'No comment API response for snapshots');
-      return [];
-    }
-    const snapshots = this.parseRootCommentSnapshots(response.body);
-    if (snapshots.length > 0) {
-      await db.upsertRootCommentCounts(videoId, snapshots.map(s => ({
-        cid: s.cid,
-        replyCount: s.replyCount,
-      })));
-    }
-    return snapshots;
-  }
-
   async detectRiskControlAsync(page: Page): Promise<RiskControlDetection> {
     try {
       const url = page.url().toLowerCase();
@@ -907,8 +888,7 @@ export class DouyinCrawler {
       await HumanActions.wait(page, 500, 1000);
 
       // 提取子回复 DOM 文本
-      const subContainerCss = '[class*="reply-list"], [class*="sub-comment"]';
-      const subReplies = await page.$$eval(subContainerCss + ' > div, ' + subContainerCss + ' > * > div', (els) =>
+      const subReplies = await page.$$eval('[class*="reply-list"] > div, [class*="reply-list"] > * > div, [class*="sub-comment"] > div, [class*="sub-comment"] > * > div', (els) =>
         els.map((el) => {
           const text = el.textContent?.trim() || '';
           const replyToMatch = text.match(/回复\s*@?(\S+)/);
@@ -1185,6 +1165,20 @@ export class DouyinCrawler {
           current: video.comment_count,
           stored: dbVideo.commentCount,
         }, '[Phase1] Comment count unchanged');
+      }
+    }
+
+    // 如果循环中未提取到 authorId（所有视频都已入库），从第一个有 authorUid 的视频提取
+    if (needAuthorId) {
+      for (const video of videos) {
+        if (video.authorUid) {
+          await prisma.user.update({
+            where: { id: userId },
+            data: { platformAuthorId: video.authorUid, platformAuthorName: video.authorNickname || '' },
+          });
+          logger.info({ userId, authorUid: video.authorUid }, '[Phase1] Extracted platform author ID (fallback)');
+          break;
+        }
       }
     }
 
@@ -1506,19 +1500,21 @@ export class DouyinCrawler {
 
                   if (createTime * 1000 > lastCheckTime) {
                     const isAuthor = platformAuthorId ? userUid === platformAuthorId : false;
-                    newCommentsToUpsert.push({
-                      cid: apiMatch?.cid || '',
-                      text: reply.text,
-                      user_nickname: userNickname,
-                      user_uid: userUid,
-                      digg_count: apiMatch?.digg_count || 0,
-                      create_time: createTime,
-                      reply_id: snapshot.cid,
-                      rootId: snapshot.cid,
-                      parentId: snapshot.cid,
-                      level: 2,
-                      replyToName: reply.replyToName,
-                    });
+                    if (!isAuthor) {
+                      newCommentsToUpsert.push({
+                        cid: apiMatch?.cid || '',
+                        text: reply.text,
+                        user_nickname: userNickname,
+                        user_uid: userUid,
+                        digg_count: apiMatch?.digg_count || 0,
+                        create_time: createTime,
+                        reply_id: snapshot.cid,
+                        rootId: snapshot.cid,
+                        parentId: snapshot.cid,
+                        level: 2,
+                        replyToName: reply.replyToName,
+                      });
+                    }
                   }
                 }
               }
