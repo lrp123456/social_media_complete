@@ -787,6 +787,7 @@ export class DouyinCrawler {
 
     let expandedCount = 0;
     let skippedCount = 0;
+    let containerIdx = 0;
 
     for (const container of containers) {
       const containerText = container.text || '';
@@ -795,8 +796,13 @@ export class DouyinCrawler {
       const isRootComment = !containerText.includes('回复 @');
       if (!isRootComment) continue;
 
-      // 用容器文本前 30 字符作为简单的识别 key（替代 data-cid）
-      const rootCid = containerText.slice(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+      // 从容器 DOM 获取真实的 data-cid（而非文本截断的假 cid）
+      const rootCid = await page.evaluate((idx: number) => {
+        const containers = document.querySelectorAll('[class*="container-sXKyMs"]');
+        const el = containers[idx] as HTMLElement;
+        return el?.dataset?.cid || '';
+      }, containerIdx);
+      if (!rootCid) continue;
 
       const lastCount = lastCounts.get(rootCid);
       const isNewRoot = newRootCids.includes(rootCid);
@@ -809,6 +815,7 @@ export class DouyinCrawler {
 
       if (!isNewRoot && lastCount !== undefined && currentReplyCount === lastCount) {
         skippedCount++;
+        containerIdx++;
         continue;
       }
 
@@ -833,6 +840,8 @@ export class DouyinCrawler {
       if (expandedCount % 5 === 0) {
         await HumanActions.wait(page, 1000, 2000);
       }
+
+      containerIdx++;
     }
 
     logger.info({ videoId, expandedCount, skippedCount, total: containers.length }, '[Expand] Expansion complete');
@@ -854,7 +863,8 @@ export class DouyinCrawler {
     logger.info({ containerCount: containers.length, rootCid }, '[ExpandRepliesForRoot] Found containers, searching for target');
 
     // 定位目标 root 的容器（通过文本前缀匹配 rootCid）
-    for (const container of containers) {
+    for (let containerIdx = 0; containerIdx < containers.length; containerIdx++) {
+      const container = containers[containerIdx];
       const containerText = container.text || '';
       const containerKey = containerText.slice(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
       if (containerKey !== rootCid) continue;
@@ -868,20 +878,21 @@ export class DouyinCrawler {
         break;
       }
 
-      // 点击"查看 N 条回复"
-      const expandSelectors = [
-        getSelector('comment.expand-replies')?.text || '',
-        'text=/查看\\d+条回复/',
-        'text=/展开/',
-      ].filter(Boolean) as string[];
+      // 在容器内点击"查看 N 条回复"（限定在当前容器范围内，避免误点其他根评论的展开按钮）
+      const clicked = await page.evaluate(({ idx, cssSel }: { idx: number; cssSel: string }) => {
+        const containers = document.querySelectorAll(cssSel);
+        const el = containers[idx] as HTMLElement;
+        if (!el) return false;
+        const btn = Array.from(el.querySelectorAll('*')).find(
+          (e: Element) => /查看\d+条回复/.test(e.textContent || ''),
+        );
+        if (btn instanceof HTMLElement) { btn.click(); return true; }
+        return false;
+      }, { idx: containerIdx, cssSel: containerCss });
 
-      for (const sel of expandSelectors) {
-        const clicked = await HumanActions.cdpClickByText(page, sel, { timeout: 3000 });
-        if (clicked) {
-          await HumanActions.wait(page, 500, 1000);
-          logger.info({ rootCid }, '[ExpandRepliesForRoot] Expand button clicked');
-          break;
-        }
+      if (clicked) {
+        await HumanActions.wait(page, 500, 1000);
+        logger.info({ rootCid }, '[ExpandRepliesForRoot] Container-scoped expand button clicked');
       }
 
       // 等待子回复 DOM 渲染
@@ -1384,11 +1395,17 @@ export class DouyinCrawler {
           // 全量展开所有回复
           await this.expandAllReplies(page, item.awemeId, currentSnapshots.map(s => s.cid));
 
+          // 重新等待 API 响应以获取 expandAllReplies 后加载的子回复数据
+          const expandedResponse = await this.waitForCommentResponse(page);
+
           // DOM 解析评论树
           const domTree = await this.parseCommentTreeFromDOM(page);
 
-          // 合并 API 数据到 DOM 节点
-          const apiComments = response.body.comments || [];
+          // 合并 API 数据到 DOM 节点（合并初始响应和展开后响应的数据）
+          const apiComments = [
+            ...(response.body?.comments || []),
+            ...(expandedResponse?.body?.comments || []),
+          ];
           const mergedTree = this.mergeApiDataToDOM(domTree, apiComments);
 
           // 展平为 upsertCommentTree 所需格式（snake_case）

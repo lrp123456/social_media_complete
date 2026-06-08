@@ -1281,86 +1281,88 @@ function MonitorTab() {
                 {newCommentVideos.map((video) => {
                   const pc = MONITOR_PLATFORM_CONFIG[video.platform] || MONITOR_PLATFORM_FALLBACK;
                   return (
-                    <div
-                      key={video.id}
-                      className={cn(
-                        'flex items-center gap-4 p-4 bg-surface border border-outline-variant rounded-xl',
-                        'hover:border-primary/30 hover:shadow-md transition-all cursor-pointer',
-                        `border-l-3 ${pc.border}`,
-                      )}
-                      onClick={() => {
-                        const isSame = selectedVideoId === video.id;
-                        setSelectedVideoId(isSame ? null : video.id);
-                        if (!isSame) markAllRead.mutate({ videoId: video.id } as any);
-                      }}
-                    >
-                      <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center shrink-0', pc.bg, pc.text)}>
-                        <MaterialIcon icon="movie" size="md" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-label-md text-on-surface truncate font-medium">{video.description || '无标题视频'}</p>
-                        <div className="flex items-center gap-3 mt-1">
-                          <span className={cn('text-[11px] font-medium px-1.5 py-0.5 rounded', pc.bg, pc.text)}>
-                            {video.platformName}
+                    <>
+                      <div
+                        key={video.id}
+                        className={cn(
+                          'flex items-center gap-4 p-4 bg-surface border border-outline-variant rounded-xl',
+                          'hover:border-primary/30 hover:shadow-md transition-all cursor-pointer',
+                          `border-l-3 ${pc.border}`,
+                        )}
+                        onClick={() => {
+                          const isSame = selectedVideoId === video.id;
+                          setSelectedVideoId(isSame ? null : video.id);
+                          if (!isSame) markAllRead.mutate({ videoId: video.id } as any);
+                        }}
+                      >
+                        <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center shrink-0', pc.bg, pc.text)}>
+                          <MaterialIcon icon="movie" size="md" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-label-md text-on-surface truncate font-medium">{video.description || '无标题视频'}</p>
+                          <div className="flex items-center gap-3 mt-1">
+                            <span className={cn('text-[11px] font-medium px-1.5 py-0.5 rounded', pc.bg, pc.text)}>
+                              {video.platformName}
+                            </span>
+                            <span className="text-[11px] text-on-surface-variant">
+                              共 {video.totalComments} 条评论
+                            </span>
+                            <span className="text-[11px] text-outline">
+                              更新于 {formatRelativeTime(video.updatedAt)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="min-w-[28px] h-7 flex items-center justify-center rounded-full bg-amber-500/15 text-amber-500 text-label-md font-bold">
+                            +{video.newCommentCount}
                           </span>
-                          <span className="text-[11px] text-on-surface-variant">
-                            共 {video.totalComments} 条评论
-                          </span>
-                          <span className="text-[11px] text-outline">
-                            更新于 {formatRelativeTime(video.updatedAt)}
-                          </span>
+                          <MaterialIcon icon="chevron_right" size="sm" className="text-outline" />
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="min-w-[28px] h-7 flex items-center justify-center rounded-full bg-amber-500/15 text-amber-500 text-label-md font-bold">
-                          +{video.newCommentCount}
-                        </span>
-                        <MaterialIcon icon="chevron_right" size="sm" className="text-outline" />
-                      </div>
-                    </div>
-                  );
-                    {selectedVideoId === video.id && (
-                      <div className="ml-2 border-l-2 border-primary/20 pl-3 pb-1">
-                        {videoCommentsData?.data ? (
-                          videoCommentsData.data.length === 0 ? (
-                            <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
-                          ) : (
-                            <div className="flex flex-col gap-2 pt-2">
-                              {videoCommentsData.data.map((root: any) => (
-                                <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
-                                  <div className="flex items-start gap-1.5">
-                                    <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
-                                    {root.isNew && (
-                                      <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                      {selectedVideoId === video.id && (
+                        <div className="ml-2 border-l-2 border-primary/20 pl-3 pb-1">
+                          {videoCommentsData?.data ? (
+                            videoCommentsData.data.length === 0 ? (
+                              <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
+                            ) : (
+                              <div className="flex flex-col gap-2 pt-2">
+                                {videoCommentsData.data.map((root: any) => (
+                                  <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
+                                    <div className="flex items-start gap-1.5">
+                                      <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
+                                      {root.isNew && (
+                                        <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                      )}
+                                    </div>
+                                    <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
+                                    <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
+                                    {root.replies?.length > 0 && (
+                                      <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
+                                        {root.replies.map((sub: any) => (
+                                          <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
+                                            <div className="flex items-start gap-1.5">
+                                              <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
+                                              {sub.isNew && (
+                                                <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                              )}
+                                              {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
+                                            </div>
+                                            <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                          </div>
+                                        ))}
+                                      </div>
                                     )}
                                   </div>
-                                  <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
-                                  <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
-                                  {root.replies?.length > 0 && (
-                                    <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
-                                      {root.replies.map((sub: any) => (
-                                        <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
-                                          <div className="flex items-start gap-1.5">
-                                            <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
-                                            {sub.isNew && (
-                                              <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
-                                            )}
-                                            {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
-                                          </div>
-                                          <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          )
-                        ) : (
-                          <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
-                        )}
-                      </div>
-                    )}
+                                ))}
+                              </div>
+                            )
+                          ) : (
+                            <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  );
                 })}
               </div>
             )}
@@ -1508,116 +1510,118 @@ function MonitorTab() {
                       const hasNew = video.newCommentCount > 0;
 
                       return (
-                        <div
-                          key={video.id}
-                          className={cn(
-                            'bg-surface border border-outline-variant rounded-xl p-4 hover:shadow-md transition-all cursor-pointer',
-                            hasNew && 'border-amber-500/30 bg-amber-500/[0.03]',
-                            `border-l-3 ${pc.border}`,
-                          )}
-                            onClick={() => {
-                              const isSame = selectedVideoId === video.id;
-                              setSelectedVideoId(isSame ? null : video.id);
-                              if (!isSame) markAllRead.mutate({ videoId: video.id } as any);
-                            }}
-                        >
-                          <div className="flex items-start gap-4">
-                            {/* Video thumbnail placeholder */}
-                            <div className="w-20 h-20 rounded-lg bg-surface-container flex items-center justify-center shrink-0 overflow-hidden relative">
-                              <MaterialIcon icon="play_circle" size="xl" className="text-outline/30" />
-                              {hasNew && (
-                                <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center">
-                                  <span className="text-[9px] text-white font-bold">新</span>
+                        <>
+                          <div
+                            key={video.id}
+                            className={cn(
+                              'bg-surface border border-outline-variant rounded-xl p-4 hover:shadow-md transition-all cursor-pointer',
+                              hasNew && 'border-amber-500/30 bg-amber-500/[0.03]',
+                              `border-l-3 ${pc.border}`,
+                            )}
+                              onClick={() => {
+                                const isSame = selectedVideoId === video.id;
+                                setSelectedVideoId(isSame ? null : video.id);
+                                if (!isSame) markAllRead.mutate({ videoId: video.id } as any);
+                              }}
+                          >
+                            <div className="flex items-start gap-4">
+                              {/* Video thumbnail placeholder */}
+                              <div className="w-20 h-20 rounded-lg bg-surface-container flex items-center justify-center shrink-0 overflow-hidden relative">
+                                <MaterialIcon icon="play_circle" size="xl" className="text-outline/30" />
+                                {hasNew && (
+                                  <div className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-amber-500 flex items-center justify-center">
+                                    <span className="text-[9px] text-white font-bold">新</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="flex-1 min-w-0">
+                                <h4 className="text-label-lg text-on-surface font-medium line-clamp-2 leading-snug">
+                                  {video.description || '无标题视频'}
+                                </h4>
+                                <div className="flex items-center gap-4 mt-2 flex-wrap">
+                                  <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
+                                    <MaterialIcon icon="message" size="xs" />
+                                    {video.commentCount} 条评论
+                                  </span>
+                                  {hasNew && (
+                                    <span className="flex items-center gap-1 text-label-sm text-amber-500 font-medium">
+                                      <MaterialIcon icon="auto_awesome" size="xs" />
+                                      +{video.newCommentCount} 条新评论
+                                    </span>
+                                  )}
+                                  {video.metrics?.viewCount != null && (
+                                    <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
+                                      <MaterialIcon icon="visibility" size="xs" />
+                                      {formatNumber(video.metrics.viewCount)} 播放
+                                    </span>
+                                  )}
+                                  {video.metrics?.likeCount != null && (
+                                    <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
+                                      <MaterialIcon icon="thumb_up" size="xs" />
+                                      {formatNumber(video.metrics.likeCount)} 点赞
+                                    </span>
+                                  )}
+                                  <span className="text-[11px] text-outline">
+                                    更新于 {formatRelativeTime(video.updatedAt)}
+                                  </span>
                                 </div>
+                              </div>
+
+                              <button
+                                onClick={() => handleTrigger(detail.id)}
+                                disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked'}
+                                className="shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-label-md text-primary bg-primary/10 hover:bg-primary/20 transition-colors disabled:opacity-30"
+                                title="更新此用户的评论"
+                              >
+                                <MaterialIcon icon="refresh" size="xs" />
+                                更新
+                              </button>
+                            </div>
+                          </div>
+                          {selectedVideoId === video.id && (
+                            <div className="ml-4 border-l-2 border-primary/30 pl-3 pb-2 mt-2">
+                              {videoCommentsData?.data ? (
+                                videoCommentsData.data.length === 0 ? (
+                                  <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
+                                ) : (
+                                  <div className="flex flex-col gap-2 pt-1">
+                                    {videoCommentsData.data.map((root: any) => (
+                                      <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
+                                        <div className="flex items-start gap-1.5">
+                                          <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
+                                          {root.isNew && (
+                                            <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                          )}
+                                        </div>
+                                        <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
+                                        {root.replies?.length > 0 && (
+                                          <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
+                                            {root.replies.map((sub: any) => (
+                                              <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
+                                                <div className="flex items-start gap-1.5">
+                                                  <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
+                                                  {sub.isNew && (
+                                                    <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                                  )}
+                                                  {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
+                                                </div>
+                                                <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                )
+                              ) : (
+                                <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
                               )}
                             </div>
-
-                            <div className="flex-1 min-w-0">
-                              <h4 className="text-label-lg text-on-surface font-medium line-clamp-2 leading-snug">
-                                {video.description || '无标题视频'}
-                              </h4>
-                              <div className="flex items-center gap-4 mt-2 flex-wrap">
-                                <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
-                                  <MaterialIcon icon="message" size="xs" />
-                                  {video.commentCount} 条评论
-                                </span>
-                                {hasNew && (
-                                  <span className="flex items-center gap-1 text-label-sm text-amber-500 font-medium">
-                                    <MaterialIcon icon="auto_awesome" size="xs" />
-                                    +{video.newCommentCount} 条新评论
-                                  </span>
-                                )}
-                                {video.metrics?.viewCount != null && (
-                                  <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
-                                    <MaterialIcon icon="visibility" size="xs" />
-                                    {formatNumber(video.metrics.viewCount)} 播放
-                                  </span>
-                                )}
-                                {video.metrics?.likeCount != null && (
-                                  <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
-                                    <MaterialIcon icon="thumb_up" size="xs" />
-                                    {formatNumber(video.metrics.likeCount)} 点赞
-                                  </span>
-                                )}
-                                <span className="text-[11px] text-outline">
-                                  更新于 {formatRelativeTime(video.updatedAt)}
-                                </span>
-                              </div>
-                            </div>
-
-                            <button
-                              onClick={() => handleTrigger(detail.id)}
-                              disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked'}
-                              className="shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-label-md text-primary bg-primary/10 hover:bg-primary/20 transition-colors disabled:opacity-30"
-                              title="更新此用户的评论"
-                            >
-                              <MaterialIcon icon="refresh" size="xs" />
-                              更新
-                            </button>
-                          </div>
-                        </div>
-                      );
-                      {selectedVideoId === video.id && (
-                        <div className="ml-4 border-l-2 border-primary/30 pl-3 pb-2 mt-2">
-                          {videoCommentsData?.data ? (
-                            videoCommentsData.data.length === 0 ? (
-                              <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
-                            ) : (
-                              <div className="flex flex-col gap-2 pt-1">
-                                {videoCommentsData.data.map((root: any) => (
-                                  <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
-                                    <div className="flex items-start gap-1.5">
-                                      <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
-                                      {root.isNew && (
-                                        <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
-                                      )}
-                                    </div>
-                                    <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
-                                    {root.replies?.length > 0 && (
-                                      <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
-                                        {root.replies.map((sub: any) => (
-                                          <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
-                                            <div className="flex items-start gap-1.5">
-                                              <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
-                                              {sub.isNew && (
-                                                <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
-                                              )}
-                                              {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
-                                            </div>
-                                            <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            )
-                          ) : (
-                            <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
                           )}
-                        </div>
-                      )}
+                        </>
+                      );
                     })}
                   </div>
                 )}
@@ -1626,13 +1630,6 @@ function MonitorTab() {
           )}
         </div>
       )}
-
-      {/* Mobile fallback */}
-      <div className="lg:hidden flex-1 flex flex-col items-center justify-center text-on-surface-variant py-12">
-        <MaterialIcon icon="apps" size="3xl" className="text-outline mb-3 opacity-40" />
-        <p className="text-body-md font-medium">请使用桌面端查看监控面板</p>
-        <p className="text-body-sm text-on-surface-variant mt-1">矩阵监控页面需要更大的屏幕空间</p>
-      </div>
     </div>
   );
 }
