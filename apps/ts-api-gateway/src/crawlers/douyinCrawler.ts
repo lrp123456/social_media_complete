@@ -1419,52 +1419,69 @@ export class DouyinCrawler {
             replyCount: s.replyCount,
           })));
 
-          // 全量展开所有回复
+          // 全量展开所有回复（触发 API 加载子回复数据）
           await this.expandAllReplies(page, item.awemeId, currentSnapshots.map(s => s.cid));
 
           // 重新等待 API 响应以获取 expandAllReplies 后加载的子回复数据
           const expandedResponse = await this.waitForCommentResponse(page);
 
-          // DOM 解析评论树
-          const domTree = await this.parseCommentTreeFromDOM(page);
-          logger.info({ awemeId: item.awemeId, domTreeSize: domTree.length }, '[Phase3] DOM tree parsed');
-
-          // 合并 API 数据到 DOM 节点（合并初始响应和展开后响应的数据）
-          const apiComments = [
+          // 合并所有 API 响应中的评论（初始化 + 展开后）
+          const allApiComments: any[] = [
             ...(response.body?.comments || []),
             ...(expandedResponse?.body?.comments || []),
           ];
-          logger.info({ awemeId: item.awemeId, apiCommentCount: apiComments.length }, '[Phase3] API comments for merge');
-          const mergedTree = this.mergeApiDataToDOM(domTree, apiComments);
+          logger.info({ awemeId: item.awemeId, apiCommentCount: allApiComments.length }, '[Phase3] API comments for tree construction');
 
-          // 展平为 upsertCommentTree 所需格式（snake_case）
+          // 从 API 数据直接构建评论树（不依赖 DOM 选择器，避免抖音前端变更影响）
+          const rootComments = allApiComments.filter((c: any) => {
+            const replyId = c.reply_id ?? '0';
+            return replyId === 0 || replyId === '0' || replyId === null;
+          });
+          const subReplies = allApiComments.filter((c: any) => {
+            const replyId = c.reply_id ?? '0';
+            return replyId !== 0 && replyId !== '0' && replyId !== null;
+          });
+
+          logger.info({ awemeId: item.awemeId, roots: rootComments.length, subs: subReplies.length }, '[Phase3] Comments classified');
+
+          // 展平为 upsertCommentTree 所需格式
           const allFlat: Array<{
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
           }> = [];
 
-          const flattenNodes = (nodes: CommentNode[]) => {
-            for (const node of nodes) {
-              allFlat.push({
-                cid: node.cid,
-                text: node.text,
-                user_nickname: node.userNickname,
-                user_uid: node.userUid,
-                digg_count: node.diggCount,
-                create_time: node.createTime,
-                reply_id: node.replyId || '0',
-                rootId: node.rootId || undefined,
-                parentId: node.parentId || undefined,
-                level: node.level,
-                replyToName: node.replyToName || undefined,
-              });
-              if (node.subComments && node.subComments.length > 0) {
-                flattenNodes(node.subComments);
-              }
-            }
-          };
-          flattenNodes(mergedTree);
+          // 根评论 (level=1)
+          for (const root of rootComments) {
+            allFlat.push({
+              cid: root.cid,
+              text: root.text || '',
+              user_nickname: root.user?.nickname || '',
+              user_uid: root.user?.uid || '',
+              digg_count: root.digg_count || 0,
+              create_time: root.create_time,
+              reply_id: '0',
+              level: 1,
+            });
+          }
+
+          // 子回复 (level=2)，按 root cid 分组
+          for (const sub of subReplies) {
+            const replyId = String(sub.reply_id ?? '0');
+            allFlat.push({
+              cid: sub.cid,
+              text: sub.text || '',
+              user_nickname: sub.user?.nickname || '',
+              user_uid: sub.user?.uid || '',
+              digg_count: sub.digg_count || 0,
+              create_time: sub.create_time,
+              reply_id: replyId,
+              rootId: replyId,
+              parentId: replyId,
+              level: 2,
+              replyToName: sub.reply_to_username || '',
+            });
+          }
 
           // upsertCommentTree 创建时默认 isNew=1，首次采集需全部设为 0
           await db.upsertCommentTree(item.awemeId, allFlat);
