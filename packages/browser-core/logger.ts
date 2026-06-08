@@ -15,5 +15,5 @@ export const rootLogger = {
   info: (...args: unknown[]) => log('info', ...args),
   warn: (...args: unknown[]) => log('warn', ...args),
   error: (...args: unknown[]) => log('error', ...args),
-  child: () => rootLogger,
+  child: (..._args: unknown[]) => rootLogger,
 };

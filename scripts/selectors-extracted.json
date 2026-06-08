@@ -1,0 +1,6195 @@
+{
+  "version": "1.2.0",
+  "updatedAt": "manual override (apply_overrides.py)",
+  "source": "scripts/extract_selectors.py",
+  "selectorStrategy": [
+    "1. role + name (page.get_by_role)",
+    "2. text exact  (page.get_by_text)",
+    "3. label       (page.get_by_label)",
+    "4. placeholder (page.get_by_placeholder)",
+    "5. test-id     (page.get_by_test_id)",
+    "6. css :visible+id",
+    "7. css :visible+class",
+    "8. xpath",
+    "9. CDP DOM.performSearch (runtime, 静态 DOM 不可验证)"
+  ],
+  "platforms": {
+    "douyin": {
+      "menus": {
+        "menu_home": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"首页\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-home:visible",
+          "fallbacks": [
+            "getByText(\"首页\", exact=True)",
+            "#douyin-creator-master-menu-nav-home:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-home']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：首页",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-home:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"首页\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"首页\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-home']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-home:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_activity_management": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"活动管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-activity_management:visible",
+          "fallbacks": [
+            "getByText(\"活动管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-activity_management:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-activity_management']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：活动管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-activity_management:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"活动管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"活动管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-activity_management']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-activity_management:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_content": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"内容管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-content:visible",
+          "fallbacks": [
+            "getByText(\"内容管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-content:visible",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-content']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：内容管理 作品管理 合集管理 共创中心 原创保护中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-content:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"内容管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"内容管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-sub-wrap:visible",
+                5,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-content']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-content:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_work_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-work_manage:visible",
+          "fallbacks": [
+            "getByText(\"作品管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-work_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-work_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：作品管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-work_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-work_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-work_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_collection_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"合集管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-collection_manage:visible",
+          "fallbacks": [
+            "getByText(\"合集管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-collection_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-collection_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：合集管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-collection_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"合集管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"合集管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-collection_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-collection_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_cooperate_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"共创中心\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-cooperate_center:visible",
+          "fallbacks": [
+            "getByText(\"共创中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-cooperate_center:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-cooperate_center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：共创中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-cooperate_center:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"共创中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"共创中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-cooperate_center']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-cooperate_center:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_right_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"原创保护中心\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-right_manage:visible",
+          "fallbacks": [
+            "getByText(\"原创保护中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-right_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-right_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：原创保护中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-right_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"原创保护中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"原创保护中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-right_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-right_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_interaction": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"互动管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-interaction:visible",
+          "fallbacks": [
+            "getByText(\"互动管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-interaction:visible",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-interaction']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：互动管理 关注管理 粉丝管理 评论管理 弹幕管理 私信管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-interaction:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"互动管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"互动管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-sub-wrap:visible",
+                5,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-interaction']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-interaction:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_follow_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"关注管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-follow_manage:visible",
+          "fallbacks": [
+            "getByText(\"关注管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-follow_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-follow_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：关注管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-follow_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"关注管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"关注管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-follow_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-follow_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_fans_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-fans_manage:visible",
+          "fallbacks": [
+            "getByText(\"粉丝管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-fans_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-fans_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：粉丝管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-fans_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"粉丝管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"粉丝管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-fans_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-fans_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_comment_manage_new": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"评论管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-comment_manage_new:visible",
+          "fallbacks": [
+            "getByText(\"评论管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-comment_manage_new:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-comment_manage_new']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：评论管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-comment_manage_new:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"评论管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"评论管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-comment_manage_new']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-comment_manage_new:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_danmaku_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"弹幕管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-danmaku_manage:visible",
+          "fallbacks": [
+            "getByText(\"弹幕管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-danmaku_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-danmaku_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：弹幕管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-danmaku_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"弹幕管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"弹幕管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-danmaku_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-danmaku_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_message_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"私信管理\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-message_manage:visible",
+          "fallbacks": [
+            "getByText(\"私信管理\", exact=True)",
+            "#douyin-creator-master-menu-nav-message_manage:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-message_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：私信管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-message_manage:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"私信管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"私信管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-message_manage']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-message_manage:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_data-center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"数据中心\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-data-center:visible",
+          "fallbacks": [
+            "getByText(\"数据中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-data-center:visible",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-data-center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：数据中心 账号总览 作品分析 粉丝分析 重点关心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-data-center:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"数据中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"数据中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-sub-wrap:visible",
+                5,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-data-center']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-data-center:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_business_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"账号总览\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-business_analysis:visible",
+          "fallbacks": [
+            "getByText(\"账号总览\", exact=True)",
+            "#douyin-creator-master-menu-nav-business_analysis:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-business_analysis']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：账号总览",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-business_analysis:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"账号总览\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"账号总览\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-business_analysis']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-business_analysis:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_content_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品分析\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-content_analysis:visible",
+          "fallbacks": [
+            "getByText(\"作品分析\", exact=True)",
+            "#douyin-creator-master-menu-nav-content_analysis:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-content_analysis']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：作品分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-content_analysis:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-content_analysis']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-content_analysis:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_fans_characteristic": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝分析\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-fans_characteristic:visible",
+          "fallbacks": [
+            "getByText(\"粉丝分析\", exact=True)",
+            "#douyin-creator-master-menu-nav-fans_characteristic:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-fans_characteristic']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：粉丝分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-fans_characteristic:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"粉丝分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"粉丝分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-fans_characteristic']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-fans_characteristic:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_following": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"重点关心\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-following:visible",
+          "fallbacks": [
+            "getByText(\"重点关心\", exact=True)",
+            "#douyin-creator-master-menu-nav-following:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-following']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：重点关心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-following:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"重点关心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"重点关心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-following']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-following:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_cash": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"变现中心 变现广场 我的任务 我的收入\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-cash:visible",
+          "fallbacks": [
+            "getByText(\"变现中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-cash:visible",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-cash']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：变现中心 变现广场 我的任务 我的收入",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-cash:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"变现中心 变现广场 我的任务 我的收入\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"变现中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-sub-wrap:visible",
+                5,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-cash']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-cash:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_cash_square": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"变现广场\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-cash_square:visible",
+          "fallbacks": [
+            "getByText(\"变现广场\", exact=True)",
+            "#douyin-creator-master-menu-nav-cash_square:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-cash_square']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：变现广场",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-cash_square:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"变现广场\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"变现广场\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-cash_square']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-cash_square:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_my_task": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的任务\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-my_task:visible",
+          "fallbacks": [
+            "getByText(\"我的任务\", exact=True)",
+            "#douyin-creator-master-menu-nav-my_task:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-my_task']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：我的任务",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-my_task:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"我的任务\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"我的任务\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-my_task']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-my_task:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_my_income": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的收入\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-my_income:visible",
+          "fallbacks": [
+            "getByText(\"我的收入\", exact=True)",
+            "#douyin-creator-master-menu-nav-my_income:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-my_income']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：我的收入",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-my_income:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"我的收入\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"我的收入\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-my_income']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-my_income:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_create": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作中心 创作灵感 学习中心 抖音指数\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-create:visible",
+          "fallbacks": [
+            "getByText(\"创作中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-create:visible",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-create']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：创作中心 创作灵感 学习中心 抖音指数",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-create:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作中心 创作灵感 学习中心 抖音指数\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-sub-wrap:visible",
+                5,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-create']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-create:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_create_content": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作灵感\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-create_content:visible",
+          "fallbacks": [
+            "getByText(\"创作灵感\", exact=True)",
+            "#douyin-creator-master-menu-nav-create_content:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-create_content']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：创作灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-create_content:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作灵感\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-create_content']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-create_content:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_study_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"学习中心\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-study_center:visible",
+          "fallbacks": [
+            "getByText(\"学习中心\", exact=True)",
+            "#douyin-creator-master-menu-nav-study_center:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-study_center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：学习中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-study_center:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"学习中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"学习中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-study_center']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-study_center:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_creator_count": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"抖音指数\")",
+          "staticPrimary": "#douyin-creator-master-menu-nav-creator_count:visible",
+          "fallbacks": [
+            "getByText(\"抖音指数\", exact=True)",
+            "#douyin-creator-master-menu-nav-creator_count:visible",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-creator_count']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：抖音指数",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                "#douyin-creator-master-menu-nav-creator_count:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"抖音指数\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"抖音指数\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-master-navigation-item-normal:visible",
+                21,
+                "static"
+              ],
+              [
+                "xpath=//li[@id='douyin-creator-master-menu-nav-creator_count']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#douyin-creator-master-menu-nav-creator_count:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_publish_hd": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"高清发布\")",
+          "staticPrimary": ".douyin-creator-master-button:visible",
+          "fallbacks": [
+            "getByText(\"高清发布\", exact=True)",
+            ".douyin-creator-master-button:visible",
+            "xpath=//div[@id='douyin-creator-master-side-upload-wrap']/button"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏顶部【高清发布】按钮",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".douyin-creator-master-button:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"高清发布\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"高清发布\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='douyin-creator-master-side-upload-wrap']/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-master-button:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      },
+      "buttons": {
+        "btn_upload_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "staticPrimary": ".semi-button:visible",
+          "fallbacks": [
+            "getByText(\"上传视频\", exact=True)",
+            ".semi-button:visible",
+            "xpath=//div/div[2]/div/div[1]/div/div/div[3]/div/div[4]/button"
+          ],
+          "selectorType": "role",
+          "description": "高清发布页【上传视频】入口",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                ".semi-button:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"上传视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传视频\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div/div[1]/div/div/div[3]/div/div[4]/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".semi-button:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_publish_submit": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"发布\")",
+          "staticPrimary": ".button-dhlUZE:visible",
+          "fallbacks": [
+            "getByText(\"发布\", exact=True)",
+            ".button-dhlUZE:visible",
+            "xpath=//span[@id='popover-tip-container']/button"
+          ],
+          "selectorType": "role",
+          "description": "发布页按钮：发布",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".button-dhlUZE:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"发布\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"发布\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//span[@id='popover-tip-container']/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".button-dhlUZE:visible",
+              2,
+              "static"
+            ]
+          }
+        },
+        "btn_publish_save_draft": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"暂存离开\")",
+          "staticPrimary": ".button-dhlUZE:visible",
+          "fallbacks": [
+            "getByText(\"暂存离开\", exact=True)",
+            ".button-dhlUZE:visible",
+            "xpath=//div/div[1]/div/div[5]/div/div/div/div/div/button"
+          ],
+          "selectorType": "role",
+          "description": "发布页按钮：暂存离开",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".button-dhlUZE:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"暂存离开\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"暂存离开\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div/div[5]/div/div/div/div/div/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".button-dhlUZE:visible",
+              2,
+              "static"
+            ]
+          }
+        },
+        "btn_tabs_works_live": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tablist\", name=\"投稿作品 直播场次\")",
+          "staticPrimary": ".douyin-creator-pc-tabs-bar:visible",
+          "fallbacks": [
+            "getByText(\"投稿作品 直播场次\", exact=True)",
+            ".douyin-creator-pc-tabs-bar:visible",
+            "xpath=//div/div/div/div[1]"
+          ],
+          "selectorType": "role",
+          "description": "投稿作品/直播场次 tablist",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                ".douyin-creator-pc-tabs-bar:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tablist\", name=\"投稿作品 直播场次\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"投稿作品 直播场次\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div/div/div[1]",
+                204,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-pc-tabs-bar:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_tab_投稿作品": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"投稿作品\")",
+          "staticPrimary": "#semiTab1:visible",
+          "fallbacks": [
+            "getByText(\"投稿作品\", exact=True)",
+            "#semiTab1:visible",
+            ".douyin-creator-pc-tabs-tab:visible",
+            "xpath=//div[@id='semiTab1']"
+          ],
+          "selectorType": "role",
+          "description": "作品分析 tab：投稿作品",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                "#semiTab1:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"投稿作品\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"投稿作品\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-pc-tabs-tab:visible",
+                2,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='semiTab1']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#semiTab1:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_tab_直播场次": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"直播场次\")",
+          "staticPrimary": "#semiTab2:visible",
+          "fallbacks": [
+            "getByText(\"直播场次\", exact=True)",
+            "#semiTab2:visible",
+            ".douyin-creator-pc-tabs-tab:visible",
+            "xpath=//div[@id='semiTab2']"
+          ],
+          "selectorType": "role",
+          "description": "作品分析 tab：直播场次",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                "#semiTab2:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"直播场次\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"直播场次\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-pc-tabs-tab:visible",
+                2,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='semiTab2']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#semiTab2:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_radio_投稿分析": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"投稿分析\", exact=True)",
+          "staticPrimary": "#addon-llvc3tw:visible",
+          "fallbacks": [
+            "#addon-llvc3tw:visible",
+            ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+            "xpath=//span[@id='addon-llvc3tw']"
+          ],
+          "selectorType": "text",
+          "description": "作品分析页 radio：投稿分析",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                "#addon-llvc3tw:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"投稿分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+                2,
+                "static"
+              ],
+              [
+                "xpath=//span[@id='addon-llvc3tw']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#addon-llvc3tw:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_radio_投稿列表": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"投稿列表\", exact=True)",
+          "staticPrimary": "#addon-b6jeqp9:visible",
+          "fallbacks": [
+            "#addon-b6jeqp9:visible",
+            ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+            "xpath=//span[@id='addon-b6jeqp9']"
+          ],
+          "selectorType": "text",
+          "description": "作品分析页 radio：投稿列表",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                "#addon-b6jeqp9:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"投稿列表\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+                2,
+                "static"
+              ],
+              [
+                "xpath=//span[@id='addon-b6jeqp9']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#addon-b6jeqp9:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_works_导出数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"导出数据\")",
+          "staticPrimary": ".douyin-creator-pc-button:visible",
+          "fallbacks": [
+            "getByText(\"导出数据\", exact=True)",
+            ".douyin-creator-pc-button:visible",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/div[3]/button"
+          ],
+          "selectorType": "role",
+          "description": "作品分析页按钮：导出数据",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                ".douyin-creator-pc-button:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"导出数据\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"导出数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/div[3]/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-pc-button:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "btn_works_刷新数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"刷新数据\")",
+          "staticPrimary": ".douyin-creator-pc-button:visible",
+          "fallbacks": [
+            "getByText(\"刷新数据\", exact=True)",
+            ".douyin-creator-pc-button:visible",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/button"
+          ],
+          "selectorType": "role",
+          "description": "作品分析页按钮：刷新数据",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                ".douyin-creator-pc-button:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"刷新数据\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"刷新数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-pc-button:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "btn_select_works": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"选择作品\")",
+          "staticPrimary": ".douyin-creator-interactive-button:visible",
+          "fallbacks": [
+            "getByText(\"选择作品\", exact=True)",
+            ".douyin-creator-interactive-button:visible",
+            "xpath=//div/div[1]/div[2]/div/button"
+          ],
+          "selectorType": "role",
+          "description": "评论管理-选择作品按钮",
+          "evidence": {
+            "page": "comment_manage",
+            "checks": [
+              [
+                ".douyin-creator-interactive-button:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"选择作品\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"选择作品\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[2]/div/button",
+                2,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-interactive-button:visible",
+              2,
+              "static"
+            ]
+          }
+        }
+      },
+      "regions": {
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"presentation\")",
+          "staticPrimary": ".container-drag-VAfIfu:visible",
+          "fallbacks": [
+            ".container-drag-VAfIfu:visible",
+            "xpath=//div/div[2]/div/div[1]/div/div/div[3]"
+          ],
+          "selectorType": "role",
+          "description": "抖音视频上传拖拽/点击区",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                ".container-drag-VAfIfu:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"presentation\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div/div[1]/div/div/div[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".container-drag-VAfIfu:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_work_list_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "xpath=//*[@id=\"root\"]/div/div",
+          "staticPrimary": "xpath=//div[text()=\"作品管理\"]/ancestor::div[contains(@class, \"card-container\")][1]",
+          "fallbacks": [
+            "xpath=//div[text()=\"作品管理\"]/ancestor::div[contains(@class, \"card-container\")][1]"
+          ],
+          "selectorType": "xpath",
+          "description": "内容管理-作品管理-可滚动区域（用户 Chrome DevTools 验证）",
+          "evidence": {
+            "page": "work_manage",
+            "source": "manual override (user-verified in Chrome DevTools)",
+            "checks": [
+              [
+                "xpath=//*[@id=\"root\"]/div/div",
+                0,
+                "playwright-only (xpath→css 转换失败)"
+              ],
+              [
+                "xpath=//div[text()=\"作品管理\"]/ancestor::div[contains(@class, \"card-container\")][1]",
+                0,
+                "playwright-only (xpath→css 转换失败)"
+              ]
+            ]
+          }
+        },
+        "region_works_analysis_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"grid\")",
+          "staticPrimary": ".douyin-creator-pc-table:visible",
+          "fallbacks": [
+            ".douyin-creator-pc-table:visible",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[3]/div/div/div/div[2]/div/div/div/div/div/div/div/div/div/div/table"
+          ],
+          "selectorType": "role",
+          "description": "作品分析-投稿列表 滚动容器",
+          "evidence": {
+            "page": "works_analysis",
+            "checks": [
+              [
+                ".douyin-creator-pc-table:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"grid\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='semiTabPanel1']/div/div/div[3]/div/div/div/div[2]/div/div/div/div/div/div/div/div/div/div/table",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".douyin-creator-pc-table:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_works_pick_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "xpath=/html/body/div[14]/div/div[2]/div/div[2]",
+          "staticPrimary": "xpath=//div[contains(@class, \"douyin-creator-interactive-sidesheet-body\")]",
+          "fallbacks": [
+            "xpath=//div[contains(@class, \"douyin-creator-interactive-sidesheet-body\")]"
+          ],
+          "selectorType": "xpath",
+          "description": "评论管理-选择作品-弹窗内滚动列表（用户 Chrome DevTools 验证）",
+          "evidence": {
+            "page": "select_works",
+            "source": "manual override (user-verified in Chrome DevTools)",
+            "checks": [
+              [
+                "xpath=/html/body/div[14]/div/div[2]/div/div[2]",
+                0,
+                "static (xpath→css 启发式)"
+              ],
+              [
+                "xpath=//div[contains(@class, \"douyin-creator-interactive-sidesheet-body\")]",
+                1,
+                "static (xpath→css 启发式)"
+              ]
+            ]
+          }
+        }
+      },
+      "textboxes": {
+        "tb_title": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "input[placeholder*=\"填写作品标题\"]:visible",
+          "staticPrimary": "input[placeholder*=\"填写作品标题\"]",
+          "fallbacks": [
+            "xpath=//input[contains(@placeholder, \"填写作品标题\")]"
+          ],
+          "selectorType": "css",
+          "description": "高清发布页-作品标题输入框（用户 Chrome DevTools 验证）",
+          "evidence": {
+            "page": "publish_after",
+            "source": "manual override (user-verified in Chrome DevTools)",
+            "checks": [
+              [
+                "input[placeholder*=\"填写作品标题\"]:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//input[contains(@placeholder, \"填写作品标题\")]",
+                1,
+                "static (xpath→css 启发式)"
+              ]
+            ]
+          }
+        },
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div[data-placeholder*=\"作品简介\"]:visible",
+          "staticPrimary": "div[data-placeholder*=\"作品简介\"]",
+          "fallbacks": [
+            "xpath=//div[contains(@data-placeholder, \"作品简介\")]"
+          ],
+          "selectorType": "css",
+          "description": "高清发布页-作品简介编辑框（用户 Chrome DevTools 验证）",
+          "evidence": {
+            "page": "publish_after",
+            "source": "manual override (user-verified in Chrome DevTools)",
+            "checks": [
+              [
+                "div[data-placeholder*=\"作品简介\"]:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//div[contains(@data-placeholder, \"作品简介\")]",
+                1,
+                "static (xpath→css 启发式)"
+              ]
+            ]
+          }
+        },
+        "tb_text": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "staticPrimary": ".semi-input:visible",
+          "fallbacks": [
+            "getByPlaceholder(\"请输入视频售价\")",
+            ".semi-input:visible",
+            "xpath=//div/div[1]/div/div[2]/div[2]/div[2]/div/div[2]/div/div[2]/div[1]/div[2]/div[2]/div[1]/input"
+          ],
+          "selectorType": "role",
+          "description": "普通文本输入框（请输入视频售价）",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".semi-input:visible",
+                3,
+                "static"
+              ],
+              [
+                "getByRole(\"textbox\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByPlaceholder(\"请输入视频售价\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div/div[2]/div[2]/div[2]/div/div[2]/div/div[2]/div[1]/div[2]/div[2]/div[1]/input",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".semi-input:visible",
+              3,
+              "static"
+            ]
+          }
+        },
+        "tb_description_editor": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"​\", exact=True)",
+          "staticPrimary": ".zone-container:visible",
+          "fallbacks": [
+            ".zone-container:visible",
+            "xpath=//div/div[1]/div/div[1]/div[2]/div[1]/div[1]/div[2]/div/div/div/div/div[2]/div"
+          ],
+          "selectorType": "text",
+          "description": "视频描述编辑区 (contenteditable)",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".zone-container:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"​\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div/div[1]/div[2]/div[1]/div[1]/div[2]/div/div/div/div/div[2]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".zone-container:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "text_works_pick_title": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"打到我 #loft复式 #效果图\", exact=True)",
+          "staticPrimary": ".title-LUOP3b:visible",
+          "fallbacks": [
+            ".title-LUOP3b:visible",
+            "xpath=//div/div/div/div[1]/div/ul/div[1]/div[1]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "选择作品-视频标题文本节点（用于 text 匹配）",
+          "evidence": {
+            "page": "select_works",
+            "checks": [
+              [
+                ".title-LUOP3b:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByText(\"打到我 #loft复式 #效果图\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div/div/div[1]/div/ul/div[1]/div[1]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".title-LUOP3b:visible",
+              20,
+              "static"
+            ]
+          }
+        }
+      }
+    },
+    "kuaishou": {
+      "menus": {
+        "menu_首页": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"首页\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"首页\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：首页",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"首页\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"首页\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[1]",
+                6,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_内容管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"内容管理\", exact=True)",
+          "staticPrimary": ".el-submenu__title:visible",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[2]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏一级菜单：内容管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-submenu__title:visible",
+                5,
+                "static"
+              ],
+              [
+                "getByText(\"内容管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-submenu__title:visible",
+              5,
+              "static"
+            ]
+          }
+        },
+        "menu_作品管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：作品管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_合集管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"合集管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"合集管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：合集管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"合集管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"合集管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_创建合集": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建合集\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创建合集\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：创建合集",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创建合集\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创建合集\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_互动管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"互动管理\", exact=True)",
+          "staticPrimary": ".el-submenu__title:visible",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[3]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏一级菜单：互动管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-submenu__title:visible",
+                5,
+                "static"
+              ],
+              [
+                "getByText(\"互动管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[3]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-submenu__title:visible",
+              5,
+              "static"
+            ]
+          }
+        },
+        "menu_评论管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"评论管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"评论管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[3]/ul/li"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：评论管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"评论管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"评论管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[3]/ul/li",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_数据中心": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"数据中心\", exact=True)",
+          "staticPrimary": ".el-submenu__title:visible",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[4]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏一级菜单：数据中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-submenu__title:visible",
+                5,
+                "static"
+              ],
+              [
+                "getByText(\"数据中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-submenu__title:visible",
+              5,
+              "static"
+            ]
+          }
+        },
+        "menu_数据概览": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"数据概览\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"数据概览\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：数据概览",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"数据概览\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"数据概览\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_作品分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品分析\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品分析\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：作品分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_直播数据": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"直播数据\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"直播数据\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：直播数据",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"直播数据\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"直播数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_粉丝分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝分析\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"粉丝分析\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：粉丝分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"粉丝分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"粉丝分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_成长中心": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"成长中心\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"成长中心\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[5]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：成长中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"成长中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"成长中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[5]",
+                2,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_创作服务": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作服务\", exact=True)",
+          "staticPrimary": ".el-submenu__title:visible",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[6]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏一级菜单：创作服务",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-submenu__title:visible",
+                5,
+                "static"
+              ],
+              [
+                "getByText(\"创作服务\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-submenu__title:visible",
+              5,
+              "static"
+            ]
+          }
+        },
+        "menu_创作灵感": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作灵感\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创作灵感\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：创作灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作灵感\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_我的灵感": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的灵感\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"我的灵感\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：我的灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"我的灵感\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"我的灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_活动中心": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"活动中心\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"活动中心\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：活动中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"活动中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"活动中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_热点榜单": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"热点榜单\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"热点榜单\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：热点榜单",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"热点榜单\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"热点榜单\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_创作学院": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作学院\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创作学院\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[5]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：创作学院",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作学院\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作学院\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[5]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_其他服务": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"其他服务\", exact=True)",
+          "staticPrimary": ".el-submenu__title:visible",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[7]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏一级菜单：其他服务",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-submenu__title:visible",
+                5,
+                "static"
+              ],
+              [
+                "getByText(\"其他服务\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-submenu__title:visible",
+              5,
+              "static"
+            ]
+          }
+        },
+        "menu_音乐人": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"音乐人\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"音乐人\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：音乐人",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"音乐人\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"音乐人\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_作品推广": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品推广\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品推广\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：作品推广",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品推广\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品推广\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_推广资源管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"推广资源管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"推广资源管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：推广资源管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"推广资源管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"推广资源管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_创建直播": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建直播\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创建直播\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单：创建直播",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创建直播\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创建直播\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_作品管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：作品管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_合集管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"合集管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"合集管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：合集管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"合集管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"合集管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_创建合集": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建合集\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创建合集\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[2]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：创建合集",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创建合集\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创建合集\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[2]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_评论管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"评论管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"评论管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[3]/ul/li"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：评论管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"评论管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"评论管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[3]/ul/li",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_数据概览": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"数据概览\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"数据概览\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：数据概览",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"数据概览\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"数据概览\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_作品分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品分析\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品分析\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：作品分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_直播数据": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"直播数据\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"直播数据\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：直播数据",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"直播数据\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"直播数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_粉丝分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝分析\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"粉丝分析\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[4]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：粉丝分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"粉丝分析\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"粉丝分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[4]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_创作灵感": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作灵感\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创作灵感\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：创作灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作灵感\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_我的灵感": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的灵感\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"我的灵感\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：我的灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"我的灵感\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"我的灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_活动中心": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"活动中心\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"活动中心\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：活动中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"活动中心\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"活动中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_热点榜单": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"热点榜单\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"热点榜单\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：热点榜单",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"热点榜单\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"热点榜单\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_创作学院": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作学院\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创作学院\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[6]/ul/li[5]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：创作学院",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创作学院\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创作学院\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[6]/ul/li[5]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_音乐人": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"音乐人\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"音乐人\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：音乐人",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"音乐人\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"音乐人\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_作品推广": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品推广\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"作品推广\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：作品推广",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"作品推广\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"作品推广\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_推广资源管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"推广资源管理\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"推广资源管理\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：推广资源管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"推广资源管理\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"推广资源管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_创建直播": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建直播\")",
+          "staticPrimary": ".el-menu-item:visible",
+          "fallbacks": [
+            "getByText(\"创建直播\", exact=True)",
+            ".el-menu-item:visible",
+            "xpath=//ul/li[7]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏二级菜单：创建直播",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".el-menu-item:visible",
+                20,
+                "static"
+              ],
+              [
+                "getByRole(\"menuitem\", name=\"创建直播\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"创建直播\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//ul/li[7]/ul/li[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-menu-item:visible",
+              20,
+              "static"
+            ]
+          }
+        }
+      },
+      "buttons": {
+        "tab_上传视频": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传视频\")",
+          "staticPrimary": "#rc-tabs-0-tab-1:visible",
+          "fallbacks": [
+            "getByText(\"上传视频\", exact=True)",
+            "#rc-tabs-0-tab-1:visible",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-1']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传视频",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "#rc-tabs-0-tab-1:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"上传视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传视频\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".ant-tabs-tab-btn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='rc-tabs-0-tab-1']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#rc-tabs-0-tab-1:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "tab_上传图文": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传图文\")",
+          "staticPrimary": "#rc-tabs-0-tab-2:visible",
+          "fallbacks": [
+            "getByText(\"上传图文\", exact=True)",
+            "#rc-tabs-0-tab-2:visible",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-2']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传图文",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "#rc-tabs-0-tab-2:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"上传图文\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传图文\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".ant-tabs-tab-btn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='rc-tabs-0-tab-2']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#rc-tabs-0-tab-2:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "tab_上传全景视频": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传全景视频\")",
+          "staticPrimary": "#rc-tabs-0-tab-3:visible",
+          "fallbacks": [
+            "getByText(\"上传全景视频\", exact=True)",
+            "#rc-tabs-0-tab-3:visible",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-3']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传全景视频",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "#rc-tabs-0-tab-3:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"上传全景视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传全景视频\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".ant-tabs-tab-btn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='rc-tabs-0-tab-3']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#rc-tabs-0-tab-3:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_继续编辑": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"继续编辑\")",
+          "staticPrimary": "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[1]",
+          "fallbacks": [
+            "getByText(\"继续编辑\", exact=True)",
+            "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[1]"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：继续编辑",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[1]",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"继续编辑\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"继续编辑\", exact=True)",
+                null,
+                "playwright-only"
+              ]
+            ],
+            "staticVerified": [
+              "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[1]",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_放弃": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"放弃\")",
+          "staticPrimary": "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[2]",
+          "fallbacks": [
+            "getByText(\"放弃\", exact=True)",
+            "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[2]"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：放弃",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[2]",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"放弃\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"放弃\", exact=True)",
+                null,
+                "playwright-only"
+              ]
+            ],
+            "staticVerified": [
+              "xpath=//div[@id='joyride-wrapper']/main/section/div[1]/div[2]/button[2]",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_上传视频": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "staticPrimary": "xpath=//div[@id='joyride-wrapper']/main/section/div[2]/div[1]/div[2]/button",
+          "fallbacks": [
+            "getByText(\"上传视频\", exact=True)",
+            "xpath=//div[@id='joyride-wrapper']/main/section/div[2]/div[1]/div[2]/button"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：上传视频",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "xpath=//div[@id='joyride-wrapper']/main/section/div[2]/div[1]/div[2]/button",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"上传视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传视频\", exact=True)",
+                null,
+                "playwright-only"
+              ]
+            ],
+            "staticVerified": [
+              "xpath=//div[@id='joyride-wrapper']/main/section/div[2]/div[1]/div[2]/button",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_立即体验": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"立即体验\")",
+          "staticPrimary": "xpath=//div[@id='joyride-wrapper']/main/div/button",
+          "fallbacks": [
+            "getByText(\"立即体验\", exact=True)",
+            "xpath=//div[@id='joyride-wrapper']/main/div/button"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：立即体验",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "xpath=//div[@id='joyride-wrapper']/main/div/button",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"立即体验\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"立即体验\", exact=True)",
+                null,
+                "playwright-only"
+              ]
+            ],
+            "staticVerified": [
+              "xpath=//div[@id='joyride-wrapper']/main/div/button",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_ai_assistant": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"智能文案\", exact=True)",
+          "staticPrimary": "#ai-button:visible",
+          "fallbacks": [
+            "#ai-button:visible",
+            "xpath=//div[@id='ai-button']"
+          ],
+          "selectorType": "text",
+          "description": "快手 AI 助手按钮",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                "#ai-button:visible",
+                3,
+                "static"
+              ],
+              [
+                "getByText(\"智能文案\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='ai-button']",
+                3,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#ai-button:visible",
+              3,
+              "static"
+            ]
+          }
+        },
+        "tab_全部作品": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"全部作品\")",
+          "staticPrimary": "#tab-0:visible",
+          "fallbacks": [
+            "getByText(\"全部作品\", exact=True)",
+            "#tab-0:visible",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-0']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：全部作品",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#tab-0:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"全部作品\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"全部作品\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tabs__item:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='tab-0']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#tab-0:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "tab_已发布": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"已发布\")",
+          "staticPrimary": "#tab-1:visible",
+          "fallbacks": [
+            "getByText(\"已发布\", exact=True)",
+            "#tab-1:visible",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-1']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：已发布",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#tab-1:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"已发布\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"已发布\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tabs__item:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='tab-1']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#tab-1:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "tab_待发布": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"待发布\")",
+          "staticPrimary": "#tab-2:visible",
+          "fallbacks": [
+            "getByText(\"待发布\", exact=True)",
+            "#tab-2:visible",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-2']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：待发布",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#tab-2:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"待发布\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"待发布\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tabs__item:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='tab-2']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#tab-2:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "tab_未通过": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"未通过\")",
+          "staticPrimary": "#tab-3:visible",
+          "fallbacks": [
+            "getByText(\"未通过\", exact=True)",
+            "#tab-3:visible",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-3']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：未通过",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#tab-3:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tab\", name=\"未通过\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"未通过\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tabs__item:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='tab-3']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#tab-3:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_video_pick_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".video-item:visible",
+          "staticPrimary": ".video-item:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[1]"
+          ],
+          "selectorType": "css",
+          "description": "快手选择视频弹窗中的视频条目",
+          "evidence": {
+            "page": "select_videos",
+            "checks": [
+              [
+                ".video-item:visible",
+                10,
+                "static"
+              ],
+              [
+                "xpath=//div/div/div[1]",
+                71,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".video-item:visible",
+              10,
+              "static"
+            ]
+          }
+        },
+        "btn_select_videos": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"选择视频\")",
+          "staticPrimary": ".el-button:visible",
+          "fallbacks": [
+            "getByText(\"选择视频\", exact=True)",
+            ".el-button:visible",
+            "xpath=//div/div[1]/button"
+          ],
+          "selectorType": "role",
+          "description": "评论管理-选择视频按钮",
+          "evidence": {
+            "page": "comment_manage",
+            "checks": [
+              [
+                ".el-button:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"选择视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"选择视频\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/button",
+                2,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".el-button:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      },
+      "regions": {
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "xpath=//div[@id='joyride-wrapper']/main/section",
+          "staticPrimary": "xpath=//div[@id='joyride-wrapper']/main/section",
+          "fallbacks": [],
+          "selectorType": "xpath",
+          "description": "快手视频上传区域",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                "xpath=//div[@id='joyride-wrapper']/main/section",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "xpath=//div[@id='joyride-wrapper']/main/section",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_work_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".main-container-infinite-list:visible",
+          "staticPrimary": ".main-container-infinite-list:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[3]"
+          ],
+          "selectorType": "css",
+          "description": "快手作品管理无限滚动容器",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                ".main-container-infinite-list:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//div/div/div[3]",
+                75,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".main-container-infinite-list:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_pane_pane-0": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tabpanel\")",
+          "staticPrimary": "#pane-0:visible",
+          "fallbacks": [
+            "#pane-0:visible",
+            ".el-tab-pane:visible",
+            "xpath=//div[@id='pane-0']"
+          ],
+          "selectorType": "role",
+          "description": "快手作品管理 tabpanel（pane-0）",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#pane-0:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tabpanel\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tab-pane:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='pane-0']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#pane-0:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_pane_pane-1": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tabpanel\")",
+          "staticPrimary": "#pane-1",
+          "fallbacks": [
+            "#pane-1",
+            ".el-tab-pane:visible",
+            "xpath=//div[@id='pane-1']"
+          ],
+          "selectorType": "role",
+          "description": "快手作品管理 tabpanel（pane-1）",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#pane-1",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tabpanel\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tab-pane:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='pane-1']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#pane-1",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_pane_pane-2": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tabpanel\")",
+          "staticPrimary": "#pane-2",
+          "fallbacks": [
+            "#pane-2",
+            ".el-tab-pane:visible",
+            "xpath=//div[@id='pane-2']"
+          ],
+          "selectorType": "role",
+          "description": "快手作品管理 tabpanel（pane-2）",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#pane-2",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tabpanel\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tab-pane:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='pane-2']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#pane-2",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_pane_pane-3": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tabpanel\")",
+          "staticPrimary": "#pane-3",
+          "fallbacks": [
+            "#pane-3",
+            ".el-tab-pane:visible",
+            "xpath=//div[@id='pane-3']"
+          ],
+          "selectorType": "role",
+          "description": "快手作品管理 tabpanel（pane-3）",
+          "evidence": {
+            "page": "work_manage",
+            "checks": [
+              [
+                "#pane-3",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"tabpanel\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".el-tab-pane:visible",
+                4,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='pane-3']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#pane-3",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_video_pick_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"作品列表\", exact=True)",
+          "staticPrimary": ".video-list__header:visible",
+          "fallbacks": [
+            ".video-list__header:visible",
+            "xpath=//div/header"
+          ],
+          "selectorType": "text",
+          "description": "快手选择视频弹窗的滚动区域",
+          "evidence": {
+            "page": "select_videos",
+            "checks": [
+              [
+                ".video-list__header:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"作品列表\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/header",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".video-list__header:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_works_analysis_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".statistics_article_list:visible",
+          "staticPrimary": ".statistics_article_list:visible",
+          "fallbacks": [
+            "xpath=//div"
+          ],
+          "selectorType": "css",
+          "description": "快手作品分析-滚动区域",
+          "evidence": {
+            "page": "data_analysis",
+            "checks": [
+              [
+                ".statistics_article_list:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//div",
+                277,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".statistics_article_list:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      },
+      "textboxes": {
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByPlaceholder(\"作品描述不会写？试试智能文案\")",
+          "staticPrimary": "#work-description-edit:visible",
+          "fallbacks": [
+            "#work-description-edit:visible",
+            "xpath=//div[@id='work-description-edit']"
+          ],
+          "selectorType": "placeholder",
+          "description": "快手视频描述编辑区",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                "#work-description-edit:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByPlaceholder(\"作品描述不会写？试试智能文案\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div[@id='work-description-edit']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#work-description-edit:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      }
+    },
+    "xiaohongshu": {
+      "menus": {
+        "menu_publish": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布笔记\", exact=True)",
+          "staticPrimary": ".btn-wrapper:visible",
+          "fallbacks": [
+            ".btn-wrapper:visible",
+            "xpath=//div/div[1]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏顶部【发布笔记】按钮",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".btn-wrapper:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"发布笔记\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div",
+                9,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".btn-wrapper:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_首页": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"首页\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：首页",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"首页\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_笔记管理": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记管理\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[2]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：笔记管理",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"笔记管理\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_数据看板": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"数据看板\", exact=True)",
+          "staticPrimary": ".d-sub-menu:visible",
+          "fallbacks": [
+            ".d-sub-menu:visible",
+            "xpath=//div/div[2]/div[1]/div[3]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：数据看板",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-sub-menu:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByText(\"数据看板\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-sub-menu:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "menu_账号概览": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"账号概览\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：账号概览",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"账号概览\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_内容分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"内容分析\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[2]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：内容分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"内容分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_粉丝数据": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"粉丝数据\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[3]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：粉丝数据",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"粉丝数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_活动中心": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"活动中心\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[4]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：活动中心",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"活动中心\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[4]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_笔记灵感": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记灵感\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[5]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：笔记灵感",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"笔记灵感\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[5]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_创作学院": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作学院\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[6]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：创作学院",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"创作学院\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[6]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_创作百科": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作百科\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[7]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：创作百科",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"创作百科\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[7]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_账号概览": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"账号概览\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏二级菜单：账号概览",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"账号概览\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_内容分析": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"内容分析\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[2]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏二级菜单：内容分析",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"内容分析\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[2]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        },
+        "menu_sub_粉丝数据": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"粉丝数据\", exact=True)",
+          "staticPrimary": ".d-menu-item:visible",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[3]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏二级菜单：粉丝数据",
+          "evidence": {
+            "page": "menu",
+            "checks": [
+              [
+                ".d-menu-item:visible",
+                9,
+                "static"
+              ],
+              [
+                "getByText(\"粉丝数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[3]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-menu-item:visible",
+              9,
+              "static"
+            ]
+          }
+        }
+      },
+      "buttons": {
+        "btn_upload_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "staticPrimary": ".d-button:visible",
+          "fallbacks": [
+            "getByText(\"上传视频\", exact=True)",
+            ".d-button:visible",
+            "xpath=//div/div[2]/div[1]/div/div/button"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-上传视频入口",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                ".d-button:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"上传视频\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"上传视频\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[2]/div[1]/div/div/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-button:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_topic": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"话题\")",
+          "staticPrimary": "#topicBtn:visible",
+          "fallbacks": [
+            "getByText(\"话题\", exact=True)",
+            "#topicBtn:visible",
+            ".contentBtn:visible",
+            "xpath=//button[@id='topicBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：话题",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                "#topicBtn:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"话题\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"话题\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".contentBtn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//button[@id='topicBtn']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#topicBtn:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_用户": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"用户\")",
+          "staticPrimary": "#userBtn:visible",
+          "fallbacks": [
+            "getByText(\"用户\", exact=True)",
+            "#userBtn:visible",
+            ".contentBtn:visible",
+            "xpath=//button[@id='userBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：用户",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                "#userBtn:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"用户\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"用户\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".contentBtn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//button[@id='userBtn']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#userBtn:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "btn_表情": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"表情\")",
+          "staticPrimary": "#emoticonsBtn:visible",
+          "fallbacks": [
+            "getByText(\"表情\", exact=True)",
+            "#emoticonsBtn:visible",
+            ".contentBtn:visible",
+            "xpath=//button[@id='emoticonsBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：表情",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                "#emoticonsBtn:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"表情\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"表情\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".contentBtn:visible",
+                3,
+                "static"
+              ],
+              [
+                "xpath=//button[@id='emoticonsBtn']",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#emoticonsBtn:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "select_添加内容类型声明": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"添加内容类型声明\", exact=True)",
+          "staticPrimary": ".d-select-wrapper:visible",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[2]/div[4]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：添加内容类型声明",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".d-select-wrapper:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByText(\"添加内容类型声明\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[5]/div[2]/div[4]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-select-wrapper:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "select_添加地点": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"添加地点\", exact=True)",
+          "staticPrimary": ".d-select-wrapper:visible",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[4]/div[1]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：添加地点",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".d-select-wrapper:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByText(\"添加地点\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[5]/div[4]/div[1]/div/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-select-wrapper:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "select_选择群聊": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"选择群聊\", exact=True)",
+          "staticPrimary": ".d-select-wrapper:visible",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[4]/div[2]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：选择群聊",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".d-select-wrapper:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByText(\"选择群聊\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[5]/div[4]/div[2]/div/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-select-wrapper:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "select_公开可见": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"公开可见\", exact=True)",
+          "staticPrimary": ".d-select-wrapper:visible",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[6]/div[2]/div[1]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：公开可见",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".d-select-wrapper:visible",
+                4,
+                "static"
+              ],
+              [
+                "getByText(\"公开可见\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[6]/div[2]/div[1]/div/div",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-select-wrapper:visible",
+              4,
+              "static"
+            ]
+          }
+        },
+        "btn_导出数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"导出数据\")",
+          "staticPrimary": ".d-button:visible",
+          "fallbacks": [
+            "getByText(\"导出数据\", exact=True)",
+            ".d-button:visible",
+            "xpath=//div/div/div[1]/button"
+          ],
+          "selectorType": "role",
+          "description": "数据看板按钮：导出数据",
+          "evidence": {
+            "page": "data_board",
+            "checks": [
+              [
+                ".d-button:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"button\", name=\"导出数据\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByText(\"导出数据\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div/div[1]/button",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-button:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      },
+      "regions": {
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": ".upload-container:visible",
+          "staticPrimary": ".upload-container:visible",
+          "fallbacks": [
+            "xpath=//div"
+          ],
+          "selectorType": "css",
+          "description": "小红书发布-上传区域",
+          "evidence": {
+            "page": "publish",
+            "checks": [
+              [
+                ".upload-container:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//div",
+                26,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".upload-container:visible",
+              1,
+              "static"
+            ]
+          }
+        },
+        "region_note_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"正在加载中...\", exact=True)",
+          "staticPrimary": "#notes-request:visible",
+          "fallbacks": [
+            "#notes-request:visible",
+            ".bottom-loading:visible",
+            "xpath=//div[@id='notes-request']"
+          ],
+          "selectorType": "text",
+          "description": "小红书笔记管理-滚动区域",
+          "evidence": {
+            "page": "note_manage",
+            "checks": [
+              [
+                "#notes-request:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByText(\"正在加载中...\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                ".bottom-loading:visible",
+                2,
+                "static"
+              ],
+              [
+                "xpath=//div[@id='notes-request']",
+                2,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              "#notes-request:visible",
+              2,
+              "static"
+            ]
+          }
+        },
+        "form_笔记题材": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记题材\", exact=True)",
+          "staticPrimary": ".d-form-item__label:visible",
+          "fallbacks": [
+            ".d-form-item__label:visible",
+            "xpath=//div/div/div[1]/form/div[1]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "数据看板筛选项：笔记题材",
+          "evidence": {
+            "page": "data_board",
+            "checks": [
+              [
+                ".d-form-item__label:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByText(\"笔记题材\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div/div[1]/form/div[1]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-form-item__label:visible",
+              2,
+              "static"
+            ]
+          }
+        },
+        "form_笔记首发时间": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记首发时间\", exact=True)",
+          "staticPrimary": ".d-form-item__label:visible",
+          "fallbacks": [
+            ".d-form-item__label:visible",
+            "xpath=//div/div/div[1]/form/div[2]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "数据看板筛选项：笔记首发时间",
+          "evidence": {
+            "page": "data_board",
+            "checks": [
+              [
+                ".d-form-item__label:visible",
+                2,
+                "static"
+              ],
+              [
+                "getByText(\"笔记首发时间\", exact=True)",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div/div[1]/form/div[2]/div[1]",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-form-item__label:visible",
+              2,
+              "static"
+            ]
+          }
+        },
+        "region_data_board_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".d-table-v2:visible",
+          "staticPrimary": ".d-table-v2:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[2]"
+          ],
+          "selectorType": "css",
+          "description": "数据看板-内容分析-滚动区域",
+          "evidence": {
+            "page": "data_board",
+            "checks": [
+              [
+                ".d-table-v2:visible",
+                1,
+                "static"
+              ],
+              [
+                "xpath=//div/div/div[2]",
+                26,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-table-v2:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      },
+      "textboxes": {
+        "tb_title": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "staticPrimary": ".d-text:visible",
+          "fallbacks": [
+            "getByPlaceholder(\"填写标题会有更多赞哦\")",
+            ".d-text:visible",
+            "xpath=//div/div[1]/div[3]/div/div[1]/div[1]/div[1]/div/input"
+          ],
+          "selectorType": "role",
+          "description": "小红书标题输入框（填写标题会有更多赞哦）",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".d-text:visible",
+                13,
+                "static"
+              ],
+              [
+                "getByRole(\"textbox\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "getByPlaceholder(\"填写标题会有更多赞哦\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[3]/div/div[1]/div[1]/div[1]/div/input",
+                1,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".d-text:visible",
+              13,
+              "static"
+            ]
+          }
+        },
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "staticPrimary": ".tiptap:visible",
+          "fallbacks": [
+            ".tiptap:visible",
+            "xpath=//div/div[1]/div[3]/div/div[2]/div[1]/div/div"
+          ],
+          "selectorType": "role",
+          "description": "小红书正文编辑区",
+          "evidence": {
+            "page": "publish_after",
+            "checks": [
+              [
+                ".tiptap:visible",
+                1,
+                "static"
+              ],
+              [
+                "getByRole(\"textbox\")",
+                null,
+                "playwright-only"
+              ],
+              [
+                "xpath=//div/div[1]/div[3]/div/div[2]/div[1]/div/div",
+                7,
+                "static"
+              ]
+            ],
+            "staticVerified": [
+              ".tiptap:visible",
+              1,
+              "static"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

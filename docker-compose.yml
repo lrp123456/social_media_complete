@@ -94,11 +94,13 @@ services:
       # LiteLLM (同 host 网络)
       LITELLM_URL: "http://localhost:4000"
       LITELLM_API_KEY: "your_litellm_master_key"
-      # 指纹浏览器 (Windows 宿主机 IP，通过环境变量注入)
-      # WSL2 中 Windows 宿主机 IP 一般为 /etc/resolv.conf 的 nameserver
-      # 或使用 WSL_HOST_IP 环境变量注入
-      ROXY_BROWSER_URL: ${WSL_HOST_IP:-http://172.0.0.1}:54345
-      BIT_BROWSER_URL: ${WSL_HOST_IP:-http://172.0.0.1}:54346
+      # 指纹浏览器 (network_mode: host, 直接访问 localhost)
+      ROXY_BROWSER_URL: "http://localhost:54345"
+      ROXY_BROWSER_KEY: "your_roxy_browser_key"
+      BIT_BROWSER_URL: "http://localhost:54346"
+      # 企业微信机器人
+      WECOM_BOT_ID: "your_wecom_bot_id"
+      WECOM_BOT_SECRET: "your_wecom_bot_secret"
 
   # ============================================================
   # Python Worker - 肌肉与算力中心
@@ -139,6 +141,7 @@ services:
       NODE_ENV: production
       TZ: Asia/Shanghai
       PORT: "3000"
+      HOSTNAME: "0.0.0.0"
 
 volumes:
   postgres_data:

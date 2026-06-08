@@ -30,10 +30,10 @@ export class BaijiahaoPublisher extends BasePublisher {
   }
 
   protected async uploadVideo(ctx: UploadContext): Promise<void> {
-    const fileChooserPromise = ctx.page.waitForEvent('filechooser', { timeout: 30000 });
-    await HumanActions.cdpClick(ctx.page, 'text=上传视频', { timeout: 8000 });
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(ctx.videoPath);
+    await HumanActions.cdpSetInputFiles(ctx.page, ctx.videoPath, {
+      clickSelector: 'text=上传视频',
+      clickBeforeUpload: true,
+    });
     await HumanActions.wait(ctx.page, 5000, 8000);
     logger.info('[百家号] 视频上传完成');
   }

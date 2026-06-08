@@ -1388,6 +1388,13 @@ export class DouyinCrawler {
 
         // 从响应中解析根评论快照
         const currentSnapshots = this.parseRootCommentSnapshots(response.body);
+        logger.info({
+          awemeId: item.awemeId,
+          snapshotCount: currentSnapshots.length,
+          hasComments: Array.isArray(response.body?.comments),
+          commentCount: response.body?.comments?.length || 0,
+          bodyKeys: response.body ? Object.keys(response.body).join(',') : 'null',
+        }, '[Phase3] Root comment snapshots parsed from API response');
 
         // 加载上次快照
         const lastSnapshots = await db.getRootCommentCounts(item.awemeId);
@@ -1420,12 +1427,14 @@ export class DouyinCrawler {
 
           // DOM 解析评论树
           const domTree = await this.parseCommentTreeFromDOM(page);
+          logger.info({ awemeId: item.awemeId, domTreeSize: domTree.length }, '[Phase3] DOM tree parsed');
 
           // 合并 API 数据到 DOM 节点（合并初始响应和展开后响应的数据）
           const apiComments = [
             ...(response.body?.comments || []),
             ...(expandedResponse?.body?.comments || []),
           ];
+          logger.info({ awemeId: item.awemeId, apiCommentCount: apiComments.length }, '[Phase3] API comments for merge');
           const mergedTree = this.mergeApiDataToDOM(domTree, apiComments);
 
           // 展平为 upsertCommentTree 所需格式（snake_case）

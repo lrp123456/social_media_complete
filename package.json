@@ -22,16 +22,21 @@
     "prisma:push": "prisma db push",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down",
-    "docker:logs": "docker-compose logs -f"
+    "docker:logs": "docker-compose logs -f",
+    "selectors:extract": "python3 scripts/extract_selectors.py",
+    "selectors:verify": "node scripts/verify-extracted.js"
   },
   "devDependencies": {
-    "prisma": "^6.0.0",
     "concurrently": "^9.0.0",
+    "prisma": "^6.0.0",
     "typescript": "^5.5.0"
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
   },
-  "packageManager": "pnpm@9.15.0"
+  "packageManager": "pnpm@9.15.0",
+  "dependencies": {
+    "@wecom/aibot-node-sdk": "^1.0.7"
+  }
 }

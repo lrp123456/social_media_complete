@@ -4,7 +4,7 @@
 import { getRedis } from '../lib/redis';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
-import { getSelectorRegistry } from '@social-media/selectors';
+import { reloadSelectorReader } from '../lib/selectorStore';
 
 const logger = createLogger('config-service');
 
@@ -95,10 +95,9 @@ export async function updatePlatformConfig(
     },
   });
 
-  // 🔥 热重载：如果更新的是选择器，同步到 SelectorRegistry
+  // 🔥 热重载：如果更新的是选择器，同步到 SelectorReader
   if (configKey.startsWith('selector.') || configKey === 'menu_selectors') {
-    const registry = getSelectorRegistry(prisma);
-    await registry.init(); // 重新加载
+    reloadSelectorReader(); // 从 data/selectors.json 重新加载
   }
 
   // 广播变更

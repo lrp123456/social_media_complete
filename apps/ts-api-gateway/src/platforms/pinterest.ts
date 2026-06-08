@@ -6,8 +6,9 @@ import { Page } from 'patchright';
 import { HumanActions, BrowserManager } from '@social-media/browser-core';
 import { createLogger } from '../lib/logger';
 import { WindowMutex } from '../lib/redlock';
+import { getBrowserManager } from '../lib/browserManager';
 import { prisma } from '../lib/prisma';
-import { uploadToOSS, ossKey } from '../lib/oss';
+import { uploadToOSS, ossKey, OSS_DIRS } from '../lib/oss';
 import type { PlatformName } from '@social-media/shared-config';
 
 const logger = createLogger('publisher:pinterest');
@@ -71,18 +72,11 @@ export class PinterestScraper {
       this.lock = await WindowMutex.acquireWithBackoff(task.windowId);
       logger.info(`[Pinterest] 🔒 窗口锁已获取: ${task.windowId}`);
 
-      // 2. 初始化浏览器（连接指纹浏览器）
-      const { chromium } = await import('patchright');
-      this.browser = await chromium.launchChannel('chrome', {
-        headless: false,
-      });
-
-      const context = await this.browser.newContext({
-        viewport: { width: 1920, height: 1080 },
-        userAgent:
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
-      this.page = await context.newPage();
+      // 2. CDP 连接已有指纹浏览器窗口
+      const bm = getBrowserManager();
+      const { browser, page } = await bm.connect(task.windowId, '', 'douyin');
+      this.browser = browser;
+      this.page = page;
 
       // 3. 导航到 Pinterest 搜索页
       const searchUrl = `${this.BASE_URL}/search/pins/?q=${encodeURIComponent(task.query)}`;
@@ -223,7 +217,7 @@ export class PinterestScraper {
         await fs.writeFile(tmpFile, response.data);
 
         // 上传到 OSS
-        const ossPath = ossKey(`pinterest/${taskId}`, `pin_${pin.pinId}.jpg`);
+        const ossPath = ossKey(OSS_DIRS.images, `pin_${taskId}_${pin.pinId}.jpg`);
         pin.ossUrl = await uploadToOSS(tmpFile, ossPath);
 
         // 清理临时文件

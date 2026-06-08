@@ -1,0 +1,48 @@
+# Node
+**/node_modules
+**/npm-debug.log
+**/.npm
+
+# Build outputs
+**/dist
+**/.next
+**/build
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Local data
+data/*.json
+data/*.bak
+data/*.bak.test
+
+# Tests
+**/__tests__
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+coverage
+
+# Scripts (used locally only, not needed in image)
+scripts/
+
+# Python
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local

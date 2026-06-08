@@ -10,7 +10,9 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@prisma/client": "^6.0.0"
+    "@prisma/client": "^6.0.0",
+    "@social-media/browser-core": "file:../browser-core",
+    "@social-media/shared-config": "file:../shared-config"
   },
   "devDependencies": {
     "typescript": "^5.5.0",

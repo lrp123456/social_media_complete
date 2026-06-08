@@ -3,6 +3,20 @@
 import { PrismaClient } from '@prisma/client';
 import type { PlatformName } from '@social-media/shared-config';
 
+// 子模块：JSON loader（从 scripts/selectors-extracted.json 加载已验证选择器）
+export {
+  loadExtractedConfig,
+  loadSelectorConfig,
+  toSelectorConfig,
+  toSelectorDef,
+  buildSelectorDefMap,
+  resolveExtractedJsonPath,
+} from './loader';
+export type {
+  ExtractedConfig,
+  ExtractedEntry,
+} from './loader';
+
 // ============================================================
 // 选择器接口定义
 // ============================================================

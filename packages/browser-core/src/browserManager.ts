@@ -111,6 +111,14 @@ export class BrowserManager {
           existingSession.lastActiveAt = Date.now();
           existingSession.reuseCount++;
 
+          // 激活标签页，确保爬虫在前台标签页操作
+          try {
+            await platformPage.bringToFront();
+            logger.info({ windowId, platform }, 'Reused tab brought to front');
+          } catch (bringError: any) {
+            logger.warn({ windowId, platform, error: bringError.message }, 'Failed to bring reused tab to front');
+          }
+
           logger.info({ windowId, sessionKey, reuseCount: existingSession.reuseCount, maxReuse: existingSession.maxReuse }, 'Reusing existing platform tab (Keep-Alive)');
 
           if (existingSession.reuseCount >= existingSession.maxReuse) {
@@ -194,6 +202,14 @@ export class BrowserManager {
         } else {
           page = await defaultContext.newPage();
           logger.info({ windowId, platform }, 'Created new tab for platform (no existing tab found)');
+        }
+
+        // 激活标签页，确保爬虫在前台标签页操作
+        try {
+          await page.bringToFront();
+          logger.info({ windowId, platform }, 'Tab brought to front after connection');
+        } catch (bringError: any) {
+          logger.warn({ windowId, platform, error: bringError.message }, 'Failed to bring tab to front');
         }
 
         this.mouseTraces = [];

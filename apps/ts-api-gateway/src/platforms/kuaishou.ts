@@ -3,9 +3,10 @@
 // 严格遵守 project_rules.md: 所有操作通过 HumanActions
 
 import { Page } from 'patchright';
-import { HumanActions } from '@social-media/browser-core';
+import { HumanActions, SelectorReader } from '@social-media/browser-core';
 import { BasePublisher } from './BasePublisher';
 import { createLogger } from '../lib/logger';
+import { getSelectorReader } from '../lib/selectorStore';
 import type { LoginContext, UploadContext } from './types';
 import type { PlatformName } from '@social-media/shared-config';
 
@@ -14,6 +15,9 @@ const logger = createLogger('publisher:kuaishou');
 export class KuaishouPublisher extends BasePublisher {
   readonly platform: PlatformName = 'kuaishou';
   readonly creatorUrl = 'https://cp.kuaishou.com';
+  protected override readonly publishUrl = 'https://cp.kuaishou.com/article/publish/video';
+
+  private sel(): SelectorReader { return getSelectorReader(); }
 
   // ============================================================
   // 登录（QR 扫码）
@@ -34,8 +38,7 @@ export class KuaishouPublisher extends BasePublisher {
     }
 
     // 等待 QR 码（快手可能在 passport 页面）
-    const qrSelector = '.qrcode-img, [class*="qrcode"] img, [class*="qr_code"]';
-    const qrArea = await HumanActions.cdpFindScrollContainer(page, [qrSelector]);
+    const qrArea = await HumanActions.cdpFindScrollContainer(page, this.sel().getSelectorListWithFallback('kuaishou', 'buttons', 'btn_qr_login', ['.qrcode-img:visible', '[class*=qrcode] img:visible', '[class*=qr_code]:visible']));
     if (qrArea) {
       logger.info('[快手] QR 码已显示，等待扫码');
     }
@@ -59,25 +62,21 @@ export class KuaishouPublisher extends BasePublisher {
 
   protected async goToPublishPage(page: Page): Promise<void> {
     // 点击"内容管理" → "作品管理"
-    await HumanActions.cdpClick(page, '#app .el-menu > .el-submenu:nth-of-type(1) > .el-submenu__title', {
+    await HumanActions.cdpClick(page, this.sel().getSelectorListWithFallback('kuaishou', 'menus', 'menu_content_manage', ['#app .el-menu > .el-submenu:nth-of-type(1) > .el-submenu__title'])[0], {
       timeout: 8000,
     });
     await HumanActions.wait(page, 800, 1500);
-    await HumanActions.cdpClick(page, '#app .el-menu > .el-submenu:nth-of-type(1) .el-menu--inline > .el-menu-item:nth-of-type(1)', {
+    await HumanActions.cdpClick(page, this.sel().getSelectorListWithFallback('kuaishou', 'menus', 'menu_work_manage', ['#app .el-menu > .el-submenu:nth-of-type(1) .el-menu--inline > .el-menu-item:nth-of-type(1)'])[0], {
       timeout: 8000,
     });
     await HumanActions.wait(page, 1500, 2500);
 
     // 点击发布按钮
-    await HumanActions.cdpClick(page, 'text=发布', { timeout: 8000 });
+    await HumanActions.cdpClick(page, this.sel().getSelectorListWithFallback('kuaishou', 'buttons', 'btn_goto_publish', ['text=发布'])[0], { timeout: 8000 });
     await HumanActions.wait(page, 2000, 3000);
 
     // 关闭引导弹窗（快手有 joyride 引导）
-    const joyrideClose = await HumanActions.cdpFindScrollContainer(page, [
-      '[class*="joyride"] button',
-      '[class*="guide"] .close',
-      '[class*="tour"] .skip',
-    ]);
+    const joyrideClose = await HumanActions.cdpFindScrollContainer(page, this.sel().getSelectorListWithFallback('kuaishou', 'menus', 'menu_publish_guide_close', ['[class*=joyride] button:visible', '[class*=guide] .close', '[class*=tour] .skip']));
     if (joyrideClose) {
       await HumanActions.cdpClick(page, joyrideClose.sel);
       await HumanActions.wait(page, 500, 1000);
@@ -93,32 +92,23 @@ export class KuaishouPublisher extends BasePublisher {
   protected async uploadVideo(ctx: UploadContext): Promise<void> {
     const { page, videoPath } = ctx;
 
-    const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 30000 });
-
-    // 快手的上传区域
-    const uploadArea = await HumanActions.cdpFindScrollContainer(page, [
-      '[class*="upload-video"]',
-      '[class*="upload"]',
-      'text=上传视频',
-    ]);
-    if (uploadArea) {
-      await HumanActions.cdpClick(page, uploadArea.sel);
-    }
-
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(videoPath);
+    // 使用 CDP 安全文件注入（避免 OS 级 filechooser 检测）
+    await HumanActions.cdpSetInputFiles(page, videoPath, {
+      containerSelector: this.sel().getSelectorListWithFallback('kuaishou', 'regions', 'region_upload_zone', ['[class*=upload-video]:visible', '[class*=upload]:visible', 'text=上传视频'])[0],
+      clickBeforeUpload: true,
+    });
     logger.info('[快手] 视频文件已选择');
 
     // 等待上传 + 转码完成
     await HumanActions.wait(page, 5000, 8000);
 
-    // 等待转码进度（快手有转码过程）
-    try {
-      await page.waitForSelector('[class*="transcode"]', {
-        state: 'hidden',
-        timeout: 600_000, // 快手转码可能较慢
-      });
-    } catch {
+    // 等待转码进度消失（快手有转码过程）
+    const transcodeSel = this.sel().getSelectorListWithFallback('kuaishou', 'regions', 'region_transcode_progress', ['[class*=transcode]:visible'])[0];
+    const transcodeDone = await HumanActions.cdpWaitForSelector(page, transcodeSel, {
+      state: 'hidden',
+      timeout: 600_000, // 快手转码可能较慢
+    });
+    if (!transcodeDone) {
       await HumanActions.wait(page, 30000, 60000);
     }
 
@@ -133,23 +123,23 @@ export class KuaishouPublisher extends BasePublisher {
     const { page, metadata } = ctx;
 
     // 1. 填写标题
-    const titleInput = await HumanActions.cdpFindScrollContainer(page, [
-      'input[placeholder*="标题"]',
-      '[class*="title"] input',
-    ]);
+    const titleSels = this.sel().getSelectorListWithFallback('kuaishou', 'textboxes', 'tb_title', ['input[placeholder*="标题"]:visible', '[class*=title] input:visible']);
+    const titleInput = await HumanActions.cdpFindElement(page, titleSels);
     if (titleInput) {
       await HumanActions.safeCDPType(page, metadata.title, titleInput.sel);
       logger.info('[快手] 标题已填写');
+    } else {
+      logger.warn({ selectors: titleSels }, '[快手] 标题输入框未找到，跳过标题填写');
     }
 
     // 2. 填写描述
-    const descInput = await HumanActions.cdpFindScrollContainer(page, [
-      'textarea[placeholder*="描述"]',
-      '[class*="desc"] textarea',
-    ]);
+    const descSels = this.sel().getSelectorListWithFallback('kuaishou', 'textboxes', 'tb_description', ['textarea[placeholder*="描述"]:visible', '[class*=desc] textarea:visible']);
+    const descInput = await HumanActions.cdpFindElement(page, descSels);
     if (descInput) {
       await HumanActions.safeCDPType(page, metadata.description, descInput.sel);
       logger.info('[快手] 描述已填写');
+    } else {
+      logger.warn({ selectors: descSels }, '[快手] 描述输入框未找到，跳过描述填写');
     }
 
     // 3. 添加标签
@@ -160,31 +150,7 @@ export class KuaishouPublisher extends BasePublisher {
     }
   }
 
-  // ============================================================
-  // 提交发布
-  // ============================================================
-
-  protected async submitPublish(page: Page): Promise<string> {
-    const publishBtn = await HumanActions.cdpFindScrollContainer(page, [
-      'button:has-text("发布")',
-      '[class*="publish"] button',
-      '[class*="submit"] button',
-    ]);
-    if (publishBtn) {
-      await HumanActions.cdpClick(page, publishBtn.sel);
-      logger.info('[快手] 发布按钮已点击');
-    }
-
-    await HumanActions.wait(page, 3000, 5000);
-
-    const successFlag = await HumanActions.cdpFindScrollContainer(page, [
-      'text=发布成功',
-      'text=已发布',
-    ]);
-    if (successFlag) {
-      logger.info('[快手] ✅ 发布成功');
-    }
-
-    return 'https://www.kuaishou.com/profile/self';
-  }
+  // 提交发布继承 BasePublisher.submitPublish 默认实现 (走 selectors.json flowRules)
+  // 默认 helper: submitPublishWithFlowRules → 滚动 → scope-scoped 找按钮 →
+  //   多路 disabled 检测 → 点击 + URL 校验 → 弹窗处理 → 成功 toast/URL 命中
 }

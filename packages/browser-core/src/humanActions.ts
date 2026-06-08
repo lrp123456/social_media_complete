@@ -16,6 +16,50 @@ interface CDPContext {
   noise: BehaviorNoise;
 }
 
+// ============================================================
+// 多级回退元素查找 — 类型定义
+// ============================================================
+
+/** 查找结果 */
+export class FindResult {
+  constructor(
+    public found: boolean,
+    public method: 'role' | 'text' | 'placeholder' | 'label' | 'css' | 'coordinate' | 'none',
+    public x: number = 0,
+    public y: number = 0,
+    public w: number = 0,
+    public h: number = 0,
+    public selector: string = '',
+  ) {}
+}
+
+/** 多级回退配置 */
+export type FallbackConfig = {
+  /** Level 1: getByRole */
+  role?: { name: string; options?: Record<string, string> };
+  /** Level 2: getByText（按顺序尝试，自动过滤 display:none 蜜罐） */
+  texts?: string[];
+  /** Level 3a: getByPlaceholder */
+  placeholder?: string;
+  /** Level 3b: getByLabel */
+  label?: string;
+  /** Level 4: CSS 选择器（自动追加 :visible） */
+  cssSelectors?: string[];
+  /** Level 5: 坐标回退 — 基于容器的相对比例偏移 */
+  coordinate?: { xRatio: number; yRatio: number; offsetX?: number; offsetY?: number };
+  /** 坐标模式下基于哪个容器计算相对位置（默认 body） */
+  coordinateContainer?: string;
+  /** 元素最小宽高过滤（过滤隐藏蜜罐，默认 10x10） */
+  minWidth?: number;
+  minHeight?: number;
+  /** 每个查找步骤之间的随机人类停顿 ms */
+  pauseBetweenSteps?: { min: number; max: number };
+  /** 找到后是否触发 hover（避免瞬时闪现，默认 true） */
+  hover?: boolean;
+  /** hover 后随机等待 ms */
+  hoverPause?: { min: number; max: number };
+};
+
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
@@ -297,23 +341,293 @@ export class HumanActions {
           y: location.rect.y + location.rect.height * 0.6,
           w: location.rect.width,
           h: location.rect.height,
-          sel,
-        };
-      }
-    }
-    return null;
-  }
+           sel,
+          };
+         }
+       }
+       return null;
+     }
 
+  /**
+   * 公共包装: cdpFindScrollContainer — 100px 尺寸门控的滚动容器查找。
+   * 仅用于"应位于大尺寸滚动容器内"的元素 (上传区/QR区/视频卡片等)。
+   * 表单输入框 (title/desc/tag/publish-btn) 一律用 cdpFindElement (无门控) 避免被误杀。
+   */
   static async cdpFindScrollContainer(
     page: Page,
     selectors: string[],
     minWidth: number = 50,
     minHeight: number = 100
   ): Promise<{ x: number; y: number; w: number; h: number; sel: string } | null> {
+    return await HumanActions.withCDPContext(page, async (ctx) => {
+      await ctx.dom.refreshDocument();
+      return await HumanActions.findScrollContainer(ctx, selectors, minWidth, minHeight);
+    });
+  }
+
+  /**
+   * 在父元素范围内找匹配元素。父元素由 scopeSelector 定位 (如 form 提交栏)。
+   * 用 Runtime.evaluate 在父元素内 querySelectorAll, 避免被页面其他区域的同名元素干扰
+   * (例如抖音的 "发布" 既是发布按钮文本, 也是导航菜单项)。
+   *
+   * 额外 filterTag 过滤: 仅匹配指定 HTML 标签 (默认 'BUTTON'), 排除 <a> 链接。
+   */
+  static async cdpFindElementScoped(
+    page: Page,
+    scopeSelector: string,
+    selectors: string[],
+    options: { filterTag?: string; filterText?: string } = {},
+  ): Promise<{ x: number; y: number; w: number; h: number; sel: string; tag: string } | null> {
+    const filterTag = options.filterTag ?? 'BUTTON';
+    const filterText = options.filterText;
     try {
       return await HumanActions.withCDPContext(page, async (ctx) => {
         await ctx.dom.refreshDocument();
-        return HumanActions.findScrollContainer(ctx, selectors, minWidth, minHeight);
+        const scopeNodeId = await ctx.cdp.querySelector(scopeSelector);
+        if (!scopeNodeId || scopeNodeId <= 0) return null;
+        for (const sel of selectors) {
+          // 在 scope 内查找 (用 Runtime.evaluate 拿到对象, 再 DOM.requestNode)
+          const escSel = JSON.stringify(sel);
+          const escTag = JSON.stringify(filterTag);
+          const escText = filterText ? JSON.stringify(filterText) : 'null';
+          const expr = `(() => {
+            try {
+              const scope = document.querySelector(${JSON.stringify(scopeSelector)});
+              if (!scope) return null;
+              const els = scope.querySelectorAll(${escSel});
+              for (const el of Array.from(els)) {
+                if (el.tagName !== ${escTag}) continue;
+                if (${escText} !== null) {
+                  const t = (el.textContent || '').trim();
+                  if (t !== ${escText}) continue;
+                }
+                return el;
+              }
+              return null;
+            } catch { return null; }
+          })()`;
+          const result = await ctx.cdp.send('Runtime.evaluate', { expression: expr, returnByValue: false });
+          const objectId = result.result?.objectId;
+          if (!objectId) continue;
+          const nr = await ctx.cdp.send('DOM.requestNode', { objectId });
+          const nodeId = nr.nodeId;
+          if (!nodeId || nodeId <= 0) continue;
+          const location = await ctx.dom.getElementLocation(nodeId);
+          if (!location) continue;
+          return {
+            x: location.center.x,
+            y: location.rect.y + location.rect.height * 0.5,
+            w: location.rect.width,
+            h: location.rect.height,
+            sel,
+            tag: filterTag,
+          };
+        }
+        return null;
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 检查元素是否 disabled。
+   * 用 Runtime.evaluate 直接读 el.disabled (HTMLButtonElement) 或 aria-disabled 属性,
+   * 比 cdpIsElementVisible('selector[disabled]') 可靠 — 后者会构造出非法选择器 (例如对
+   * Playwright 扩展语法 getByText 拼接 [disabled] 会翻译失败, 永远返回 null/false)。
+   *
+   * 多路检测 (默认全开, 可通过 methods 限制):
+   *   - dom-property:   el.disabled === true
+   *   - attr-disabled:  存在 disabled 属性 (覆盖 <fieldset disabled> 等)
+   *   - aria-disabled:  aria-disabled="true"
+   *   - pseudo-disabled: matches(':disabled')
+   *   - class-disabled: classList 含 disabled / is-disabled / btn-disabled
+   *   - cursor:         computed cursor === 'not-allowed'
+   *   - opacity:        computed opacity < 0.5 (抖音/B站常用样式降级)
+   */
+  static async cdpIsElementDisabled(
+    page: Page,
+    selector: string,
+    methods?: string[],
+  ): Promise<boolean> {
+    const useMethods = methods && methods.length > 0 ? methods : [
+      'dom-property', 'attr-disabled', 'aria-disabled',
+      'pseudo-disabled', 'class-disabled', 'cursor', 'opacity',
+    ];
+    // 把方法白名单转成 JS 数组, 序列化进 evaluate
+    const methodsJson = JSON.stringify(useMethods);
+    try {
+      return await HumanActions.withCDPContext(page, async (ctx) => {
+        await ctx.dom.refreshDocument();
+        const nodeId = await ctx.cdp.querySelector(selector);
+        if (!nodeId || nodeId <= 0) return false;
+        const result = await ctx.cdp.send('Runtime.evaluate', {
+          expression: `(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return false;
+            const methods = ${methodsJson};
+            const set = new Set(methods);
+            const get = (name) => el.getAttribute && el.getAttribute(name);
+            if (set.has('dom-property') && el.disabled === true) return true;
+            if (set.has('attr-disabled') && get('disabled') !== null) return true;
+            if (set.has('aria-disabled') && get('aria-disabled') === 'true') return true;
+            if (set.has('pseudo-disabled')) {
+              try { if (el.matches && el.matches(':disabled')) return true; } catch {}
+            }
+            if (set.has('class-disabled') && el.classList) {
+              const cls = el.className && typeof el.className === 'string' ? el.className : '';
+              if (/\\bdisabled\\b/i.test(cls) || /\\bis-disabled\\b/i.test(cls) || /\\bbtn-disabled\\b/i.test(cls)) return true;
+            }
+            if (set.has('cursor') || set.has('opacity')) {
+              const style = window.getComputedStyle(el);
+              if (set.has('cursor') && style.cursor === 'not-allowed') return true;
+              if (set.has('opacity')) {
+                const op = parseFloat(style.opacity || '1');
+                if (!isNaN(op) && op < 0.5) return true;
+              }
+            }
+            return false;
+          })()`,
+          returnByValue: true,
+        });
+        return result.result?.value === true;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 元素是否"实际可点击" (可见 + 启用 + 视口内) — 这是点发布按钮前的最后一道关。
+   * 比 cdpIsElementVisible 严格, 比 cdpIsElementDisabled 全面。
+   *
+   * visibilityMethods (默认全开):
+   *   - offset-size:    offsetWidth/Height > 0
+   *   - rect:           getBoundingClientRect 宽高 > 0
+   *   - computed-style: display/visibility/opacity
+   *   - viewport:       rect 与视口相交 (允许 insetPx 余量)
+   */
+  static async cdpIsElementActionable(
+    page: Page,
+    selector: string,
+    options: {
+      disabledMethods?: string[];
+      visibilityMethods?: string[];
+      viewportInsetPx?: number;
+    } = {},
+  ): Promise<{ actionable: boolean; visible: boolean; enabled: boolean; inViewport: boolean; reasons: string[] }> {
+    const visMethods = options.visibilityMethods ?? ['offset-size', 'rect', 'computed-style', 'viewport'];
+    const disMethods = options.disabledMethods ?? ['dom-property', 'attr-disabled', 'aria-disabled', 'pseudo-disabled', 'class-disabled', 'cursor', 'opacity'];
+    const inset = options.viewportInsetPx ?? 50;
+    const visJson = JSON.stringify(visMethods);
+    const disJson = JSON.stringify(disMethods);
+    const insetJson = JSON.stringify(inset);
+    try {
+      return await HumanActions.withCDPContext(page, async (ctx) => {
+        await ctx.dom.refreshDocument();
+        const nodeId = await ctx.cdp.querySelector(selector);
+        if (!nodeId || nodeId <= 0) {
+          return { actionable: false, visible: false, enabled: false, inViewport: false, reasons: ['element-not-found'] };
+        }
+        const result = await ctx.cdp.send('Runtime.evaluate', {
+          expression: `(() => {
+            const el = document.querySelector(${JSON.stringify(selector)});
+            if (!el) return { actionable: false, visible: false, enabled: false, inViewport: false, reasons: ['element-not-found'] };
+            const visMethods = ${visJson};
+            const disMethods = ${disJson};
+            const insetPx = ${insetJson};
+            const reasons = [];
+            const visSet = new Set(visMethods);
+            const disSet = new Set(disMethods);
+            const get = (name) => el.getAttribute && el.getAttribute(name);
+
+            // 可见性检测
+            let visible = true;
+            if (visSet.has('offset-size') && !(el.offsetWidth > 0) && !(el.offsetHeight > 0)) {
+              visible = false; reasons.push('offset-size-zero');
+            }
+            const rect = el.getBoundingClientRect();
+            if (visSet.has('rect') && (rect.width === 0 || rect.height === 0)) {
+              visible = false; reasons.push('rect-zero');
+            }
+            const style = window.getComputedStyle(el);
+            if (visSet.has('computed-style')) {
+              if (style.display === 'none') { visible = false; reasons.push('display-none'); }
+              else if (style.visibility === 'hidden' || style.visibility === 'collapse') { visible = false; reasons.push('visibility-hidden'); }
+              else {
+                const op = parseFloat(style.opacity || '1');
+                if (!isNaN(op) && op < 0.1) { visible = false; reasons.push('opacity-too-low'); }
+              }
+            }
+            // 视口检测
+            let inViewport = true;
+            if (visSet.has('viewport')) {
+              const vw = window.innerWidth || document.documentElement.clientWidth;
+              const vh = window.innerHeight || document.documentElement.clientHeight;
+              const ix = insetPx, iy = insetPx;
+              const x1 = rect.x, y1 = rect.y, x2 = rect.x + rect.width, y2 = rect.y + rect.height;
+              if (x2 <= ix || y2 <= iy || x1 >= vw - ix || y1 >= vh - iy) {
+                inViewport = false; reasons.push('out-of-viewport');
+              }
+            }
+
+            // 启用检测
+            let enabled = true;
+            if (disSet.has('dom-property') && el.disabled === true) { enabled = false; reasons.push('el-disabled'); }
+            if (disSet.has('attr-disabled') && get('disabled') !== null) { enabled = false; reasons.push('attr-disabled'); }
+            if (disSet.has('aria-disabled') && get('aria-disabled') === 'true') { enabled = false; reasons.push('aria-disabled'); }
+            if (disSet.has('pseudo-disabled')) {
+              try { if (el.matches && el.matches(':disabled')) { enabled = false; reasons.push(':disabled'); } } catch {}
+            }
+            if (disSet.has('class-disabled') && el.classList) {
+              const cls = el.className && typeof el.className === 'string' ? el.className : '';
+              if (/\\bdisabled\\b/i.test(cls) || /\\bis-disabled\\b/i.test(cls) || /\\bbtn-disabled\\b/i.test(cls)) { enabled = false; reasons.push('class-disabled'); }
+            }
+            if (disSet.has('cursor') && style.cursor === 'not-allowed') { enabled = false; reasons.push('cursor-not-allowed'); }
+            if (disSet.has('opacity') && !isNaN(parseFloat(style.opacity || '1')) && parseFloat(style.opacity) < 0.5) { enabled = false; reasons.push('opacity-low'); }
+
+            return { actionable: visible && enabled && inViewport, visible, enabled, inViewport, reasons };
+          })()`,
+          returnByValue: true,
+        });
+        const val = result.result?.value;
+        if (!val || typeof val !== 'object') {
+          return { actionable: false, visible: false, enabled: false, inViewport: false, reasons: ['evaluate-failed'] };
+        }
+        return val as { actionable: boolean; visible: boolean; enabled: boolean; inViewport: boolean; reasons: string[] };
+      });
+    } catch {
+      return { actionable: false, visible: false, enabled: false, inViewport: false, reasons: ['exception'] };
+    }
+  }
+
+  /**
+   * 找第一个匹配的元素（不做尺寸过滤）
+   * 适用于表单元素 (input / button / contenteditable) — 这些元素通常 < 100px 高,
+   * 会被 cdpFindScrollContainer 的 minHeight=100 门挡掉。
+   * 与 cdpFindScrollContainer 不同: 不要求容器尺寸, 返回首个可见元素即可。
+   */
+  static async cdpFindElement(
+    page: Page,
+    selectors: string[],
+  ): Promise<{ x: number; y: number; w: number; h: number; sel: string; tag: string } | null> {
+    try {
+      return await HumanActions.withCDPContext(page, async (ctx) => {
+        await ctx.dom.refreshDocument();
+        for (const sel of selectors) {
+          const location = await ctx.dom.findElementNow(sel);
+          if (location) {
+            return {
+              x: location.center.x,
+              y: location.rect.y + location.rect.height * 0.5,
+              w: location.rect.width,
+              h: location.rect.height,
+              sel,
+              tag: '',
+            };
+          }
+        }
+        return null;
       });
     } catch {
       return null;
@@ -700,6 +1014,278 @@ export class HumanActions {
       } catch {}
 
       await page.waitForTimeout(400);
+    }
+
+    return false;
+  }
+
+  // ============================================================
+  // 多级回退元素查找 — 防风控 / 反蜜罐
+  // 回退链: role → text → placeholder/label → CSS:visible → 坐标
+  // 严格遵循 Patchwright 无痕规范
+  // ============================================================
+
+  /**
+   * 多级回退查找 + 无痕交互
+   *
+   * 查找顺序（按风控安全等级递减）：
+   *   1. getByRole     — 无障碍树，最接近人类感知
+   *   2. getByText     — 文本匹配，自动过滤 display:none 蜜罐
+   *   3. getByPlaceholder / getByLabel — 原生属性定位
+   *   4. CSS :visible  — CSS 选择器 + 过滤隐藏元素
+   *   5. 容器坐标      — 基于容器的比例偏移，完全脱离 DOM
+   *
+   * 找到元素后自动 hover + 停顿（模拟人类"先看后点"）
+   */
+  static async findElementMultiLevel(
+    page: Page,
+    config: FallbackConfig,
+  ): Promise<FindResult> {
+    const minW = config.minWidth ?? 10;
+    const minH = config.minHeight ?? 10;
+    const pause = config.pauseBetweenSteps ?? { min: 100, max: 300 };
+
+    // ── Level 1: Role ──
+    if (config.role) {
+      try {
+        const loc = page.getByRole(config.role.name as any, config.role.options);
+        const box = await loc.boundingBox().catch(() => null);
+        if (box && box.width >= minW && box.height >= minH) {
+          await HumanActions.wait(page, pause.min, pause.max);
+          if (config.hover !== false) { await loc.hover().catch(() => {}); }
+          if (config.hoverPause) await HumanActions.wait(page, config.hoverPause.min, config.hoverPause.max);
+          logger.info({ method: 'role', name: config.role.name, x: box.x, y: box.y }, 'findElementMultiLevel: found by role');
+          return new FindResult(true, 'role', box.x, box.y, box.width, box.height, `role:${config.role.name}`);
+        }
+      } catch { /* fall through */ }
+    }
+
+    // ── Level 2: Text ──
+    if (config.texts && config.texts.length > 0) {
+      for (const t of config.texts) {
+        try {
+          const loc = page.getByText(t, { exact: false });
+          const count = await loc.count();
+          for (let i = 0; i < count; i++) {
+            const el = loc.nth(i);
+            if (!(await el.isVisible().catch(() => false))) continue;
+            const box = await el.boundingBox().catch(() => null);
+            if (box && box.width >= minW && box.height >= minH) {
+              await HumanActions.wait(page, pause.min, pause.max);
+              if (config.hover !== false) { await el.hover().catch(() => {}); }
+              if (config.hoverPause) await HumanActions.wait(page, config.hoverPause.min, config.hoverPause.max);
+              logger.info({ method: 'text', text: t }, 'findElementMultiLevel: found by text');
+              return new FindResult(true, 'text', box.x, box.y, box.width, box.height, `text:${t}`);
+            }
+          }
+        } catch { /* fall through */ }
+      }
+    }
+
+    // ── Level 3: Placeholder / Label ──
+    if (config.placeholder) {
+      try {
+        const loc = page.getByPlaceholder(config.placeholder);
+        const box = await loc.boundingBox().catch(() => null);
+        if (box && box.width >= minW && box.height >= minH) {
+          await HumanActions.wait(page, pause.min, pause.max);
+          if (config.hover !== false) { await loc.hover().catch(() => {}); }
+          if (config.hoverPause) await HumanActions.wait(page, config.hoverPause.min, config.hoverPause.max);
+          logger.info({ method: 'placeholder', placeholder: config.placeholder }, 'findElementMultiLevel: found by placeholder');
+          return new FindResult(true, 'placeholder', box.x, box.y, box.width, box.height, `placeholder:${config.placeholder}`);
+        }
+      } catch { /* fall through */ }
+    }
+    if (config.label) {
+      try {
+        const loc = page.getByLabel(config.label);
+        const box = await loc.boundingBox().catch(() => null);
+        if (box && box.width >= minW && box.height >= minH) {
+          await HumanActions.wait(page, pause.min, pause.max);
+          if (config.hover !== false) { await loc.hover().catch(() => {}); }
+          if (config.hoverPause) await HumanActions.wait(page, config.hoverPause.min, config.hoverPause.max);
+          logger.info({ method: 'label', label: config.label }, 'findElementMultiLevel: found by label');
+          return new FindResult(true, 'label', box.x, box.y, box.width, box.height, `label:${config.label}`);
+        }
+      } catch { /* fall through */ }
+    }
+
+    // ── Level 4: CSS Selector（自动追加 :visible） ──
+    if (config.cssSelectors && config.cssSelectors.length > 0) {
+      for (const sel of config.cssSelectors) {
+        try {
+          const loc = page.locator(`${sel}:visible`).first();
+          if ((await loc.count()) === 0) continue;
+          const box = await loc.boundingBox().catch(() => null);
+          if (box && box.width >= minW && box.height >= minH) {
+            await HumanActions.wait(page, pause.min, pause.max);
+            if (config.hover !== false) { await loc.hover().catch(() => {}); }
+            if (config.hoverPause) await HumanActions.wait(page, config.hoverPause.min, config.hoverPause.max);
+            logger.info({ method: 'css', selector: sel }, 'findElementMultiLevel: found by CSS');
+            return new FindResult(true, 'css', box.x, box.y, box.width, box.height, sel);
+          }
+        } catch { /* fall through */ }
+      }
+    }
+
+    // ── Level 5: 坐标回退 — 相对容器偏移 ──
+    if (config.coordinate) {
+      const containerSel = config.coordinateContainer || 'body';
+      try {
+        const container = page.locator(containerSel).first();
+        const cBox = await container.boundingBox().catch(() => null);
+        if (cBox) {
+          const tx = cBox.x + cBox.width * config.coordinate.xRatio + (config.coordinate.offsetX ?? 0);
+          const ty = cBox.y + cBox.height * config.coordinate.yRatio + (config.coordinate.offsetY ?? 0);
+          const fx = tx + (Math.random() - 0.5) * 10;
+          const fy = ty + (Math.random() - 0.5) * 10;
+          logger.info({ method: 'coordinate', x: Math.round(fx), y: Math.round(fy) }, 'findElementMultiLevel: found by coordinate');
+          return new FindResult(true, 'coordinate', fx, fy, 0, 0, containerSel);
+        }
+      } catch { /* fall through */ }
+    }
+
+    logger.warn({ config }, 'findElementMultiLevel: all levels exhausted');
+    return new FindResult(false, 'none');
+  }
+
+  // ============================================================
+  // 文件上传 — CDP 安全注入（不触发 OS 级 filechooser 事件）
+  // ============================================================
+
+  /**
+   * 通过 CDP 安全设置文件上传
+   * 先通过多级回退找到上传容器/input，再使用 patchright 的 setInputFiles
+   * 不使用 page.waitForEvent('filechooser')，避免 OS 级对话框检测
+   */
+  static async cdpSetInputFiles(
+    page: Page,
+    filePath: string,
+    options?: {
+      containerSelector?: string;   // 上传容器（可选，参考 douyin: div.container-drag-VAfIfu）
+      inputSelector?: string;       // 文件 input（可选，默认 input[type='file']）
+      clickBeforeUpload?: boolean;   // 是否在设置文件前点击上传区域
+      clickSelector?: string;       // 要点击的上传区域选择器
+      fallbackSelectors?: string[];  // 回退容器选择器列表
+    },
+  ): Promise<boolean> {
+    const container = options?.containerSelector;
+    const input = options?.inputSelector || "input[type='file']";
+    const clickBefore = options?.clickBeforeUpload !== false;
+    const clickTarget = options?.clickSelector || container;
+    const fallbacks = options?.fallbackSelectors || [
+      '[class*="upload"]', '[class*="drag"]', '[class*="container-drag"]',
+    ];
+
+    const tryUpload = async (sel: string): Promise<boolean> => {
+      try {
+        const loc = page.locator(sel).first();
+        const cnt = await loc.count();
+        if (!cnt) return false;
+
+        // 人类行为：hover + 短暂停顿后再操作
+        await loc.hover().catch(() => {});
+        await HumanActions.wait(page, 200, 500);
+
+        // 如果指定了点击目标，先触发上传区域（部分网站需要点击才能展开 file input）
+        if (clickBefore && clickTarget) {
+          const clickLoc = page.locator(clickTarget).first();
+          if (await clickLoc.count()) {
+            await HumanActions.cdpClick(page, clickTarget);
+            await HumanActions.wait(page, 300, 800);
+          }
+        }
+
+        // CDP 安全文件注入
+        await loc.setInputFiles(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // 主线：通过指定容器 > 内部 input
+    if (container) {
+      try {
+        const cnt = await page.locator(container).first().count();
+        if (cnt) {
+          const innerInput = page.locator(container).locator(input).first();
+          const icnt = await innerInput.count();
+          if (icnt) {
+            await innerInput.hover().catch(() => {});
+            await HumanActions.wait(page, 200, 500);
+            await innerInput.setInputFiles(filePath);
+            logger.info({ container, file: filePath }, 'cdpSetInputFiles: uploaded via container');
+            return true;
+          }
+        }
+      } catch {
+        // 容器方案失败，继续回退
+      }
+    }
+
+    // 回退 1：通过用户指定的回退选择器
+    for (const sel of fallbacks) {
+      if (await tryUpload(sel)) {
+        logger.info({ selector: sel, file: filePath }, 'cdpSetInputFiles: uploaded via fallback');
+        return true;
+      }
+    }
+
+    // 回退 2：直接找任意 file input
+    try {
+      const anyInput = page.locator("input[type='file']").first();
+      if (await anyInput.count()) {
+        await anyInput.setInputFiles(filePath);
+        logger.info({ file: filePath }, 'cdpSetInputFiles: uploaded via direct file input');
+        return true;
+      }
+    } catch {
+      // 最终失败
+    }
+
+    logger.warn({ file: filePath }, 'cdpSetInputFiles: all methods exhausted');
+    return false;
+  }
+
+  // ============================================================
+  // 等待选择器状态 — CDP 安全等待
+  // ============================================================
+
+  /**
+   * 通过 CDP 安全等待选择器状态变化
+   * 使用 CDP document 查询 + 轮询，避免直接 page.waitForSelector 产生的检测特征
+   */
+  static async cdpWaitForSelector(
+    page: Page,
+    selector: string,
+    options?: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number; pollInterval?: number },
+  ): Promise<boolean> {
+    const timeout = options?.timeout ?? 30000;
+    const interval = options?.pollInterval ?? 500;
+    const state = options?.state ?? 'visible';
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      try {
+        const visible = await HumanActions.cdpIsElementVisible(page, selector);
+        if ((state === 'visible' && visible) || (state === 'hidden' && !visible)) {
+          return true;
+        }
+        if (state === 'attached') {
+          // 通过 CDP 检查 DOM 中是否存在
+          try {
+            await HumanActions.withCDPContext(page, async (ctx) => {
+              await ctx.dom.refreshDocument();
+              const loc = await ctx.dom.findElementNow(selector);
+              if (loc) return true;
+            });
+          } catch {}
+        }
+      } catch {
+        // 轮询中忽略瞬时错误
+      }
+      await page.waitForTimeout(interval);
     }
 
     return false;

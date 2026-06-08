@@ -213,6 +213,81 @@
 | `page.keyboard.press()` | `HumanActions.cdpKeyPress()` |
 | `element.click()` | `HumanActions.cdpClick()` |
 
+### 8.3 ★ Selector 外部化强制规则 (v2.1+)
+
+**铁律**: 任何与"如何找到一个元素"、"如何判定一个元素的状态"、"如何判定一个流程的成功/失败"相关的逻辑，**都必须先考虑能否放进 `data/selectors.json`**，放进 `publishFlowRules` 或 `SelectorEntry.filterTag/filterText/scopeKey`。
+
+#### 8.3.1 必须外部化的清单
+
+| 类别 | 强制外部化 | 配置字段 |
+|------|----------|----------|
+| **DOM 选择器** | 所有 primary + fallbacks 列表 | `SelectorEntry.primary / .fallbacks` |
+| **HTML 标签约束** | 找按钮时是否要排除 `<a>` | `SelectorEntry.filterTag = "BUTTON"` |
+| **元素文本约束** | 精确匹配文本 (如 "发布") | `SelectorEntry.filterText` |
+| **搜索范围 (scope)** | 在哪个父元素内找 | `SelectorEntry.scopeKey` 或 `PublishFlowRules.scopeSelectors[]` |
+| **disabled 检测方法** | 用 `el.disabled` / `aria-disabled` / `:disabled` / 哪几个 | `PublishFlowRules.disabledCheckMethods[]` |
+| **可见性检测方法** | offset-size / rect / computed-style / viewport / 哪几个 | `PublishFlowRules.visibilityCheckMethods[]` |
+| **URL 成功模式** | 发布成功时 URL 应包含什么 | `PublishFlowRules.successUrlPatterns[]` |
+| **URL 导航模式** | 误点到导航链接时 URL 含什么 | `PublishFlowRules.navRedirectUrlPatterns[]` |
+| **重试参数** | 最大重试次数、disabled 时退避、scope 找不到时退避 | `PublishFlowRules.publishMaxRetries / .disabledRetryDelayMs / .notFoundBackoffMs` |
+| **等待参数** | 等待发布成功的总时长、点击后稳定时间 | `PublishFlowRules.publishWaitMs / .postClickStabilizeMs` |
+| **滚动参数** | 把发布按钮滚到视口内的位移 | `PublishFlowRules.scrollAmountPx` |
+| **弹窗检测方式** | 用 selector / page-text / 两者 | `PublishFlowRules.declareModalMethod` |
+
+#### 8.3.2 硬编码白名单 (允许写在 .ts 的)
+
+以下逻辑允许写在 `.ts` 文件里，**禁止挪到 selectors.json**：
+
+| 类型 | 例子 | 为什么 |
+|------|------|------|
+| 平台基础 URL | `https://creator.douyin.com/creator-micro/content/upload` | 是代码常量, 不是 selector |
+| 平台登录入口 URL | `https://creator.douyin.com` | 同上 |
+| 文件命名约定 | `mp4` 后缀校验 | 是业务规则, 不是 DOM 行为 |
+| 错误消息文案 | `'[抖音] 上传失败: ...'` | 是日志, 不是配置 |
+
+#### 8.3.3 修改流程
+
+1. **修改前**: 打开 `data/selectors.json` 看是否已有同名字段, 直接改 JSON 即可
+2. **新增 selector/规则**: 在 selectors.json 添加, **同时** 写一个 `getSelectorListWithFallback(..., [...])` 的硬编码兜底, 避免配置缺失时静默失败
+3. **新增方法类别** (比如新增 visibility 维度): 必须同步做以下四件事
+   - 扩展 `PublishFlowRules` interface (`packages/browser-core/src/selectorConfig.ts`)
+   - 扩展 `selectorStore.ts` 验证器
+   - 扩展 `configSelector.ts` Zod schema
+   - 在 `project_rules.md` 8.3.1 表格加一行
+4. **PR 检查清单**:
+   - [ ] 没有在 `.ts` 里写硬编码 selector 数组
+   - [ ] 没有在 `.ts` 里写"匹配这个 URL 算成功" 这种逻辑
+   - [ ] 新增的检测方法在 selectors.json 有默认配置
+   - [ ] `getFlowRulesWithFallback` 的兜底值 与 selectors.json 保持一致 (不能漂移)
+
+#### 8.3.4 反模式 (禁止)
+
+```typescript
+// ❌ 反模式: scope 写死在 .ts
+const scopeSelectors = ['div[class*="footer"]', 'form'];
+for (const scope of scopeSelectors) { ... }
+
+// ✅ 正解: 从 selectors.json 读
+const rules = sel.getFlowRulesWithFallback('douyin', { scopeSelectors: ['form'] });
+for (const scope of rules.scopeSelectors ?? []) { ... }
+```
+
+```typescript
+// ❌ 反模式: disabled 写死一个检测
+const isDisabled = el.disabled || el.ariaDisabled;
+
+// ✅ 正解: 多方法交叉, 方法列表可配置
+const isDisabled = await HumanActions.cdpIsElementDisabled(page, sel, rules.disabledCheckMethods);
+```
+
+```typescript
+// ❌ 反模式: 成功 URL 模式写死
+if (url.includes('/user/self')) throw new Error('...');
+
+// ✅ 正解: 从配置读
+const isNav = rules.navRedirectUrlPatterns.some((p) => url.includes(p) && !urlBefore.includes(p));
+```
+
 ---
 
 ## 九、通用开发规则

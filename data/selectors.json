@@ -1,0 +1,2058 @@
+{
+  "version": "2.1.0",
+  "updatedAt": "2026-06-05T03:30:00.000000Z",
+  "platforms": {
+    "douyin": {
+      "flowRules": {
+        "scopeSelectors": [
+          "form > div[class*=\"footer\"]",
+          "div[class*=\"footer\"]:not(nav):not(header)",
+          "div[class*=\"action-bar\"]",
+          "div[class*=\"button-wrap\"]",
+          "div[class*=\"button-group\"]",
+          "div[class*=\"publish-bar\"]",
+          "form"
+        ],
+        "disabledCheckMethods": [
+          "dom-property",
+          "attr-disabled",
+          "aria-disabled",
+          "pseudo-disabled",
+          "class-disabled",
+          "cursor",
+          "opacity"
+        ],
+        "visibilityCheckMethods": [
+          "offset-size",
+          "rect",
+          "computed-style",
+          "viewport"
+        ],
+        "viewportInsetPx": 50,
+        "successUrlPatterns": [
+          "/content/manage",
+          "/creator-micro/content/manage",
+          "已发布"
+        ],
+        "navRedirectUrlPatterns": [
+          "/user/self",
+          "/following",
+          "/creator-micro/home"
+        ],
+        "filterTag": "BUTTON",
+        "filterText": "发布",
+        "publishWaitMs": 15000,
+        "publishMaxRetries": 10,
+        "disabledRetryDelayMs": [
+          1500,
+          4000
+        ],
+        "notFoundBackoffMs": [
+          800,
+          1500
+        ],
+        "scrollAmountPx": 600,
+        "postClickStabilizeMs": [
+          1000,
+          2000
+        ],
+        "declareModalMethod": "both"
+      },
+      "menus": {
+        "nav_to_creator_center": {
+          "purposes": ["monitor", "publish"],
+          "primary": "getByText(\"创作者服务平台\")",
+          "fallbacks": [
+            "a[href*=\"creator\"]:visible",
+            "text=创作者中心",
+            "text=创作服务平台",
+            "[class*=\"creator-entry\"]:visible"
+          ],
+          "selectorType": "text",
+          "description": "公共首页→创作者中心导航链接"
+        },
+        "menu_home": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"首页\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-home:visible",
+            "getByText(\"首页\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-home']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：首页"
+        },
+        "menu_activity_management": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"活动管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-activity_management:visible",
+            "getByText(\"活动管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-activity_management']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：活动管理"
+        },
+        "menu_content": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"内容管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-content:visible",
+            "getByText(\"内容管理\", exact=True)",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-content']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：内容管理 作品管理 合集管理 共创中心 原创保护中心"
+        },
+        "menu_work_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-work_manage:visible",
+            "getByText(\"作品管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-work_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：作品管理"
+        },
+        "menu_collection_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"合集管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-collection_manage:visible",
+            "getByText(\"合集管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-collection_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：合集管理"
+        },
+        "menu_cooperate_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"共创中心\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-cooperate_center:visible",
+            "getByText(\"共创中心\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-cooperate_center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：共创中心"
+        },
+        "menu_right_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"原创保护中心\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-right_manage:visible",
+            "getByText(\"原创保护中心\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-right_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：原创保护中心"
+        },
+        "menu_interaction": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"互动管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-interaction:visible",
+            "getByText(\"互动管理\", exact=True)",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-interaction']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：互动管理 关注管理 粉丝管理 评论管理 弹幕管理 私信管理"
+        },
+        "menu_follow_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"关注管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-follow_manage:visible",
+            "getByText(\"关注管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-follow_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：关注管理"
+        },
+        "menu_fans_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-fans_manage:visible",
+            "getByText(\"粉丝管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-fans_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：粉丝管理"
+        },
+        "menu_comment_manage_new": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"评论管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-comment_manage_new:visible",
+            "getByText(\"评论管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-comment_manage_new']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：评论管理"
+        },
+        "menu_danmaku_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"弹幕管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-danmaku_manage:visible",
+            "getByText(\"弹幕管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-danmaku_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：弹幕管理"
+        },
+        "menu_message_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"私信管理\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-message_manage:visible",
+            "getByText(\"私信管理\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-message_manage']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：私信管理"
+        },
+        "menu_data-center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"数据中心\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-data-center:visible",
+            "getByText(\"数据中心\", exact=True)",
+            ".douyin-creator-master-navigation-sub-wrap:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-data-center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：数据中心 账号总览 作品分析 粉丝分析 重点关心"
+        },
+        "menu_business_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"账号总览\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-business_analysis:visible",
+            "getByText(\"账号总览\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-business_analysis']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：账号总览"
+        },
+        "menu_content_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品分析\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-content_analysis:visible",
+            "getByText(\"作品分析\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-content_analysis']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：作品分析"
+        },
+        "menu_fans_characteristic": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝分析\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-fans_characteristic:visible",
+            "getByText(\"粉丝分析\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-fans_characteristic']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：粉丝分析"
+        },
+        "menu_following": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"重点关心\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-following:visible",
+            "getByText(\"重点关心\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-following']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：重点关心"
+        },
+        "menu_cash_square": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"变现广场\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-cash_square:visible",
+            "getByText(\"变现广场\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-cash_square']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：变现广场"
+        },
+        "menu_my_task": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的任务\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-my_task:visible",
+            "getByText(\"我的任务\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-my_task']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：我的任务"
+        },
+        "menu_my_income": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的收入\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-my_income:visible",
+            "getByText(\"我的收入\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-my_income']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：我的收入"
+        },
+        "menu_create_content": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作灵感\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-create_content:visible",
+            "getByText(\"创作灵感\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-create_content']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏一级菜单（可展开）：创作灵感"
+        },
+        "menu_study_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"学习中心\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-study_center:visible",
+            "getByText(\"学习中心\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-study_center']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：学习中心"
+        },
+        "menu_creator_count": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"抖音指数\")",
+          "fallbacks": [
+            "#douyin-creator-master-menu-nav-creator_count:visible",
+            "getByText(\"抖音指数\", exact=True)",
+            ".douyin-creator-master-navigation-item-normal:visible",
+            "xpath=//li[@id='douyin-creator-master-menu-nav-creator_count']"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单项：抖音指数"
+        },
+        "menu_publish_hd": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"高清发布\")",
+          "fallbacks": [
+            ".douyin-creator-master-button:visible",
+            "getByText(\"高清发布\", exact=True)",
+            "xpath=//div[@id='douyin-creator-master-side-upload-wrap']/button"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏顶部【高清发布】按钮"
+        }
+      },
+      "buttons": {
+        "btn_upload_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "fallbacks": [
+            ".semi-button:visible",
+            "getByText(\"上传视频\", exact=True)",
+            "xpath=//div/div[2]/div/div[1]/div/div/div[3]/div/div[4]/button"
+          ],
+          "selectorType": "role",
+          "description": "高清发布页【上传视频】入口"
+        },
+        "btn_publish_submit": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "button.button-dhlUZE",
+          "fallbacks": [
+            "button[class*=\"button-dhlUZE\"]",
+            "button[class*=\"primary-cECiOJ\"]",
+            "button[class*=\"button\"][class*=\"primary\"]",
+            "form button[type=\"submit\"]"
+          ],
+          "selectorType": "css",
+          "description": "发布按钮（页脚主操作；已排除导航链接 + 提示弹窗）"
+        },
+        "btn_publish_save_draft": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"暂存离开\")",
+          "fallbacks": [
+            ".button-dhlUZE:visible",
+            "getByText(\"暂存离开\", exact=True)",
+            "xpath=//div/div[1]/div/div[5]/div/div/div/div/div/button"
+          ],
+          "selectorType": "role",
+          "description": "发布页按钮：暂存离开"
+        },
+        "btn_tabs_works_live": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tablist\", name=\"投稿作品 直播场次\")",
+          "fallbacks": [
+            ".douyin-creator-pc-tabs-bar:visible",
+            "getByText(\"投稿作品 直播场次\", exact=True)",
+            "xpath=//div/div/div/div[1]"
+          ],
+          "selectorType": "role",
+          "description": "投稿作品/直播场次 tablist"
+        },
+        "btn_tab_投稿作品": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"投稿作品\")",
+          "fallbacks": [
+            "#semiTab1:visible",
+            "getByText(\"投稿作品\", exact=True)",
+            ".douyin-creator-pc-tabs-tab:visible",
+            "xpath=//div[@id='semiTab1']"
+          ],
+          "selectorType": "role",
+          "description": "作品分析 tab：投稿作品"
+        },
+        "btn_tab_直播场次": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"直播场次\")",
+          "fallbacks": [
+            "#semiTab2:visible",
+            "getByText(\"直播场次\", exact=True)",
+            ".douyin-creator-pc-tabs-tab:visible",
+            "xpath=//div[@id='semiTab2']"
+          ],
+          "selectorType": "role",
+          "description": "作品分析 tab：直播场次"
+        },
+        "btn_radio_投稿分析": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"投稿分析\", exact=True)",
+          "fallbacks": [
+            "#addon-llvc3tw:visible",
+            ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+            "xpath=//span[@id='addon-llvc3tw']"
+          ],
+          "selectorType": "text",
+          "description": "作品分析页 radio：投稿分析"
+        },
+        "btn_radio_投稿列表": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"投稿列表\", exact=True)",
+          "fallbacks": [
+            "#addon-b6jeqp9:visible",
+            ".douyin-creator-pc-radio-addon-buttonRadio:visible",
+            "xpath=//span[@id='addon-b6jeqp9']"
+          ],
+          "selectorType": "text",
+          "description": "作品分析页 radio：投稿列表"
+        },
+        "btn_works_导出数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"导出数据\")",
+          "fallbacks": [
+            ".douyin-creator-pc-button:visible",
+            "getByText(\"导出数据\", exact=True)",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/div[3]/button"
+          ],
+          "selectorType": "role",
+          "description": "作品分析页按钮：导出数据"
+        },
+        "btn_works_刷新数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"刷新数据\")",
+          "fallbacks": [
+            ".douyin-creator-pc-button:visible",
+            "getByText(\"刷新数据\", exact=True)",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[1]/div[2]/button"
+          ],
+          "selectorType": "role",
+          "description": "作品分析页按钮：刷新数据"
+        },
+        "btn_select_works": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"选择作品\")",
+          "fallbacks": [
+            ".douyin-creator-interactive-button:visible",
+            "getByText(\"选择作品\", exact=True)",
+            "xpath=//div/div[1]/div[2]/div/button"
+          ],
+          "selectorType": "role",
+          "description": "评论管理-选择作品按钮"
+        },
+        "btn_declare_confirm": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "button.semi-button-tertiary.semi-button-light",
+          "fallbacks": [
+            "[class*=declare] button",
+            "button:has-text(\"声明\")",
+            "button:has-text(\"确认\")"
+          ],
+          "selectorType": "css",
+          "description": "未添加自主声明弹窗-确认按钮"
+        },
+        "btn_qr_login": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"img\")",
+          "fallbacks": [
+            "[class*=qrcode]:visible",
+            "[class*=qr-code]:visible",
+            "img[src*=qr]"
+          ],
+          "selectorType": "role",
+          "description": "抖音登录QR码"
+        }
+      },
+      "regions": {
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"presentation\")",
+          "fallbacks": [
+            ".container-drag-VAfIfu:visible",
+            "xpath=//div/div[2]/div/div[1]/div/div/div[3]"
+          ],
+          "selectorType": "role",
+          "description": "抖音视频上传拖拽/点击区"
+        },
+        "region_work_list_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "xpath=//*[@id=\"root\"]/div/div",
+          "fallbacks": [
+            ".card-gkf5WW",
+            "xpath=//div[text()=\"作品管理\"]/ancestor::div[contains(@class, \"card-container\")][1]"
+          ],
+          "selectorType": "css",
+          "description": "内容管理-作品管理-可滚动区域（用户 Chrome DevTools 验证）"
+        },
+        "region_works_analysis_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"grid\")",
+          "fallbacks": [
+            ".douyin-creator-pc-table:visible",
+            "xpath=//div[@id='semiTabPanel1']/div/div/div[3]/div/div/div/div[2]/div/div/div/div/div/div/div/div/div/div/table"
+          ],
+          "selectorType": "role",
+          "description": "作品分析-投稿列表 滚动容器"
+        },
+        "region_works_pick_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "xpath=/html/body/div[14]/div/div[2]/div/div[2]",
+          "fallbacks": [
+            ".douyin-creator-interactive-sidesheet-body",
+            "xpath=//div[contains(@class, \"douyin-creator-interactive-sidesheet-body\")]"
+          ],
+          "selectorType": "css",
+          "description": "评论管理-选择作品-弹窗内滚动列表（用户 Chrome DevTools 验证）"
+        },
+        "region_publish_area": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": ".publish-container:visible",
+          "fallbacks": [
+            "[class*=publish]",
+            "body"
+          ],
+          "selectorType": "css",
+          "description": "发布页面主体滚动区域"
+        },
+        "region_declare_modal": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div.semi-modal-content:has-text(\"未添加自主声明\")",
+          "fallbacks": [
+            "div.semi-modal-content"
+          ],
+          "selectorType": "css",
+          "description": "未添加自主声明弹窗"
+        },
+        "region_success_toast": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "[class*=success]:visible",
+          "fallbacks": [
+            "[class*=toast]",
+            "text=发布成功",
+            "text=上传成功"
+          ],
+          "selectorType": "css",
+          "description": "发布成功提示"
+        },
+         "region_upload_progress": {
+           "purposes": [
+             "publish"
+           ],
+           "primary": "[class*=upload-progress]:visible",
+           "fallbacks": [
+             "[class*=upload][class*=progress]:visible",
+             "[class*=progress-bar]:visible"
+           ],
+           "selectorType": "css",
+           "description": "上传进度条（避开 video 播放器的 progress）"
+         }
+      },
+      "textboxes": {
+        "tb_title": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "input[placeholder*=\"填写作品标题\"]:visible",
+          "fallbacks": [
+            "input[placeholder*=\"填写作品标题\"]",
+            "xpath=//input[contains(@placeholder, \"填写作品标题\")]"
+          ],
+          "selectorType": "css",
+          "description": "高清发布页-作品标题输入框（用户 Chrome DevTools 验证）"
+        },
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div[data-placeholder*=\"作品简介\"]:visible",
+          "fallbacks": [
+            "div[data-placeholder*=\"作品简介\"]",
+            "xpath=//div[contains(@data-placeholder, \"作品简介\")]"
+          ],
+          "selectorType": "css",
+          "description": "高清发布页-作品简介编辑框（用户 Chrome DevTools 验证）"
+        },
+        "tb_text": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "fallbacks": [
+            ".semi-input:visible",
+            "getByPlaceholder(\"请输入视频售价\")",
+            "xpath=//div/div[1]/div/div[2]/div[2]/div[2]/div/div[2]/div/div[2]/div[1]/div[2]/div[2]/div[1]/input"
+          ],
+          "selectorType": "role",
+          "description": "普通文本输入框（请输入视频售价）"
+        },
+        "tb_sms_code": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "input[placeholder*=\"验证码\"]:visible",
+          "fallbacks": [
+            "input[placeholder*=\"code\"]"
+          ],
+          "selectorType": "css",
+          "description": "SMS验证码输入框"
+        }
+      }
+    },
+    "kuaishou": {
+      "flowRules": {
+        "scopeSelectors": [
+          "div.publish-button-container:visible",
+          "div[class*=\"publish-button\"]:visible",
+          "div[class*=\"button-group\"]:visible",
+          "div[class*=\"form-footer\"]:visible",
+          "div[class*=\"footer-actions\"]:visible",
+          "form"
+        ],
+        "disabledCheckMethods": [
+          "dom-property",
+          "attr-disabled",
+          "aria-disabled",
+          "pseudo-disabled",
+          "class-disabled",
+          "cursor",
+          "opacity"
+        ],
+        "visibilityCheckMethods": [
+          "offset-size",
+          "rect",
+          "computed-style",
+          "viewport"
+        ],
+        "viewportInsetPx": 50,
+        "successUrlPatterns": [
+          "/article/manage",
+          "/article/photo/manage",
+          "/content/manage",
+          "已发布"
+        ],
+        "navRedirectUrlPatterns": [
+          "/user/profile",
+          "/creator-center",
+          "/home"
+        ],
+        "filterTag": "BUTTON",
+        "filterText": "发布",
+        "publishWaitMs": 15000,
+        "publishMaxRetries": 10,
+        "disabledRetryDelayMs": [
+          1500,
+          4000
+        ],
+        "notFoundBackoffMs": [
+          800,
+          1500
+        ],
+        "scrollAmountPx": 600,
+        "postClickStabilizeMs": [
+          1000,
+          2000
+        ],
+        "declareModalMethod": "both"
+      },
+      "menus": {
+        "nav_to_creator_center": {
+          "purposes": ["monitor", "publish"],
+          "primary": "getByText(\"创作者中心\")",
+          "fallbacks": [
+            "a[href*=\"cp.kuaishou\"]:visible",
+            "text=创作者服务平台",
+            "text=创作者中心",
+            "[class*=\"creator\"]:visible"
+          ],
+          "selectorType": "text",
+          "description": "公共首页→快手创作者中心导航链接"
+        },
+        "menu_home": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"首页\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"首页\", exact=True)",
+            "xpath=//ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：首页"
+        },
+        "menu_content_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"内容管理\", exact=True)",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[2]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：内容管理",
+          "expandCheckCss": "ul > li:nth-child(2)"
+        },
+        "menu_work_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品管理\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"作品管理\", exact=True)",
+            "xpath=//ul/li[2]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：作品管理"
+        },
+        "menu_collection_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"合集管理\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"合集管理\", exact=True)",
+            "xpath=//ul/li[2]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：合集管理"
+        },
+        "menu_create_collection": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建合集\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"创建合集\", exact=True)",
+            "xpath=//ul/li[2]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：创建合集"
+        },
+        "menu_interact_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"互动管理\", exact=True)",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[3]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：互动管理",
+          "expandCheckCss": "ul > li:nth-child(3)"
+        },
+        "menu_comment_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"评论管理\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"评论管理\", exact=True)",
+            "xpath=//ul/li[3]/ul/li"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：评论管理"
+        },
+        "menu_data_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"数据中心\", exact=True)",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[4]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：数据中心",
+          "expandCheckCss": "ul > li:nth-child(4)"
+        },
+        "menu_data_overview": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"数据概览\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"数据概览\", exact=True)",
+            "xpath=//ul/li[4]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：数据概览"
+        },
+        "menu_work_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品分析\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"作品分析\", exact=True)",
+            "xpath=//ul/li[4]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：作品分析"
+        },
+        "menu_live_data": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"直播数据\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"直播数据\", exact=True)",
+            "xpath=//ul/li[4]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：直播数据"
+        },
+        "menu_fans_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"粉丝分析\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"粉丝分析\", exact=True)",
+            "xpath=//ul/li[4]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：粉丝分析"
+        },
+        "menu_growth_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"成长中心\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"成长中心\", exact=True)",
+            "xpath=//ul/li[5]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：成长中心"
+        },
+        "menu_create_service": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作服务\", exact=True)",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[6]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：创作服务"
+        },
+        "menu_create_inspiration": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作灵感\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"创作灵感\", exact=True)",
+            "xpath=//ul/li[6]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：创作灵感"
+        },
+        "menu_my_inspiration": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"我的灵感\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"我的灵感\", exact=True)",
+            "xpath=//ul/li[6]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：我的灵感"
+        },
+        "menu_activity_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"活动中心\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"活动中心\", exact=True)",
+            "xpath=//ul/li[6]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：活动中心"
+        },
+        "menu_hot_ranking": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"热点榜单\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"热点榜单\", exact=True)",
+            "xpath=//ul/li[6]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：热点榜单"
+        },
+        "menu_creator_academy": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创作学院\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"创作学院\", exact=True)",
+            "xpath=//ul/li[6]/ul/li[5]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：创作学院"
+        },
+        "menu_other_service": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"其他服务\", exact=True)",
+          "fallbacks": [
+            ".el-submenu__title:visible",
+            "xpath=//ul/li[7]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：其他服务"
+        },
+        "menu_musician": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"音乐人\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"音乐人\", exact=True)",
+            "xpath=//ul/li[7]/ul/li[1]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：音乐人"
+        },
+        "menu_work_promotion": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"作品推广\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"作品推广\", exact=True)",
+            "xpath=//ul/li[7]/ul/li[2]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：作品推广"
+        },
+        "menu_promotion_resource": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"推广资源管理\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"推广资源管理\", exact=True)",
+            "xpath=//ul/li[7]/ul/li[3]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：推广资源管理"
+        },
+        "menu_create_live": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByRole(\"menuitem\", name=\"创建直播\")",
+          "fallbacks": [
+            ".el-menu-item:visible",
+            "getByText(\"创建直播\", exact=True)",
+            "xpath=//ul/li[7]/ul/li[4]"
+          ],
+          "selectorType": "role",
+          "description": "侧边栏菜单：创建直播"
+        },
+        "menu_publish_guide_close": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"关闭\")",
+          "fallbacks": [
+            "[class*=joyride] button:visible",
+            "[class*=guide] .close",
+            "[class*=tour] .skip"
+          ],
+          "selectorType": "role",
+          "description": "快手引导弹窗关闭按钮"
+        }
+      },
+      "buttons": {
+        "btn_继续编辑": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"继续编辑\")",
+          "fallbacks": [
+            "button:has-text(\"继续编辑\")",
+            "getByText(\"继续编辑\", exact=True)"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：继续编辑"
+        },
+        "btn_放弃": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"放弃\")",
+          "fallbacks": [
+            "button:has-text(\"放弃\")",
+            "getByText(\"放弃\", exact=True)"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：放弃"
+        },
+        "btn_上传视频": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "fallbacks": [
+            "button:has-text(\"上传视频\")",
+            "getByText(\"上传视频\", exact=True)"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：上传视频"
+        },
+        "btn_立即体验": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"立即体验\")",
+          "fallbacks": [
+            "button:has-text(\"立即体验\")",
+            "getByText(\"立即体验\", exact=True)"
+          ],
+          "selectorType": "role",
+          "description": "快手发布页按钮：立即体验"
+        },
+        "btn_ai_assistant": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"智能文案\", exact=True)",
+          "fallbacks": [
+            "#ai-button:visible",
+            "xpath=//div[@id='ai-button']"
+          ],
+          "selectorType": "text",
+          "description": "快手 AI 助手按钮"
+        },
+        "btn_video_pick_item": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".video-item:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[1]"
+          ],
+          "selectorType": "css",
+          "description": "快手选择视频弹窗中的视频条目"
+        },
+        "btn_page_next": {
+          "purposes": ["monitor"],
+          "primary": "button.btn-next:visible",
+          "fallbacks": [
+            ".btn-next:visible",
+            ".el-pagination__next:visible",
+            "button:has(.el-icon-arrow-right):visible"
+          ],
+          "selectorType": "css",
+          "description": "数据中心分页-下一页按钮（Element UI 分页器）"
+        },
+        "btn_select_videos": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"选择视频\")",
+          "fallbacks": [
+            ".el-button:visible",
+            "getByText(\"选择视频\", exact=True)",
+            "xpath=//div/div[1]/button"
+          ],
+          "selectorType": "role",
+          "description": "评论管理-选择视频按钮"
+        },
+        "btn_tab_upload_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传视频\")",
+          "fallbacks": [
+            "#rc-tabs-0-tab-1:visible",
+            "getByText(\"上传视频\", exact=True)",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-1']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传视频"
+        },
+        "btn_tab_upload_image": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传图文\")",
+          "fallbacks": [
+            "#rc-tabs-0-tab-2:visible",
+            "getByText(\"上传图文\", exact=True)",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-2']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传图文"
+        },
+        "btn_tab_upload_panorama": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"tab\", name=\"上传全景视频\")",
+          "fallbacks": [
+            "#rc-tabs-0-tab-3:visible",
+            "getByText(\"上传全景视频\", exact=True)",
+            ".ant-tabs-tab-btn:visible",
+            "xpath=//div[@id='rc-tabs-0-tab-3']"
+          ],
+          "selectorType": "role",
+          "description": "快手发布 tab：上传全景视频"
+        },
+        "btn_tab_all_works": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"全部作品\")",
+          "fallbacks": [
+            "#tab-0:visible",
+            "getByText(\"全部作品\", exact=True)",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-0']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：全部作品"
+        },
+        "btn_tab_published": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"已发布\")",
+          "fallbacks": [
+            "#tab-1:visible",
+            "getByText(\"已发布\", exact=True)",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-1']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：已发布"
+        },
+        "btn_tab_pending": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"待发布\")",
+          "fallbacks": [
+            "#tab-2:visible",
+            "getByText(\"待发布\", exact=True)",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-2']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：待发布"
+        },
+        "btn_tab_rejected": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tab\", name=\"未通过\")",
+          "fallbacks": [
+            "#tab-3:visible",
+            "getByText(\"未通过\", exact=True)",
+            ".el-tabs__item:visible",
+            "xpath=//div[@id='tab-3']"
+          ],
+          "selectorType": "role",
+          "description": "作品管理 tab：未通过"
+        },
+        "btn_publish_submit": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"发布\")",
+          "fallbacks": [
+            "button:has-text(\"发布\")",
+            "[class*=publish] button:visible",
+            "[class*=submit] button:visible"
+          ],
+          "selectorType": "role",
+          "description": "快手发布按钮"
+        },
+        "btn_qr_login": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"img\")",
+          "fallbacks": [
+            ".qrcode-img:visible",
+            "[class*=qrcode] img:visible",
+            "[class*=qr_code]:visible"
+          ],
+          "selectorType": "role",
+          "description": "快手登录QR码"
+        },
+        "btn_goto_publish": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布\", exact=True)",
+          "fallbacks": [
+            "text=发布",
+            "button:has-text(\"发布\")"
+          ],
+          "selectorType": "text",
+          "description": "快手作品管理页-【发布】按钮（导航到发布页）"
+        }
+      },
+      "regions": {
+        "region_publish_area": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div.publish-button-container:visible",
+          "fallbacks": [
+            "div[class*=publish-form]:visible",
+            "[class*=publish]:visible",
+            "form:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手发布页面主体滚动区域 (含发布按钮)"
+        },
+        "region_declare_modal": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div.el-dialog:visible",
+          "fallbacks": [
+            "div[class*=dialog]:visible",
+            "div[role=dialog]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手原创声明/确认弹窗 (Element UI dialog)"
+        },
+        "region_work_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".main-container-infinite-list:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[3]"
+          ],
+          "selectorType": "css",
+          "description": "快手作品管理无限滚动容器"
+        },
+        "region_pane_pane-0": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"tabpanel\")",
+          "fallbacks": [
+            "#pane-0:visible",
+            ".el-tab-pane:visible",
+            "xpath=//div[@id='pane-0']"
+          ],
+          "selectorType": "role",
+          "description": "快手作品管理 tabpanel（pane-0）"
+        },
+        "region_video_pick_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(\"作品列表\", exact=True)",
+          "fallbacks": [
+            ".video-list__header:visible",
+            "xpath=//div/header"
+          ],
+          "selectorType": "text",
+          "description": "快手选择视频弹窗的滚动区域"
+        },
+        "region_works_analysis_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".statistics_article_list:visible",
+          "fallbacks": [
+            "xpath=//div"
+          ],
+          "selectorType": "css",
+          "description": "快手作品分析-滚动区域"
+        },
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "#joyride-wrapper > main > section:visible",
+          "fallbacks": [
+            "[class*=upload-video]:visible",
+            "[class*=upload]:visible",
+            "text=上传视频"
+          ],
+          "selectorType": "css",
+          "description": "快手视频上传区域"
+        },
+        "region_success_toast": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布成功\", exact=True)",
+          "fallbacks": [
+            "getByText(\"已发布\", exact=True)",
+            "[class*=success]:visible"
+          ],
+          "selectorType": "text",
+          "description": "快手发布成功提示"
+        },
+        "region_transcode_progress": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "[class*=transcode]:visible",
+          "fallbacks": [
+            "[class*=progress]:visible"
+          ],
+          "selectorType": "css",
+          "description": "快手转码进度条"
+        }
+      },
+      "textboxes": {
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByPlaceholder(\"作品描述不会写？试试智能文案\")",
+          "fallbacks": [
+            "#work-description-edit:visible",
+            "xpath=//div[@id='work-description-edit']"
+          ],
+          "selectorType": "placeholder",
+          "description": "快手视频描述编辑区"
+        },
+        "tb_title": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "fallbacks": [
+            "input[placeholder*=\"标题\"]:visible",
+            "[class*=title] input:visible"
+          ],
+          "selectorType": "role",
+          "description": "快手标题输入框"
+        }
+      }
+    },
+    "xiaohongshu": {
+      "flowRules": {
+        "scopeSelectors": [
+          "div.publish-footer:visible",
+          "div[class*=\"publish-footer\"]:visible",
+          "div[class*=\"footer\"]:not(nav):not(header):visible",
+          "div[class*=\"action-bar\"]:visible",
+          "div[class*=\"button-group\"]:visible",
+          "form"
+        ],
+        "disabledCheckMethods": [
+          "dom-property",
+          "attr-disabled",
+          "aria-disabled",
+          "pseudo-disabled",
+          "class-disabled",
+          "cursor",
+          "opacity"
+        ],
+        "visibilityCheckMethods": [
+          "offset-size",
+          "rect",
+          "computed-style",
+          "viewport"
+        ],
+        "viewportInsetPx": 50,
+        "successUrlPatterns": [
+          "/user/profile",
+          "/explore",
+          "/creator/notes",
+          "笔记已发布",
+          "发布成功"
+        ],
+        "navRedirectUrlPatterns": [
+          "/explore",
+          "/new/home",
+          "/creator/home",
+          "/discover"
+        ],
+        "filterTag": "BUTTON",
+        "filterText": "发布",
+        "publishWaitMs": 15000,
+        "publishMaxRetries": 10,
+        "disabledRetryDelayMs": [
+          1500,
+          4000
+        ],
+        "notFoundBackoffMs": [
+          800,
+          1500
+        ],
+        "scrollAmountPx": 600,
+        "postClickStabilizeMs": [
+          1000,
+          2000
+        ],
+        "declareModalMethod": "both"
+      },
+      "menus": {
+        "nav_to_creator_center": {
+          "purposes": ["monitor", "publish"],
+          "primary": "getByText(\"创作中心\")",
+          "fallbacks": [
+            "a[href*=\"creator\"]:visible",
+            "text=创作者中心",
+            "text=创作服务平台",
+            "[class*=\"creator\"]:visible"
+          ],
+          "selectorType": "text",
+          "description": "公共首页→小红书创作中心导航链接"
+        },
+        "menu_publish": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布笔记\", exact=True)",
+          "fallbacks": [
+            ".btn-wrapper:visible",
+            "xpath=//div/div[1]/div"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏顶部【发布笔记】按钮"
+        },
+        "menu_home": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"首页\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：首页"
+        },
+        "menu_note_manage": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记管理\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[2]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：笔记管理"
+        },
+        "menu_data_dashboard": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"数据看板\", exact=True)",
+          "fallbacks": [
+            ".d-sub-menu:visible",
+            "xpath=//div/div[2]/div[1]/div[3]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：数据看板"
+        },
+        "menu_account_overview": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"账号概览\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：账号概览"
+        },
+        "menu_content_analysis": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"内容分析\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[2]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：内容分析"
+        },
+        "menu_fans_data": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"粉丝数据\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[3]/div[2]/div[3]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：粉丝数据"
+        },
+        "menu_activity_center": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"活动中心\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[4]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：活动中心"
+        },
+        "menu_note_inspiration": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"笔记灵感\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[5]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：笔记灵感"
+        },
+        "menu_creator_academy": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作学院\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[6]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：创作学院"
+        },
+        "menu_creator_wiki": {
+          "purposes": [
+            "publish",
+            "monitor"
+          ],
+          "primary": "getByText(\"创作百科\", exact=True)",
+          "fallbacks": [
+            ".d-menu-item:visible",
+            "xpath=//div/div[2]/div[1]/div[7]"
+          ],
+          "selectorType": "text",
+          "description": "侧边栏菜单：创作百科"
+        }
+      },
+      "buttons": {
+        "btn_upload_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"上传视频\")",
+          "fallbacks": [
+            ".d-button:visible",
+            "getByText(\"上传视频\", exact=True)",
+            "xpath=//div/div[2]/div[1]/div/div/button"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-上传视频入口"
+        },
+        "btn_topic": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"话题\")",
+          "fallbacks": [
+            "#topicBtn:visible",
+            "getByText(\"话题\", exact=True)",
+            ".contentBtn:visible",
+            "xpath=//button[@id='topicBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：话题"
+        },
+        "btn_用户": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"用户\")",
+          "fallbacks": [
+            "#userBtn:visible",
+            "getByText(\"用户\", exact=True)",
+            ".contentBtn:visible",
+            "xpath=//button[@id='userBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：用户"
+        },
+        "btn_表情": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"表情\")",
+          "fallbacks": [
+            "#emoticonsBtn:visible",
+            "getByText(\"表情\", exact=True)",
+            ".contentBtn:visible",
+            "xpath=//button[@id='emoticonsBtn']"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布-插入工具按钮：表情"
+        },
+        "btn_导出数据": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByRole(\"button\", name=\"导出数据\")",
+          "fallbacks": [
+            ".d-button:visible",
+            "getByText(\"导出数据\", exact=True)",
+            "xpath=//div/div/div[1]/button"
+          ],
+          "selectorType": "role",
+          "description": "数据看板按钮：导出数据"
+        },
+        "btn_select_content_type": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"添加内容类型声明\", exact=True)",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[2]/div[4]/div[1]"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：添加内容类型声明"
+        },
+        "btn_select_location": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"添加地点\", exact=True)",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[4]/div[1]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：添加地点"
+        },
+        "btn_select_group_chat": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"选择群聊\", exact=True)",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[5]/div[4]/div[2]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：选择群聊"
+        },
+        "btn_select_public_visible": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"公开可见\", exact=True)",
+          "fallbacks": [
+            ".d-select-wrapper:visible",
+            "xpath=//div/div[1]/div[6]/div[2]/div[1]/div/div"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布-选择器：公开可见"
+        },
+        "btn_publish_submit": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"button\", name=\"发布\")",
+          "fallbacks": [
+            "button:has-text(\"发布\")",
+            ".publish-btn:visible",
+            "[class*=publish] button:visible"
+          ],
+          "selectorType": "role",
+          "description": "小红书发布按钮"
+        },
+        "btn_video_tab": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"上传视频\", exact=True)",
+          "fallbacks": [
+            "getByText(\"发布视频\", exact=True)",
+            "text=上传视频"
+          ],
+          "selectorType": "text",
+          "description": "小红书上传视频Tab"
+        },
+        "btn_qr_login": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"img\")",
+          "fallbacks": [
+            ".qrcode-img:visible",
+            "[class*=qrcode] img:visible",
+            "[class*=login] img[src*=qr]"
+          ],
+          "selectorType": "role",
+          "description": "小红书登录QR码"
+        },
+        "btn_goto_publish": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布笔记\", exact=True)",
+          "fallbacks": [
+            ".btn-wrapper:visible",
+            "text=发布笔记"
+          ],
+          "selectorType": "text",
+          "description": "小红书创作者中心-【发布笔记】按钮"
+        }
+      },
+      "regions": {
+        "region_publish_area": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div.publish-footer:visible",
+          "fallbacks": [
+            "div[class*=publish-footer]:visible",
+            "div[class*=footer]:not(nav):not(header):visible",
+            "form:visible"
+          ],
+          "selectorType": "css",
+          "description": "小红书发布页面主体滚动区域 (含发布按钮)"
+        },
+        "region_declare_modal": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "div[class*=modal]:visible",
+          "fallbacks": [
+            "div[class*=Modal]:visible",
+            "div[role=dialog]:visible"
+          ],
+          "selectorType": "css",
+          "description": "小红书原创声明/确认弹窗"
+        },
+        "region_upload_zone": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": ".upload-wrapper:visible",
+          "fallbacks": [
+            "[class*=upload]:visible",
+            ".upload-container:visible",
+            "text=上传视频"
+          ],
+          "selectorType": "css",
+          "description": "小红书视频上传区域"
+        },
+        "region_data_board_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".d-table-v2:visible",
+          "fallbacks": [
+            "xpath=//div/div/div[2]"
+          ],
+          "selectorType": "css",
+          "description": "数据看板-内容分析-滚动区域"
+        },
+         "region_upload_progress": {
+           "purposes": [
+             "publish"
+           ],
+           "primary": "[class*=upload-progress]:visible",
+           "fallbacks": [
+             "[class*=upload][class*=progress]:visible",
+             "[class*=progress-bar]:visible"
+           ],
+           "selectorType": "css",
+           "description": "小红书上传进度条（避开 video 播放器的 progress）"
+         },
+        "region_success_toast": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByText(\"发布成功\", exact=True)",
+          "fallbacks": [
+            "getByText(\"笔记已发布\", exact=True)",
+            "[class*=success]:visible",
+            "[class*=toast]:visible"
+          ],
+          "selectorType": "text",
+          "description": "小红书发布成功提示"
+        }
+      },
+      "textboxes": {
+        "tb_title": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "fallbacks": [
+            ".d-text:visible",
+            "getByPlaceholder(\"填写标题会有更多赞哦\")",
+            "xpath=//div/div[1]/div[3]/div/div[1]/div[1]/div[1]/div/input"
+          ],
+          "selectorType": "role",
+          "description": "小红书标题输入框（填写标题会有更多赞哦）"
+        },
+        "tb_description": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByRole(\"textbox\")",
+          "fallbacks": [
+            ".tiptap:visible",
+            "xpath=//div/div[1]/div[3]/div/div[2]/div[1]/div/div"
+          ],
+          "selectorType": "role",
+          "description": "小红书正文编辑区"
+        },
+        "tb_topic": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "getByPlaceholder(\"输入话题\")",
+          "fallbacks": [
+            "[class*=topic] input:visible",
+            "input[placeholder*=\"话题\"]",
+            "input[placeholder*=\"tag\"]"
+          ],
+          "selectorType": "placeholder",
+          "description": "小红书话题标签输入框"
+        }
+      }
+    }
+  }
+}

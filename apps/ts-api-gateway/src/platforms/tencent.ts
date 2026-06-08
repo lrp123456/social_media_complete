@@ -36,10 +36,10 @@ export class TencentPublisher extends BasePublisher {
   }
 
   protected async uploadVideo(ctx: UploadContext): Promise<void> {
-    const fileChooserPromise = ctx.page.waitForEvent('filechooser', { timeout: 30000 });
-    await HumanActions.cdpClick(ctx.page, 'text=上传', { timeout: 8000 });
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(ctx.videoPath);
+    await HumanActions.cdpSetInputFiles(ctx.page, ctx.videoPath, {
+      clickSelector: 'text=上传',
+      clickBeforeUpload: true,
+    });
     await HumanActions.wait(ctx.page, 5000, 8000);
     logger.info('[腾讯视频号] 视频上传完成');
   }

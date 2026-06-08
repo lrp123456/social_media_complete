@@ -1,12 +1,16 @@
 // @ts-api-gateway/platforms/BasePublisher.ts
 // 多平台发布器抽象基类
 // 严格遵守 project_rules.md 的反检测规则，所有浏览器操作通过 HumanActions
+// CDP 模式：通过 chromium.connectOverCDP 连接已有指纹浏览器窗口
 
-import { chromium, Browser, Page } from 'patchright';
-import { HumanActions } from '@social-media/browser-core';
+import { Browser, Page } from 'patchright';
+import { HumanActions, BrowserManager, SelectorReader } from '@social-media/browser-core';
+import type { PublishFlowRules } from '@social-media/browser-core';
 import { WindowMutex } from '../lib/redlock';
 import { uploadToOSS, ossKey } from '../lib/oss';
 import { createLogger } from '../lib/logger';
+import { getBrowserManager } from '../lib/browserManager';
+import { getSelectorReader } from '../lib/selectorStore';
 import type Redlock from 'redlock';
 import type {
   PublishTask,
@@ -26,6 +30,11 @@ const logger = createLogger('publisher');
 export abstract class BasePublisher {
   abstract readonly platform: PlatformName;
   abstract readonly creatorUrl: string;
+  /**
+   * 重新打开发布页时使用的 URL。默认 `${creatorUrl}/publish`。
+   * 当平台发布页 URL 不符此模式 (如快手 cp.kuaishou.com/article/publish/video) 时由子类覆盖。
+   */
+  protected readonly publishUrl?: string;
 
   protected state: PublisherState = 'idle';
   protected browser: Browser | null = null;
@@ -48,8 +57,18 @@ export abstract class BasePublisher {
   /** 填写元数据（标题、描述、标签等） */
   protected abstract fillMetadata(ctx: UploadContext): Promise<void>;
 
-  /** 提交发布 */
-  protected abstract submitPublish(page: Page): Promise<string>;
+  /**
+   * 提交发布 — 默认实现已统一走 selectors.json 的 flowRules + btn_publish_submit 等条目。
+   * 子类可覆盖此方法实现平台特有流程 (例如: 多步骤确认、特殊弹窗)。
+   * 若子类不覆盖, 会用 submitPublishWithFlowRules 的标准实现。
+   */
+  protected async submitPublish(page: Page): Promise<string> {
+    return this.submitPublishWithFlowRules(page, {
+      platform: this.platform,
+      publishBtnName: 'btn_publish_submit',
+      successToastName: 'region_success_toast',
+    });
+  }
 
   // ============================================================
   // 模板方法 - 发布生命周期
@@ -95,7 +114,16 @@ export abstract class BasePublisher {
       await this.goToPublishPage(this.page!);
       logger.info(`[${task.platform}] 已导航到发布页`);
 
-      // Step 5: 上传视频
+      // Step 5: 下载 OSS 视频到本地临时目录
+      logger.info(`[${task.platform}] 下载视频: ${task.video.ossUrl} → ${localVideoPath}`);
+      const { writeFile } = await import('fs/promises');
+      const response = await fetch(task.video.ossUrl);
+      if (!response.ok) throw new Error(`OSS 下载失败: HTTP ${response.status}`);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await writeFile(localVideoPath, buffer);
+      logger.info(`[${task.platform}] 视频已下载 (${(buffer.length / 1024 / 1024).toFixed(1)} MB)`);
+
+      // Step 6: 上传视频
       this.state = 'uploading';
       const uploadCtx: UploadContext = {
         page: this.page!,
@@ -106,11 +134,11 @@ export abstract class BasePublisher {
       await this.uploadVideo(uploadCtx);
       logger.info(`[${task.platform}] 视频上传完成`);
 
-      // Step 6: 填写元数据
+      // Step 7: 填写元数据
       await this.fillMetadata(uploadCtx);
       logger.info(`[${task.platform}] 元数据填写完成`);
 
-      // Step 7: 提交发布
+      // Step 8: 提交发布
       this.state = 'publishing';
       const videoUrl = await this.submitPublish(this.page!);
       logger.info(`[${task.platform}] 发布提交完成: ${videoUrl}`);
@@ -136,6 +164,9 @@ export abstract class BasePublisher {
         duration: Date.now() - startTime,
       };
     } finally {
+      // 清理临时视频文件
+      const { unlink } = await import('fs/promises');
+      await unlink(localVideoPath).catch(() => {});
       await this.cleanup();
     }
   }
@@ -163,28 +194,19 @@ export abstract class BasePublisher {
   // 内部方法
   // ============================================================
 
-  /** 初始化浏览器（连接指纹浏览器） */
+  /** 初始化浏览器 — 通过 CDP 连接已有指纹浏览器窗口（不启动新 Chrome） */
   protected async initBrowser(task: PublishTask): Promise<void> {
-    // TODO: 通过 BrowserManager 连接 RoxyBrowser/BitBrowser
-    // 使用 windowId 连接到指定窗口
+    const bm = getBrowserManager();
+    // 工作区间 ID 非必需（RoxyBrowser 内部通过 dirId 定位窗口）
+    const { browser, page } = await bm.connect(task.windowId, '', task.platform as PlatformName);
+    this.browser = browser;
+    this.page = page;
 
-    // 临时实现：本地 patchright 启动
-    this.browser = await chromium.launch({
-      headless: false,
-      channel: 'chrome',
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
-    const context = await this.browser.newContext({
-      viewport: { width: 1920, height: 1080 },
-    });
-    this.page = await context.newPage();
-
-    // 注入页面加载后的人类行为模拟
+    // 指纹浏览器窗口已有 viewport，只需模拟人类行为延迟
     await HumanActions.wait(this.page, 500, 1500);
   }
 
-  /** 清理资源 */
+  /** 清理资源 — 只释放锁，不关闭浏览器（窗口由指纹浏览器管理） */
   protected async cleanup(): Promise<void> {
     // 释放锁
     if (this.lock) {
@@ -196,17 +218,226 @@ export abstract class BasePublisher {
       this.lock = null;
     }
 
-    // 关闭浏览器
-    if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch {
-        // 浏览器可能已关闭
+    // CDP 模式下不关闭浏览器 — 窗口属于 RoxyBrowser，保持打开供复用
+    this.browser = null;
+    this.page = null;
+    this.state = 'idle';
+  }
+
+  // ============================================================
+  // 通用发布提交 (v2.1+) — 加载 selectors.json 的 flowRules, 走
+  //   1. 滚动到发布区底部
+  //   2. 在父级 scope 内找发布按钮 (filterTag + filterText 排除 <a> 链接)
+  //   3. 多路 disabled 检测 (按 rules.disabledCheckMethods)
+  //   4. 点击 + URL 跳转校验 (按 rules.navRedirectUrlPatterns)
+  //   5. 处理弹窗 (按 rules.declareModalMethod, 可选)
+  //   6. 等待成功 (toast + URL 模式命中)
+  // ============================================================
+  protected async submitPublishWithFlowRules(
+    page: Page,
+    args: {
+      platform: PlatformName;
+      publishBtnName: string;
+      successToastName: string;
+      declareModalName?: string;
+      declareConfirmName?: string;
+    },
+  ): Promise<string> {
+    const sel = getSelectorReader();
+
+    // 1. 加载流程规则 (缺省时回退到合理默认)
+    const rules = sel.getFlowRulesWithFallback(args.platform, {
+      scopeSelectors: ['form'],
+      disabledCheckMethods: ['dom-property', 'attr-disabled', 'aria-disabled', 'pseudo-disabled', 'class-disabled', 'cursor', 'opacity'],
+      visibilityCheckMethods: ['offset-size', 'rect', 'computed-style', 'viewport'],
+      viewportInsetPx: 50,
+      successUrlPatterns: ['/manage'],
+      navRedirectUrlPatterns: ['/user/profile', '/user/self'],
+      filterTag: 'BUTTON',
+      publishWaitMs: 15000,
+      publishMaxRetries: 10,
+      disabledRetryDelayMs: [1500, 4000],
+      notFoundBackoffMs: [800, 1500],
+      scrollAmountPx: 600,
+      postClickStabilizeMs: [1000, 2000],
+      declareModalMethod: 'selector',
+    });
+    const platLabel = `[${args.platform}]`;
+
+    // 2. 滚动到发布区底部 (按钮在 form 提交栏, 通常在视口下方)
+    const publishRegion = sel.getSelectorListWithFallback(args.platform, 'regions', 'region_publish_area', ['body']);
+    await HumanActions.cdpSmartScroll(page, publishRegion, rules.scrollAmountPx ?? 600, 'down');
+    await HumanActions.wait(page, 500, 1000);
+
+    // 3. 发布按钮候选 — 从 selectors.json 读
+    const publishBtnSelectors = sel.getSelectorListWithFallback(args.platform, 'buttons', args.publishBtnName, [
+      'button:has-text("发布")',
+      'button[type="submit"]',
+    ]);
+    logger.info(`${platLabel} 发布按钮选择器 (${publishBtnSelectors.length}): ${publishBtnSelectors.join(' | ')}`);
+
+    const scopeSelectors = rules.scopeSelectors ?? ['form'];
+    const filterTag = rules.filterTag ?? 'BUTTON';
+    const filterText = rules.filterText;
+    const maxRetries = rules.publishMaxRetries ?? 10;
+    const notFoundBackoff = rules.notFoundBackoffMs ?? [800, 1500];
+    const disabledBackoff = rules.disabledRetryDelayMs ?? [1500, 4000];
+    const postClickWait = rules.postClickStabilizeMs ?? [1000, 2000];
+
+    let publishClicked = false;
+    let lastClickResult: { attempt: number; sel: string; urlBefore: string; urlAfter: string } | null = null;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // 3a. scope-scoped 找发布按钮 (filterTag 自动排除 <a> 链接)
+      let btn: { x: number; y: number; w: number; h: number; sel: string; tag: string } | null = null;
+      for (const scopeSel of scopeSelectors) {
+        btn = await HumanActions.cdpFindElementScoped(page, scopeSel, publishBtnSelectors, { filterTag, filterText });
+        if (btn) {
+          logger.info(`${platLabel} 发布按钮定位于 ${scopeSel} (via ${btn.sel})`);
+          break;
+        }
       }
-      this.browser = null;
-      this.page = null;
+      // 3b. scope 都找不到, 退回到全页搜索 (但仍 filterTag=约束)
+      if (!btn) {
+        btn = await HumanActions.cdpFindElement(page, publishBtnSelectors);
+      }
+      if (!btn) {
+        if (attempt === 0 || attempt === Math.floor(maxRetries / 2) || attempt === maxRetries - 1) {
+          logger.warn(`${platLabel} 发布按钮查找失败 (${attempt + 1}/${maxRetries}, scope=${scopeSelectors.length} 个) — 等待后重试`);
+        }
+        await HumanActions.wait(page, notFoundBackoff[0], notFoundBackoff[1]);
+        continue;
+      }
+
+      // 3c. 多方法检测 disabled
+      const isDisabled = await HumanActions.cdpIsElementDisabled(page, btn.sel, rules.disabledCheckMethods);
+      if (isDisabled) {
+        logger.debug(`${platLabel} 发布按钮 disabled (${attempt + 1}/${maxRetries}) — 等待 ${disabledBackoff[0]}-${disabledBackoff[1]}ms 后重试`);
+        await HumanActions.wait(page, disabledBackoff[0], disabledBackoff[1]);
+        continue;
+      }
+
+      // 3d. 记录点击前 URL, 点击
+      const urlBefore = page.url();
+      await HumanActions.cdpClick(page, btn.sel);
+      await HumanActions.wait(page, postClickWait[0], postClickWait[1]);
+      const urlAfter = page.url();
+      lastClickResult = { attempt: attempt + 1, sel: btn.sel, urlBefore, urlAfter };
+
+      // 3e. URL 校验: 跳到 navRedirectUrlPatterns 说明点到导航链接了
+      const navPatterns = rules.navRedirectUrlPatterns ?? ['/user/self'];
+      const navRedirected = navPatterns.some(
+        (pat) => urlAfter.includes(pat) && !urlBefore.includes(pat),
+      );
+      if (navRedirected) {
+        logger.warn(`${platLabel} 点击后 URL 异常跳转: ${urlBefore} → ${urlAfter} (via ${btn.sel}, 命中导航模式) — 重新打开发布页`);
+        // 紧急恢复: 点击误触导航链接后强制回到发布页（唯一例外允许 goto）
+        const publishUrl = this.publishUrl ?? `${this.creatorUrl.replace(/\/$/, '')}/publish`;
+        await page.goto(publishUrl, { waitUntil: 'domcontentloaded' }).catch(() => {});
+        await HumanActions.wait(page, 2000, 3000);
+        logger.info(`${platLabel} 已返回发布页, 准备重填元数据`);
+        throw new Error('NEEDS_REFILL_BEFORE_PUBLISH');
+      }
+
+      logger.info(`${platLabel} 发布按钮已点击 (${attempt + 1}/${maxRetries}, via ${btn.sel}, url: ${urlBefore} → ${urlAfter})`);
+      publishClicked = true;
+
+      // 4. 处理"声明"弹窗 (可选, 按 rules.declareModalMethod)
+      if (args.declareModalName && args.declareConfirmName && rules.declareModalMethod !== undefined) {
+        const declaredHandled = await this.handleDeclareModal(
+          page, sel, args.platform, args.declareModalName, args.declareConfirmName, rules.declareModalMethod,
+        );
+        if (declaredHandled) {
+          // 弹窗确认后需要再次点击发布按钮
+          for (let r2 = 0; r2 < 3; r2++) {
+            const btn2 = await HumanActions.cdpFindElement(page, publishBtnSelectors);
+            if (btn2) {
+              await HumanActions.cdpClick(page, btn2.sel);
+              logger.info(`${platLabel} 弹窗后再次点击发布 (${r2 + 1}/3, via ${btn2.sel})`);
+              break;
+            }
+            await HumanActions.wait(page, 500, 1000);
+          }
+        }
+      }
+      break;
     }
 
-    this.state = 'idle';
+    if (!publishClicked) {
+      throw new Error(`${platLabel} 发布按钮点击失败（已重试 ${maxRetries} 次, 最后尝试: ${lastClickResult?.sel ?? 'N/A'}）`);
+    }
+
+    // 5. 等待发布结果 — 成功 toast (用 cdpFindElement) + URL 模式命中
+    let success = false;
+    const successSelectors = sel.getSelectorListWithFallback(args.platform, 'regions', args.successToastName, [
+      '[class*="toast"]:visible',
+      'text=发布成功',
+      'text=已发布',
+    ]);
+    const successPatterns = rules.successUrlPatterns ?? ['/manage'];
+    const waitMs = rules.publishWaitMs ?? 15000;
+    const pollInterval = 1000;
+    const polls = Math.ceil(waitMs / pollInterval);
+    for (let i = 0; i < polls; i++) {
+      const toast = await HumanActions.cdpFindElement(page, successSelectors);
+      if (toast) {
+        success = true;
+        break;
+      }
+      const currentUrl = page.url();
+      if (successPatterns.some((pat) => currentUrl.includes(pat) && !currentUrl.includes('/upload'))) {
+        success = true;
+        logger.info(`${platLabel} URL 已跳转至管理页: ${currentUrl} (命中模式: ${successPatterns.join('|')})`);
+        break;
+      }
+      await HumanActions.wait(page, 800, 1200);
+    }
+
+    if (success) {
+      logger.info(`${platLabel} ✅ 发布成功`);
+    } else {
+      const finalUrl = page.url();
+      logger.warn(`${platLabel} ⚠️ 提交流程完成, 但 ${waitMs}ms 内未检测到成功标志 (URL: ${finalUrl})`);
+    }
+
+    return page.url();
+  }
+
+  /**
+   * 检测并处理"声明/弹窗" — 多路校验 (selector / page-text / both)
+   * 子类可覆盖, 默认实现适用于抖音/小红书/快手常见的"未添加自主声明" / "需确认原创" 等弹窗
+   */
+  protected async handleDeclareModal(
+    page: Page,
+    sel: SelectorReader,
+    platform: PlatformName,
+    modalSelectorKey: string,
+    confirmBtnKey: string,
+    method: 'selector' | 'page-text' | 'both',
+  ): Promise<boolean> {
+    let modalVisible = false;
+    if (method === 'selector' || method === 'both') {
+      const declareRegion = sel.getSelectorListWithFallback(platform, 'regions', modalSelectorKey, [
+        'div.semi-modal-content:has-text("未添加自主声明")',
+      ]);
+      if (declareRegion.length > 0) {
+        modalVisible = await HumanActions.cdpIsElementVisible(page, declareRegion[0]);
+      }
+    }
+    if (!modalVisible && (method === 'page-text' || method === 'both')) {
+      const bodyText = await HumanActions.cdpGetBodyText(page);
+      modalVisible = bodyText.includes('未添加自主声明') || bodyText.includes('自主声明') || bodyText.includes('原创声明');
+    }
+    if (!modalVisible) return false;
+
+    const declareBtn = sel.getSelectorListWithFallback(platform, 'buttons', confirmBtnKey, [
+      'button.semi-button-tertiary.semi-button-light',
+    ]);
+    if (declareBtn.length === 0) return false;
+
+    await HumanActions.cdpClick(page, declareBtn[0]);
+    logger.info(`[${platform}] 已处理"声明"弹窗 (method=${method})`);
+    await HumanActions.wait(page, 800, 1500);
+    return true;
   }
 }
