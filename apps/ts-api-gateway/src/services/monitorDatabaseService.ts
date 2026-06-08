@@ -490,6 +490,30 @@ export async function upsertRootCommentCounts(
 }
 
 /**
+ * 删除指定视频中不在 cid 集合里的根评论计数记录（根评论被删除时清理）
+ * @returns 删除的记录数
+ */
+export async function deleteStaleRootCounts(
+  videoId: string,
+  activeCids: string[],
+): Promise<number> {
+  if (activeCids.length === 0) {
+    // 没有活跃根评论 → 删光所有记录
+    const result = await prisma.videoRootCommentCount.deleteMany({
+      where: { videoId },
+    });
+    return result.count;
+  }
+  const result = await prisma.videoRootCommentCount.deleteMany({
+    where: {
+      videoId,
+      cid: { notIn: activeCids },
+    },
+  });
+  return result.count;
+}
+
+/**
  * 获取视频所有已有评论的 cid 集合（用于差集增量检测）
  */
 export async function getExistingCids(videoId: string): Promise<Set<string>> {

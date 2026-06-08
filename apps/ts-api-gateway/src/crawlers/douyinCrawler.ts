@@ -49,6 +49,15 @@ export interface CommentNode {
   subComments?: CommentNode[];
 }
 
+export interface RootCommentSnapshot {
+  cid: string;
+  text: string;
+  replyCount: number;
+  createTime: number;
+  userUid: string;
+  userNickname: string;
+}
+
 export type RiskControlDetection = {
   detected: boolean;
   type: string;
@@ -118,6 +127,7 @@ export class DouyinCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
+  private page?: Page;
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -683,6 +693,47 @@ export class DouyinCrawler {
     }));
   }
 
+  /**
+   * 从评论列表 API 响应中提取每条根评论的快照（cid + subCommentCount）
+   * 用于后续增量对比检测
+   * 抖音 API: /comment/list/select → { comments: [...] }
+   */
+  private parseRootCommentSnapshots(body: any): RootCommentSnapshot[] {
+    const comments: any[] = body?.comments || [];
+    return comments
+      .filter((c: any) => {
+        const replyId = c.reply_id ?? '0';
+        return replyId === 0 || replyId === '0' || replyId === null;
+      })
+      .map((c: any) => ({
+        cid: c.cid,
+        text: c.text || '',
+        replyCount: c.reply_comment_total ?? 0,
+        createTime: c.create_time,
+        userUid: c.user?.uid || '',
+        userNickname: c.user?.nickname || '',
+      }));
+  }
+
+  /**
+   * 等待评论 API 响应并保存根评论快照到数据库
+   */
+  private async saveRootCommentSnapshots(videoId: string): Promise<RootCommentSnapshot[]> {
+    const response = await this.waitForCommentResponse(this.page!);
+    if (!response?.body) {
+      logger.warn({ videoId }, 'No comment API response for snapshots');
+      return [];
+    }
+    const snapshots = this.parseRootCommentSnapshots(response.body);
+    if (snapshots.length > 0) {
+      await db.upsertRootCommentCounts(videoId, snapshots.map(s => ({
+        cid: s.cid,
+        replyCount: s.replyCount,
+      })));
+    }
+    return snapshots;
+  }
+
   async detectRiskControlAsync(page: Page): Promise<RiskControlDetection> {
     try {
       const url = page.url().toLowerCase();
@@ -1170,6 +1221,7 @@ export class DouyinCrawler {
 
     logger.info({ queueLength: queue.length }, '[Phase3] Starting comment queue processing');
 
+    this.page = page;
     this.interceptor.clear(COMMENT_LIST_PATTERN);
     const commentListenerId = await this.interceptor.register(page, [COMMENT_LIST_PATTERN]);
     logger.info({ commentListenerId }, '[Phase3] Comment API listener registered for entire queue');
