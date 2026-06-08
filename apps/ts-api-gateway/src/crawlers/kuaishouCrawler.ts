@@ -872,12 +872,22 @@ export class KuaishouCrawler {
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
-        // 新视频首次入库：仅记入 DB，不入队（避免两个数据源交替时重复入队）
-        logger.info({
-          awemeId: video.aweme_id,
-          description: video.description,
-          commentCount: video.comment_count,
-        }, '[Phase1] New video discovered — inserting to DB (no enqueue)');
+        // 新视频首次入库：如果有评论，入队获取
+        if (video.comment_count > 0) {
+          logger.info({
+            awemeId: video.aweme_id,
+            description: video.description,
+            commentCount: video.comment_count,
+          }, '[Phase1] New kuaishou video with comments — enqueuing for initial fetch');
+          commentsQueue.push({
+            awemeId: video.aweme_id,
+            description: video.description,
+            oldCount: 0,
+            newCount: video.comment_count,
+          });
+        } else {
+          logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New kuaishou video with no comments — skipping');
+        }
         continue;
       }
 
