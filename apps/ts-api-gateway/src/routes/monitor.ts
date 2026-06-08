@@ -154,7 +154,7 @@ router.get('/videos/:id/comments', async (req: Request, res: Response) => {
         cid: r.cid,
         text: r.text,
         userNickname: r.userNickname,
-        createTime: r.createTime,
+        createTime: Number(r.createTime),
         diggCount: r.diggCount,
         replyToName: r.replyToName,
         isNew: r.isNew === 1,
@@ -166,10 +166,13 @@ router.get('/videos/:id/comments', async (req: Request, res: Response) => {
       cid: root.cid,
       text: root.text,
       userNickname: root.userNickname,
-      createTime: root.createTime,
+      createTime: Number(root.createTime),
       diggCount: root.diggCount,
       isNew: root.isNew === 1,
-      replies: replyMap.get(root.cid) || [],
+      replies: (replyMap.get(root.cid) || []).map((r) => ({
+        ...r,
+        createTime: Number(r.createTime),
+      })),
     }));
 
     res.json({
