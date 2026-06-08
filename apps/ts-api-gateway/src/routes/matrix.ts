@@ -592,25 +592,6 @@ router.get('/monitor/videos/:id/comments', async (req: Request, res: Response) =
   }
 });
 
-    res.json({
-      success: true,
-      data: comments.map((c) => ({
-        id: c.id,
-        cid: c.cid,
-        text: c.text,
-        userNickname: c.userNickname,
-        userUid: c.userUid,
-        diggCount: c.diggCount,
-        createTime: c.createTime,
-        replyId: c.replyId,
-        isNew: c.isNew === 1,
-      })),
-    });
-  } catch (err) {
-    handleError(res, logger, err, '获取视频评论失败');
-  }
-});
-
 /** POST /api/v1/matrix/monitor/videos/:id/read-all — 标记视频下所有评论已读 */
 router.post('/monitor/videos/:id/read-all', async (req: Request, res: Response) => {
   try {
