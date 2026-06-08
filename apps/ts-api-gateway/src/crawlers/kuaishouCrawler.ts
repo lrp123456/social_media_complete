@@ -95,7 +95,7 @@ export interface KuaishouCommentQueueItem {
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;
-  _userId?: number;
+  _userId: number;
 }
 
 export interface KuaishouCommentProcessResult {
@@ -1704,7 +1704,7 @@ export class KuaishouCrawler {
     const comments: any[] = body?.data?.commentList || body?.data?.rootComments ||
                             body?.data?.commentInfoList || body?.data?.list || body?.data?.comments || [];
     return comments
-      .filter((c: any) => c.replyTo === 0)
+      .filter((c: any) => c.replyTo === 0 || c.replyTo === '0' || c.replyTo === null || c.replyTo === undefined)
       .map((c: any) => ({
         cid: String(c.commentId || c.comment_id || ''),
         text: c.content || c.text || '',

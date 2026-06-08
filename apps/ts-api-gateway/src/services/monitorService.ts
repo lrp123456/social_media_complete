@@ -518,6 +518,8 @@ async function runDouyinCheck(page: any, task: MonitorTask): Promise<MonitorResu
     updatedVideos: updates,
     phase: 'Phase3',
     riskDetected: false,
+    _phase3Result: phase3Result,
+    _queue: queue,
   };
 }
 
@@ -623,6 +625,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask): Promise<MonitorRe
     updatedVideos: updates,
     phase: 'Phase3',
     riskDetected: false,
+    _phase3Result: phase3Result,
+    _queue: queue,
   };
 }
 

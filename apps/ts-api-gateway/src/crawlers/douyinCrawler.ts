@@ -94,7 +94,7 @@ export interface CommentQueueItem {
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;  // true = 新视频首次采集（全量展开+建快照）
-  _userId?: number;        // 内部用，携带 userId
+  _userId: number;        // 内部用，携带 userId
 }
 
 export interface CommentProcessResult {
