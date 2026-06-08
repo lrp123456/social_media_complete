@@ -528,7 +528,7 @@ router.get('/monitor/videos', async (req: Request, res: Response) => {
         id: v.id,
         userId: v.userId,
         description: v.description,
-        createTime: v.createTime,
+        createTime: Number(v.createTime),
       commentCount: v.commentCount,
         platform: v.user.platform,
         windowId: v.user.fingerprintWindowId,
