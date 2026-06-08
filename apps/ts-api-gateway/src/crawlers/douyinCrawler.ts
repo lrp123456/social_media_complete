@@ -858,6 +858,72 @@ export class DouyinCrawler {
     return replyCounts;
   }
 
+  /**
+   * 只展开一条根评论下的所有子回复（局部展开，用于增量检测）
+   * 返回该 root 下新提取到的子回复 DOM 节点信息
+   */
+  private async expandRepliesForRoot(
+    page: Page,
+    rootCid: string,
+  ): Promise<Array<{ text: string; replyToName: string }>> {
+    const replies: Array<{ text: string; replyToName: string }> = [];
+
+    const containerCss = getSelector('comment.container')?.css || '[class*="container-sXKyMs"]';
+    const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
+    logger.info({ containerCount: containers.length, rootCid }, '[ExpandRepliesForRoot] Found containers, searching for target');
+
+    // 定位目标 root 的容器（通过文本前缀匹配 rootCid）
+    for (const container of containers) {
+      const containerText = container.text || '';
+      const containerKey = containerText.slice(0, 30).replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+      if (containerKey !== rootCid) continue;
+
+      logger.info({ rootCid }, '[ExpandRepliesForRoot] Found target root container');
+
+      // 检查是否有展开按钮
+      const hasExpandBtn = containerText.match(/查看\d+条回复/);
+      if (!hasExpandBtn) {
+        logger.info({ rootCid }, '[ExpandRepliesForRoot] No expand button — no replies');
+        break;
+      }
+
+      // 点击"查看 N 条回复"
+      const expandSelectors = [
+        getSelector('comment.expand-replies')?.text || '',
+        'text=/查看\\d+条回复/',
+        'text=/展开/',
+      ].filter(Boolean) as string[];
+
+      for (const sel of expandSelectors) {
+        const clicked = await HumanActions.cdpClickByText(page, sel, { timeout: 3000 });
+        if (clicked) {
+          await HumanActions.wait(page, 500, 1000);
+          logger.info({ rootCid }, '[ExpandRepliesForRoot] Expand button clicked');
+          break;
+        }
+      }
+
+      // 等待子回复 DOM 渲染
+      await HumanActions.wait(page, 500, 1000);
+
+      // 提取子回复 DOM 文本
+      const subContainerCss = '[class*="reply-list"], [class*="sub-comment"]';
+      const subReplies = await page.$$eval(subContainerCss + ' > div, ' + subContainerCss + ' > * > div', (els) =>
+        els.map((el) => {
+          const text = el.textContent?.trim() || '';
+          const replyToMatch = text.match(/回复\s*@?(\S+)/);
+          return { text, replyToName: replyToMatch?.[1] || '' };
+        })
+      );
+
+      replies.push(...subReplies);
+      logger.info({ rootCid, replyCount: subReplies.length }, '[ExpandRepliesForRoot] Extracted sub-replies');
+      break;
+    }
+
+    return replies;
+  }
+
   private async parseCommentTreeFromDOM(page: Page): Promise<CommentNode[]> {
     const containerDef = getSelector('comment.container');
     const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
