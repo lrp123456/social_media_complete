@@ -4,6 +4,7 @@ import { HumanActions } from '@social-media/browser-core';
 import { ExitStrategy, PageType } from '@social-media/browser-core';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import * as db from '../services/monitorDatabaseService';
+import { prisma } from '../lib/prisma';
 import { BrowserManager } from '@social-media/browser-core';
 import { createLogger } from '../lib/logger';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
@@ -22,6 +23,8 @@ export interface VideoInfo {
   create_time: number;
   comment_count: number;
   metrics: Record<string, number>;
+  authorUid?: string;       // 快手 userId
+  authorNickname?: string;  // 快手 userName
 }
 
 export interface CommentInfo {
@@ -32,6 +35,15 @@ export interface CommentInfo {
   digg_count: number;
   create_time: number;
   reply_id: string;
+}
+
+export interface RootCommentSnapshot {
+  cid: string;
+  text: string;
+  replyCount: number;
+  createTime: number;
+  userUid: string;
+  userNickname: string;
 }
 
 export interface RiskControlDetection {
@@ -82,6 +94,8 @@ export interface KuaishouCommentQueueItem {
   description: string;
   oldCount: number;
   newCount: number;
+  isFirstCrawl: boolean;
+  _userId?: number;
 }
 
 export interface KuaishouCommentProcessResult {
@@ -115,6 +129,7 @@ export class KuaishouCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'interact' | 'unknown' = 'unknown';
+  private page?: Page;
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -335,7 +350,11 @@ export class KuaishouCrawler {
     }
 
     const allItems = this.interceptor.getCollectedItems(pattern);
-    const sliced = allItems.slice(0, this.maxMonitorVideos);
+    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
+      ...item,
+      authorUid: String(item.userId || item.authorId || ''),
+      authorNickname: item.userName || item.authorName || '',
+    }));
 
     logger.info({
       source,
@@ -836,6 +855,10 @@ export class KuaishouCrawler {
     logger.info({ userId }, '[Phase1] Fetching kuaishou video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
 
+    // 查询当前用户，判断是否需要提取平台作者 ID
+    const user = await db.getUserById(userId);
+    let needAuthorId = !user?.platformAuthorId;
+
     // 诊断日志：记录每个视频的评论数提取情况
     logger.info({
       userId,
@@ -884,10 +907,26 @@ export class KuaishouCrawler {
             description: video.description,
             oldCount: 0,
             newCount: video.comment_count,
+            isFirstCrawl: true,
+            _userId: userId,
           });
         } else {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New kuaishou video with no comments — skipping');
         }
+
+        // 提取作者 ID
+        if (needAuthorId && video.authorUid) {
+          const currentUser = await db.getUserById(userId);
+          if (currentUser && !currentUser.platformAuthorId) {
+            await prisma.user.update({
+              where: { id: userId },
+              data: { platformAuthorId: video.authorUid, platformAuthorName: video.authorNickname || '' },
+            });
+            needAuthorId = false;
+            logger.info({ userId, authorUid: video.authorUid }, '[Kuaishou Phase1] Extracted platform author ID');
+          }
+        }
+
         continue;
       }
 
@@ -906,6 +945,8 @@ export class KuaishouCrawler {
           description: video.description,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
+          isFirstCrawl: false,
+          _userId: userId,
         });
       } else {
         logger.info({
@@ -1041,6 +1082,7 @@ export class KuaishouCrawler {
 
     logger.info({ queueLength: queue.length }, '[Phase3] Starting kuaishou comment queue processing');
 
+    this.page = page;
     this.interceptor.clear(COMMENT_LIST_PATTERN);
     const commentListenerId = await this.interceptor.register(page, [COMMENT_LIST_PATTERN]);
     logger.info({ commentListenerId }, '[Phase3] Kuaishou comment API listener registered for entire queue');
@@ -1087,31 +1129,214 @@ export class KuaishouCrawler {
             await this.closeDrawer(page);
           }
           results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'No API response' });
-        } else {
-          const comments = this.parseCommentList(response.body);
-          logger.info({ awemeId: item.awemeId, totalComments: comments.length }, '[Phase3] Kuaishou comments parsed from API response');
+          continue;
+        }
 
-          const lastCommentTime = await db.getLastCommentTime(item.awemeId);
-          const freshRootComments = comments.filter(
-            c => c.create_time > lastCommentTime && (c.reply_id === '0' || c.reply_id === '' || c.reply_id === null)
-          );
+        // 从响应中解析根评论快照
+        const currentSnapshots = this.parseRootCommentSnapshots(response.body);
 
-          // 先标记该视频所有旧评论为已通知
-          await db.markCommentsAsNotified(item.awemeId);
+        // 加载上次快照
+        const lastSnapshots = await db.getRootCommentCounts(item.awemeId);
 
-          for (const comment of freshRootComments) {
-            await db.upsertComment(item.awemeId, comment);
+        // 获取 lastCheckTime 用于过滤新增评论
+        const monitorStatus = await prisma.monitorStatus.findFirst({
+          where: { accountId: String(item._userId), platform: 'kuaishou' },
+          orderBy: { lastCheckTime: 'desc' },
+        });
+        const lastCheckTime = monitorStatus?.lastCheckTime?.getTime() || 0;
+
+        const isFirstCrawl = item.isFirstCrawl || lastSnapshots.size === 0;
+
+        if (isFirstCrawl) {
+          // ════════════════════════════════════════
+          // 首次采集：保存快照 + 全量解析评论 + isNew=0
+          // ════════════════════════════════════════
+
+          // 保存快照
+          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
+            cid: s.cid,
+            replyCount: s.replyCount,
+          })));
+
+          // 全量解析根评论（从 API 返回解析）
+          const allRootComments = this.parseCommentList(response.body);
+
+          // 转换为 upsertCommentTree 所需格式
+          const allFlat: Array<{
+            cid: string; text: string; user_nickname: string; user_uid: string;
+            digg_count: number; create_time: number; reply_id: string;
+            rootId?: string; parentId?: string; level: number; replyToName?: string;
+          }> = allRootComments.map(c => ({
+            cid: c.cid,
+            text: c.text,
+            user_nickname: c.user_nickname,
+            user_uid: c.user_uid,
+            digg_count: c.digg_count,
+            create_time: c.create_time,
+            reply_id: c.reply_id,
+            level: 1,
+          }));
+
+          // 对于有 subCommentCount > 0 的根评论，尝试从 API 中提取已包含的子回复
+          const allComments = response.body?.data?.commentList || response.body?.data?.rootComments || response.body?.data?.commentInfoList || response.body?.data?.list || response.body?.data?.comments || [];
+          if (Array.isArray(allComments)) {
+            for (const c of allComments) {
+              const replyTo = c.replyTo ?? 0;
+              if (replyTo !== 0) {
+                let rawTime = c.timestamp || c.createTime || c.created_at || 0;
+                if (rawTime > 1e12) rawTime = Math.floor(rawTime / 1000);
+                if (rawTime === 0) rawTime = Math.floor(Date.now() / 1000);
+                allFlat.push({
+                  cid: String(c.commentId || c.comment_id || c.id || c.cid || ''),
+                  text: c.content || c.text || c.message || '',
+                  user_nickname: c.userName || c.user_name || c.author?.name || c.user?.name || c.nickname || '',
+                  user_uid: String(c.userId || c.user_id || c.author?.id || c.user?.id || c.authorId || ''),
+                  digg_count: c.likeCount || c.like_count || c.likedCount || c.diggCount || c.likeNum || 0,
+                  create_time: rawTime,
+                  reply_id: String(replyTo),
+                  rootId: String(replyTo),
+                  parentId: String(replyTo),
+                  level: 2,
+                  replyToName: c.replyToName || '',
+                });
+              }
+            }
           }
+
+          // 入库（isNew=1 是 upsertCommentTree 默认值，需设为 0）
+          await db.upsertCommentTree(item.awemeId, allFlat);
+          await prisma.comment.updateMany({
+            where: { videoId: item.awemeId },
+            data: { isNew: 0 },
+          });
+
           await db.updateCommentCount(item.awemeId, item.newCount);
 
           logger.info({
             awemeId: item.awemeId,
-            allComments: comments.length,
-            freshRootComments: freshRootComments.length,
-            lastCommentTime,
-          }, '[Phase3] Kuaishou comments saved to database');
+            totalComments: allFlat.length,
+            newComments: 0,
+            isFirstCrawl: true,
+          }, '[Phase3] First crawl complete — all comments saved as isNew=0');
 
-          results.push({ awemeId: item.awemeId, success: true, comments: freshRootComments });
+          results.push({
+            awemeId: item.awemeId,
+            success: true,
+            comments: [],
+          } as any);
+        } else {
+          // ════════════════════════════════════════
+          // 后续增量检测：对比快照 + 新增/变更加载
+          // ════════════════════════════════════════
+
+          const newCommentsToUpsert: Array<{
+            cid: string; text: string; user_nickname: string; user_uid: string;
+            digg_count: number; create_time: number; reply_id: string;
+            rootId?: string; parentId?: string; level: number; replyToName?: string;
+          }> = [];
+
+          const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
+          const dbRootCids = new Set(lastSnapshots.keys());
+
+          // 获取作者 ID 用于过滤（作者的评论不计为新增）
+          const currentUser = await db.getUserById(item._userId!);
+          const platformAuthorId = currentUser?.platformAuthorId;
+
+          // ── 3a. 新增根评论 ──
+          for (const snapshot of currentSnapshots) {
+            if (!dbRootCids.has(snapshot.cid)) {
+              if (snapshot.createTime * 1000 > lastCheckTime) {
+                const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
+                if (!isAuthor) {
+                  newCommentsToUpsert.push({
+                    cid: snapshot.cid,
+                    text: snapshot.text,
+                    user_nickname: snapshot.userNickname,
+                    user_uid: snapshot.userUid,
+                    digg_count: 0,
+                    create_time: snapshot.createTime,
+                    reply_id: '0',
+                    rootId: undefined,
+                    parentId: undefined,
+                    level: 1,
+                    replyToName: undefined,
+                  });
+                }
+              }
+            }
+          }
+
+          // ── 3b. 根评论 replyCount 增加 → 提取新增子回复 ──
+          for (const snapshot of currentSnapshots) {
+            const lastCount = lastSnapshots.get(snapshot.cid);
+            if (lastCount !== undefined && snapshot.replyCount > lastCount) {
+              // 从当前 API 响应中查找属于该根评论的子回复
+              const apiComments: any[] = response.body?.data?.commentList || response.body?.data?.rootComments || response.body?.data?.commentInfoList || response.body?.data?.list || response.body?.data?.comments || [];
+              const repliesForRoot = Array.isArray(apiComments)
+                ? apiComments.filter((c: any) => {
+                    const replyTo = c.replyTo ?? 0;
+                    return replyTo === Number(snapshot.cid) || String(replyTo) === snapshot.cid;
+                  })
+                : [];
+
+              for (const reply of repliesForRoot) {
+                let rawTime = reply.timestamp || reply.createTime || reply.created_at || 0;
+                if (rawTime > 1e12) rawTime = Math.floor(rawTime / 1000);
+                if (rawTime === 0) rawTime = Math.floor(Date.now() / 1000);
+
+                if (rawTime * 1000 > lastCheckTime) {
+                  const isAuthor = platformAuthorId
+                    ? String(reply.authorId || reply.userId || '') === platformAuthorId
+                    : false;
+                  if (!isAuthor) {
+                    newCommentsToUpsert.push({
+                      cid: String(reply.commentId || reply.comment_id || reply.id || reply.cid || ''),
+                      text: reply.content || reply.text || reply.message || '',
+                      user_nickname: reply.userName || reply.user_name || reply.author?.name || reply.user?.name || reply.nickname || '',
+                      user_uid: String(reply.userId || reply.user_id || reply.author?.id || reply.user?.id || reply.authorId || ''),
+                      digg_count: reply.likeCount || reply.like_count || reply.likedCount || reply.diggCount || reply.likeNum || 0,
+                      create_time: rawTime,
+                      reply_id: snapshot.cid,
+                      rootId: snapshot.cid,
+                      parentId: snapshot.cid,
+                      level: 2,
+                      replyToName: reply.replyToName || '',
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          // ── 3c. 清理已不存在的 rootCid ──
+          await db.deleteStaleRootCounts(item.awemeId, currentSnapshots.map(s => s.cid));
+
+          // ── 3d. 更新快照 ──
+          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
+            cid: s.cid,
+            replyCount: s.replyCount,
+          })));
+
+          // ── 3e. 新评论入库（isNew=1 由 upsertCommentTree 自动设置）──
+          if (newCommentsToUpsert.length > 0) {
+            await db.upsertCommentTree(item.awemeId, newCommentsToUpsert);
+          }
+
+          // ── 3f. 更新 commentCount ──
+          await db.updateCommentCount(item.awemeId, item.newCount);
+
+          logger.info({
+            awemeId: item.awemeId,
+            totalSnapshots: currentSnapshots.length,
+            newComments: newCommentsToUpsert.length,
+            isFirstCrawl: false,
+          }, '[Phase3] Incremental detection complete');
+
+          results.push({
+            awemeId: item.awemeId,
+            success: true,
+            comments: newCommentsToUpsert as any,
+          } as any);
         }
 
         if (i < queue.length - 1) {
@@ -1473,5 +1698,36 @@ export class KuaishouCrawler {
       logger.warn({ error: error.message }, 'Failed to parse kuaishou comment list');
       return [];
     }
+  }
+
+  private parseRootCommentSnapshots(body: any): RootCommentSnapshot[] {
+    const comments: any[] = body?.data?.commentList || body?.data?.rootComments ||
+                            body?.data?.commentInfoList || body?.data?.list || body?.data?.comments || [];
+    return comments
+      .filter((c: any) => c.replyTo === 0)
+      .map((c: any) => ({
+        cid: String(c.commentId || c.comment_id || ''),
+        text: c.content || c.text || '',
+        replyCount: c.subCommentCount ?? 0,
+        createTime: c.timestamp > 1e12 ? Math.floor(c.timestamp / 1000) : c.timestamp,
+        userUid: String(c.authorId || c.userId || ''),
+        userNickname: c.authorName || c.userName || '',
+      }));
+  }
+
+  private async saveRootCommentSnapshots(videoId: string): Promise<RootCommentSnapshot[]> {
+    const response = await this.waitForCommentResponse(this.page!);
+    if (!response?.body) {
+      logger.warn({ videoId }, 'No kuaishou comment API response for snapshots');
+      return [];
+    }
+    const snapshots = this.parseRootCommentSnapshots(response.body);
+    if (snapshots.length > 0) {
+      await db.upsertRootCommentCounts(videoId, snapshots.map(s => ({
+        cid: s.cid,
+        replyCount: s.replyCount,
+      })));
+    }
+    return snapshots;
   }
 }
