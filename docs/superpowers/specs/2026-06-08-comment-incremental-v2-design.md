@@ -248,7 +248,7 @@ expandRepliesForRoot(page, rootCid):
 | API 拦截超时 | 重试 1 次（5s 超时），仍失败则跳过该视频，记录 warning 日志 |
 | "查看回复"按钮 DOM 不存在 | 可能无回复或 DOM 结构变化，跳过该 root，不报错 |
 | `subCommentCount` 变小 | 用户可能删除了回复，仍展开重新采集，不标记 isNew |
-| `VideoRootCommentCount` 未匹配 | 首次采集或数据丢失，全量重建 snapshots |
+| `VideoRootCommentCount` 未匹配 | 首次采集或数据丢失，清空该视频的 root counts 后重新从 API 全量插入 |
 | 根评论被删除 | 全量重建时删除 DB 中不存在的 rootCid 记录 |
 | API 返回格式变化 | 解析失败 catch，记录 warning，降级为计数对比模式 |
 | `platformAuthorId` 获取失败 | 降级为不过滤作者评论 |
