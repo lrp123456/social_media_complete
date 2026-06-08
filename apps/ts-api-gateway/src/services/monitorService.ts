@@ -280,16 +280,27 @@ export const monitorWorker = new Worker<MonitorTask>(
         if (result.newComments > 0) {
           const phase3Result = (result as any)._phase3Result;
           const queue = (result as any)._queue || [];
+
+          // 查询平台作者 ID 以过滤作者自己的评论
+          const user = await prisma.user.findUnique({ where: { id: task.userId } });
+          const platformAuthorId = user?.platformAuthorId;
+
           const commentGroups = phase3Result?.results
             ?.filter((r: any) => r.success && r.commentGroups)
             ?.flatMap((r: any) =>
-              r.commentGroups.map((g: any) => ({
-                awemeId: r.awemeId,
-                description: queue.find((q: any) => q.awemeId === r.awemeId)?.description || '',
-                rootComment: g.rootComment,
-                subReplies: g.subReplies,
-                newCids: new Set(g.newInGroup.map((n: any) => n.cid)),
-              }))
+              r.commentGroups
+                .map((g: any) => ({
+                  awemeId: r.awemeId,
+                  description: queue.find((q: any) => q.awemeId === r.awemeId)?.description || '',
+                  rootComment: g.rootComment,
+                  subReplies: g.subReplies.filter((s: any) => s.userUid !== platformAuthorId),
+                  newCids: new Set(
+                    g.newInGroup
+                      .filter((n: any) => n.userUid !== platformAuthorId)
+                      .map((n: any) => n.cid)
+                  ),
+                }))
+                .filter((g: any) => g.newCids.size > 0) // 过滤后无新增的组跳过
             ) || [];
 
           if (commentGroups.length > 0) {
