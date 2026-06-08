@@ -66,6 +66,13 @@ function extractItems(body: any): any[] {
   if (Array.isArray(dataVideoList)) return dataVideoList;
   const photoItems = body.data?.photoList?.photoItems;
   if (Array.isArray(photoItems)) return photoItems;
+  // 快手作品分析API可能的其他路径
+  const photoList = body.data?.photoList;
+  if (Array.isArray(photoList)) return photoList;
+  const analysisList = body.data?.analysisList;
+  if (Array.isArray(analysisList)) return analysisList;
+  const worksList = body.data?.worksList;
+  if (Array.isArray(worksList)) return worksList;
   const dataNotes = body.data?.notes;
   if (Array.isArray(dataNotes)) return dataNotes;
   const noteInfos = body.data?.note_infos;
@@ -76,7 +83,7 @@ function extractItems(body: any): any[] {
 export function parseVideoItem(item: any): { aweme_id: string; description: string; create_time: number; comment_count: number; metrics: Record<string, any> } | null {
   if (!item || typeof item !== 'object') return null;
 
-  const awemeId = item.id || item.aweme_id || item.item_id || item.video_id || item.workId || item.photoId || '';
+  const awemeId = item.aweme_id || item.id || item.item_id || item.video_id || item.workId || item.photoId || '';
   if (!awemeId) return null;
 
   const desc = item.description || item.display_title || item.title || item.desc || item.caption || '';
@@ -93,16 +100,44 @@ export function parseVideoItem(item: any): { aweme_id: string; description: stri
   if (createTime > 1e12) createTime = Math.floor(createTime / 1000);
   if (isNaN(createTime)) createTime = 0;
 
-  const metrics = item.metrics || {};
+  // 合并 metrics/stat/stats/interactInfo 对象，兼容各平台 API 响应
+  const metrics = item.metrics || item.stat || item.stats || item.interactInfo || {};
   const rawCommentCount = item.comment_count
     || item.comments_count
     || item.commentCount
     || metrics?.comment_count
     || metrics?.commentCount
+    || item.stat?.commentCount
+    || item.stat?.comment_count
+    || item.stats?.commentCount
+    || item.stats?.comment_count
+    || item.interactInfo?.commentCount
+    || item.interactInfo?.comment_count
     || 0;
   const commentCount = typeof rawCommentCount === 'string'
     ? parseInt(rawCommentCount, 10) || 0
     : Number(rawCommentCount) || 0;
+
+  // 诊断：首条视频打印字段快照，帮助调试 comment_count=0 问题
+  if (commentCount === 0 && awemeId && typeof item === 'object') {
+    const itemKeys = Object.keys(item).slice(0, 15);
+    const nestedKeys = Object.keys(metrics).slice(0, 10);
+    const commentFields = {
+      'item.comment_count': item.comment_count,
+      'item.comments_count': item.comments_count,
+      'item.commentCount': item.commentCount,
+      'metrics.comment_count': metrics?.comment_count,
+      'metrics.commentCount': metrics?.commentCount,
+      'stat.comment_count': item.stat?.comment_count,
+      'stat.commentCount': item.stat?.commentCount,
+      'stats.comment_count': item.stats?.comment_count,
+      'stats.commentCount': item.stats?.commentCount,
+      'interactInfo.comment_count': item.interactInfo?.comment_count,
+      'interactInfo.commentCount': item.interactInfo?.commentCount,
+    };
+    logger.warn({ awemeId, itemKeys, nestedKeys, commentFields },
+      'parseVideoItem: comment_count=0 — item field scan for debugging');
+  }
 
   return {
     aweme_id: String(awemeId),
@@ -197,7 +232,7 @@ export class RequestInterceptor {
           param => requestUrl.includes(param)
         );
         if (!hasRequiredParams) {
-          logger.debug({ pattern: matchedPattern, url: requestUrl.substring(0, 120) }, 'Pass-through: URL missing required params for core interception');
+          logger.warn({ pattern: matchedPattern, url: requestUrl.substring(0, 200), requiredParams: validationConfig.requiredUrlParams }, 'REJECTED: URL missing required params — response will NOT be stored');
           return;
         }
       }
@@ -338,6 +373,14 @@ export class RequestInterceptor {
     this.interceptedData.set(pattern, existing);
 
     const items = extractItems(body);
+    // 诊断增强：统计评论数分布 + 嵌套字段检查
+    const commentStats = items.length > 0 ? {
+      total: items.length,
+      zeroCount: items.filter((i: any) => !(i.commentCount ?? i.comment_count ?? i.metrics?.comment_count ?? i.stat?.commentCount)).length,
+      nonZeroCount: items.filter((i: any) => (i.commentCount ?? i.comment_count ?? i.metrics?.comment_count ?? i.stat?.commentCount)).length,
+    } : null;
+    const firstItem = items.length > 0 ? items[0] : null;
+    const nestedMetrics = firstItem?.metrics ? Object.keys(firstItem.metrics).slice(0, 10) : [];
     logger.info({
       pattern,
       url: url.substring(0, 120),
@@ -345,6 +388,15 @@ export class RequestInterceptor {
       hasMore: intercepted.hasMore,
       cursor: intercepted.cursor,
       itemCount: items.length,
+      commentStats,
+      // 诊断：记录第一个item的顶层级字段 + metrics嵌套字段
+      sampleItemKeys: firstItem ? Object.keys(firstItem).slice(0, 20) : [],
+      sampleMetricsKeys: nestedMetrics,
+      sampleCommentField: firstItem ? (
+        firstItem.commentCount ?? firstItem.comment_count ?? firstItem.metrics?.comment_count ?? firstItem.stat?.commentCount ?? firstItem.stats?.commentCount ?? 'NOT_FOUND'
+      ) : 'NO_ITEMS',
+      // 完整打印第一个item的前30个键值对（字符串化以控制日志大小）
+      rawFirstItemStr: firstItem ? JSON.stringify(firstItem).substring(0, 800) : 'NO_ITEMS',
     }, 'Response captured and stored');
   }
 
