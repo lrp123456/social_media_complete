@@ -682,6 +682,8 @@ let nextScheduledRunAt = 0;
 // 动态频率控制
 let schedulerMode: 'active' | 'idle' = 'active';
 let consecutiveNoUpdates = 0;
+let pendingTaskCount = 0;
+let scheduleAfterCompletion = false;
 
 /** 从 AUTOMATION 配置读取参数（所有值单位：秒） */
 function getMonitorConfig() {
@@ -770,11 +772,13 @@ async function runOneSchedule(): Promise<void> {
     }
 
     logger.info(`📊 监控调度完成: ${queued} 任务入队 (${byWindow.size} 窗口)`);
+    pendingTaskCount = queued;
+    scheduleAfterCompletion = true;
+    // 不再立即 scheduleNext，等待所有任务完成后 reportMonitorComplete 触发
   } catch (err) {
     logger.error('监控调度异常:', (err as Error).message);
+    scheduleNext();
   }
-
-  scheduleNext();
 }
 
 /** 根据当前模式计算下次运行间隔并调度 */
@@ -806,6 +810,14 @@ export function reportMonitorComplete(hadUpdate: boolean): void {
       schedulerMode = 'idle';
       logger.info(`💤 连续 ${consecutiveNoUpdates} 次无更新，切换为空闲模式`);
     }
+  }
+
+  // 所有任务完成后才安排下一次调度
+  pendingTaskCount = Math.max(0, pendingTaskCount - 1);
+  if (pendingTaskCount === 0 && scheduleAfterCompletion) {
+    scheduleAfterCompletion = false;
+    scheduleNext();
+    logger.info(`⏰ 本轮 ${pendingTaskCount === 0 ? '全部' : ''} 任务完成，已安排下一次调度`);
   }
 }
 

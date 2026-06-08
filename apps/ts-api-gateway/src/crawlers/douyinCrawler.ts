@@ -216,7 +216,7 @@ export class DouyinCrawler {
       await HumanActions.cdpF5Refresh(page);
       HumanActions.clearCDPContext(page);
       this.currentMenuSection = 'unknown';
-      await HumanActions.wait(page, 2000, 4000);
+      await HumanActions.wait(page, 3000, 5000); // 延长等待，确保页面完全加载
       await HumanActions.pageLoadBehavior(page);
     } else {
       if (source === 'work_list') {
@@ -227,7 +227,12 @@ export class DouyinCrawler {
     }
 
     if (source !== 'work_list') {
-      await this.clickPostListTab(page);
+      const tabClicked = await this.clickPostListTab(page);
+      if (!tabClicked) {
+        logger.warn({ source }, '[投稿列表] tab click failed, retrying after extra wait');
+        await HumanActions.wait(page, 2000, 3000);
+        await this.clickPostListTab(page);
+      }
     }
 
     logger.info({ source, step: 'AFTER_TAB_CLICK', existingResponses: this.interceptor.getResponseCount(pattern) }, 'Tab click complete, waiting for target response');
@@ -453,13 +458,12 @@ export class DouyinCrawler {
     logger.error('Menu navigation to content analysis failed after all retries');
   }
 
-  private async clickPostListTab(page: Page): Promise<void> {
+  private async clickPostListTab(page: Page): Promise<boolean> {
     logger.info('Clicking [投稿列表] tab');
 
     const postListDef = getSelector('page.post-list-tab');
 
     if (postListDef.css) {
-      // 使用 cdpWaitForSelector 替代手动轮询（更快 + 防风控）
       const appeared = await HumanActions.cdpWaitForSelector(page, postListDef.css, {
         state: 'visible',
         timeout: 8000,
@@ -470,7 +474,7 @@ export class DouyinCrawler {
         const clicked = await HumanActions.cdpClick(page, postListDef.css, { timeout: 10000 });
         if (clicked) {
           logger.info('[投稿列表] tab clicked successfully via CSS');
-          return;
+          return true;
         }
         logger.warn('[投稿列表] CSS selector click failed, trying text fallback');
       } else {
@@ -486,11 +490,12 @@ export class DouyinCrawler {
       });
       if (textClicked) {
         logger.info('[投稿列表] tab clicked via text search');
-        return;
+        return true;
       }
     }
 
     logger.error('[投稿列表] tab click failed after all strategies — proceeding anyway');
+    return false;
   }
 
   private async navigateToWorkList(page: Page): Promise<void> {
