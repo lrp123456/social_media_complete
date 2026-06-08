@@ -924,6 +924,28 @@ export class DouyinCrawler {
     return replies;
   }
 
+  /**
+   * 将 API 响应数据（create_time, digg_count, user 信息）合并到 DOM 树节点
+   */
+  private mergeApiDataToDOM(domNodes: CommentNode[], apiComments: any[]): CommentNode[] {
+    for (const node of domNodes) {
+      const apiMatch = apiComments.find((c: any) => {
+        const apiCid = c.cid || c.comment_id || '';
+        return apiCid === node.cid;
+      });
+      if (apiMatch) {
+        node.createTime = apiMatch.create_time || apiMatch.createTime || node.createTime;
+        node.diggCount = apiMatch.digg_count || apiMatch.diggCount || node.diggCount || 0;
+        node.userUid = apiMatch.user?.uid || apiMatch.userUid || '';
+        node.userNickname = apiMatch.user?.nickname || apiMatch.userNickname || node.userNickname || '';
+      }
+      if (node.subComments) {
+        this.mergeApiDataToDOM(node.subComments, apiComments);
+      }
+    }
+    return domNodes;
+  }
+
   private async parseCommentTreeFromDOM(page: Page): Promise<CommentNode[]> {
     const containerDef = getSelector('comment.container');
     const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
@@ -1305,6 +1327,7 @@ export class DouyinCrawler {
 
         this.interceptor.clear(COMMENT_LIST_PATTERN);
 
+        // 打开"选择作品"抽屉 → 找到并点击视频
         const drawerOpened = await this.openSelectWorkDrawer(page);
         if (!drawerOpened) {
           logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open drawer — skipping video');
@@ -1324,9 +1347,7 @@ export class DouyinCrawler {
         logger.info({ awemeId: item.awemeId, reactionDelay: Math.round(reactionDelay) }, '[Phase3] Reaction pause — drawer auto-closes after video selection');
         await HumanActions.wait(page, reactionDelay, reactionDelay + 100);
 
-        // [新] DOM 展开所有子回复
-        const replyCounts = await this.expandAllReplies(page, item.awemeId, []);
-
+        // 拦截评论 API 响应
         const response = await this.waitForCommentResponse(page);
 
         if (!response) {
@@ -1337,78 +1358,250 @@ export class DouyinCrawler {
             await this.closeDrawer(page);
           }
           results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'No API response' });
-        } else {
-          // [新] 从 DOM 提取完整评论树 + API 时间元数据
-          const domComments = await this.parseCommentTreeFromDOM(page);
-          const existingCids = await db.getExistingCids(item.awemeId);
-          const comments = this.parseCommentList(response.body);
+          continue;
+        }
 
-          const newComments: CommentNode[] = [];
-          const allFlatComments: Array<{
+        // 从响应中解析根评论快照
+        const currentSnapshots = this.parseRootCommentSnapshots(response.body);
+
+        // 加载上次快照
+        const lastSnapshots = await db.getRootCommentCounts(item.awemeId);
+
+        // 获取 lastCheckTime 用于过滤新增评论
+        const monitorStatus = await prisma.monitorStatus.findFirst({
+          where: { accountId: String(item._userId), platform: 'douyin' },
+          orderBy: { lastCheckTime: 'desc' },
+        });
+        const lastCheckTime = monitorStatus?.lastCheckTime?.getTime() || 0;
+
+        const isFirstCrawl = item.isFirstCrawl || lastSnapshots.size === 0;
+
+        if (isFirstCrawl) {
+          // ════════════════════════════════════════
+          // 首次采集：保存快照 + 全量展开 + isNew=0
+          // ════════════════════════════════════════
+
+          // 保存快照到 VideoRootCommentCount
+          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
+            cid: s.cid,
+            replyCount: s.replyCount,
+          })));
+
+          // 全量展开所有回复
+          await this.expandAllReplies(page, item.awemeId, currentSnapshots.map(s => s.cid));
+
+          // DOM 解析评论树
+          const domTree = await this.parseCommentTreeFromDOM(page);
+
+          // 合并 API 数据到 DOM 节点
+          const apiComments = response.body.comments || [];
+          const mergedTree = this.mergeApiDataToDOM(domTree, apiComments);
+
+          // 展平为 upsertCommentTree 所需格式（snake_case）
+          const allFlat: Array<{
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
           }> = [];
 
-          for (const node of domComments) {
-            const apiComment = comments.find(c => c.cid === node.cid);
-            const createTime = apiComment?.create_time || 0;
-            const isNew = !existingCids.has(node.cid);
-
-            allFlatComments.push({
-              cid: node.cid, text: node.text, user_nickname: node.userNickname,
-              user_uid: apiComment?.user_uid || '', digg_count: apiComment?.digg_count || 0,
-              create_time: createTime, reply_id: apiComment?.reply_id || '0',
-              rootId: undefined, parentId: undefined, level: 1,
-              replyToName: undefined,
-            });
-
-            if (isNew) newComments.push({ ...node, createTime, diggCount: apiComment?.digg_count || 0, replyId: apiComment?.reply_id || '0' });
-
-            for (const sub of (node.subComments || [])) {
-              const subApi = comments.find(c => c.cid === sub.cid);
-              const subTime = subApi?.create_time || 0;
-              const subIsNew = !existingCids.has(sub.cid);
-
-              allFlatComments.push({
-                cid: sub.cid, text: sub.text, user_nickname: sub.userNickname,
-                user_uid: subApi?.user_uid || '', digg_count: subApi?.digg_count || 0,
-                create_time: subTime, reply_id: subApi?.reply_id || '0',
-                rootId: node.cid, parentId: undefined, level: 2,
-                replyToName: sub.replyToName,
+          const flattenNodes = (nodes: CommentNode[]) => {
+            for (const node of nodes) {
+              allFlat.push({
+                cid: node.cid,
+                text: node.text,
+                user_nickname: node.userNickname,
+                user_uid: node.userUid,
+                digg_count: node.diggCount,
+                create_time: node.createTime,
+                reply_id: node.replyId || '0',
+                rootId: node.rootId || undefined,
+                parentId: node.parentId || undefined,
+                level: node.level,
+                replyToName: node.replyToName || undefined,
               });
-
-              if (subIsNew) newComments.push({ ...sub, createTime: subTime, diggCount: subApi?.digg_count || 0, replyId: subApi?.reply_id || '0' });
+              if (node.subComments && node.subComments.length > 0) {
+                flattenNodes(node.subComments);
+              }
             }
-          }
+          };
+          flattenNodes(mergedTree);
 
-          await db.markCommentsAsNotified(item.awemeId);
-          await db.upsertCommentTree(item.awemeId, allFlatComments);
+          // upsertCommentTree 创建时默认 isNew=1，首次采集需全部设为 0
+          await db.upsertCommentTree(item.awemeId, allFlat);
+          await prisma.comment.updateMany({
+            where: { videoId: item.awemeId },
+            data: { isNew: 0 },
+          });
+
           await db.updateCommentCount(item.awemeId, item.newCount);
-
-          for (const [rootCid, count] of replyCounts) {
-            await db.upsertRootCommentCount(item.awemeId, rootCid, count);
-          }
-
-          const commentGroups = domComments.map(root => ({
-            rootComment: root,
-            subReplies: root.subComments || [],
-            newInGroup: newComments.filter(nc =>
-              nc.cid === root.cid || (nc.rootId === root.cid)
-            ),
-          }));
 
           logger.info({
             awemeId: item.awemeId,
-            totalComments: allFlatComments.length,
-            newComments: newComments.length,
-            groups: commentGroups.length,
-          }, '[Phase3] Comment tree saved');
+            totalComments: allFlat.length,
+            newComments: 0,
+            isFirstCrawl: true,
+          }, '[Phase3] First crawl complete — all comments saved as isNew=0');
 
           results.push({
             awemeId: item.awemeId,
             success: true,
-            comments: newComments,
+            comments: [],
+            commentGroups: [],
+          } as any);
+        } else {
+          // ════════════════════════════════════════
+          // 后续增量检测：对比快照 + 新增/变更加载
+          // ════════════════════════════════════════
+
+          const newCommentsToUpsert: Array<{
+            cid: string; text: string; user_nickname: string; user_uid: string;
+            digg_count: number; create_time: number; reply_id: string;
+            rootId?: string; parentId?: string; level: number; replyToName?: string;
+          }> = [];
+
+          const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
+          const dbRootCids = new Set(lastSnapshots.keys());
+
+          // 获取作者 ID 用于过滤（作者的评论不计为新增）
+          const currentUser = await db.getUserById(item._userId!);
+          const platformAuthorId = currentUser?.platformAuthorId;
+
+          // ── 3a. 新增根评论 ──
+          for (const snapshot of currentSnapshots) {
+            if (!dbRootCids.has(snapshot.cid)) {
+              if (snapshot.createTime * 1000 > lastCheckTime) {
+                const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
+                newCommentsToUpsert.push({
+                  cid: snapshot.cid,
+                  text: snapshot.text,
+                  user_nickname: snapshot.userNickname,
+                  user_uid: snapshot.userUid,
+                  digg_count: 0,
+                  create_time: snapshot.createTime,
+                  reply_id: '0',
+                  rootId: undefined,
+                  parentId: undefined,
+                  level: 1,
+                  replyToName: undefined,
+                });
+              }
+            }
+          }
+
+          // ── 3b. 根评论 replyCount 增加 → 局部展开 ──
+          for (const snapshot of currentSnapshots) {
+            const lastCount = lastSnapshots.get(snapshot.cid);
+            if (lastCount !== undefined && snapshot.replyCount > lastCount) {
+              const replies = await this.expandRepliesForRoot(page, snapshot.cid);
+              if (replies.length > 0) {
+                const apiReplies = response.body.comments?.filter(
+                  (c: any) => String(c.reply_id) === snapshot.cid
+                ) || [];
+
+                for (const reply of replies) {
+                  const apiMatch = apiReplies.find((c: any) => c.text?.includes(reply.text.slice(0, 10)));
+                  const createTime = apiMatch?.create_time || 0;
+                  const userUid = apiMatch?.user?.uid || '';
+                  const userNickname = apiMatch?.user?.nickname || '';
+
+                  if (createTime * 1000 > lastCheckTime) {
+                    const isAuthor = platformAuthorId ? userUid === platformAuthorId : false;
+                    newCommentsToUpsert.push({
+                      cid: apiMatch?.cid || '',
+                      text: reply.text,
+                      user_nickname: userNickname,
+                      user_uid: userUid,
+                      digg_count: apiMatch?.digg_count || 0,
+                      create_time: createTime,
+                      reply_id: snapshot.cid,
+                      rootId: snapshot.cid,
+                      parentId: snapshot.cid,
+                      level: 2,
+                      replyToName: reply.replyToName,
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          // ── 3c. 清理已不存在的 rootCid ──
+          await db.deleteStaleRootCounts(item.awemeId, currentSnapshots.map(s => s.cid));
+
+          // ── 3d. 更新快照 ──
+          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
+            cid: s.cid,
+            replyCount: s.replyCount,
+          })));
+
+          // ── 3e. 新评论入库（isNew=1 由 upsertCommentTree 自动设置）──
+          if (newCommentsToUpsert.length > 0) {
+            await db.upsertCommentTree(item.awemeId, newCommentsToUpsert);
+          }
+
+          // ── 3f. 更新 commentCount ──
+          await db.updateCommentCount(item.awemeId, item.newCount);
+
+          // 构建 commentGroups 用于返回（只包含有新增的组）
+          const involvedRootCids = new Set<string>();
+          for (const n of newCommentsToUpsert) {
+            if (n.level === 1) involvedRootCids.add(n.cid);
+            if (n.level === 2 && n.rootId) involvedRootCids.add(n.rootId);
+          }
+
+          const commentGroups: Array<{
+            rootComment: CommentNode;
+            subReplies: CommentNode[];
+            newInGroup: CommentNode[];
+          }> = [];
+
+          for (const snapshot of currentSnapshots) {
+            if (involvedRootCids.has(snapshot.cid)) {
+              const groupNew = newCommentsToUpsert.filter(n =>
+                n.cid === snapshot.cid || n.rootId === snapshot.cid
+              );
+              commentGroups.push({
+                rootComment: {
+                  cid: snapshot.cid,
+                  text: snapshot.text,
+                  userNickname: snapshot.userNickname,
+                  userUid: snapshot.userUid,
+                  createTime: snapshot.createTime,
+                  diggCount: 0,
+                  level: 1,
+                  replyId: '0',
+                  subComments: [],
+                },
+                subReplies: [],
+                newInGroup: groupNew.map(n => ({
+                  cid: n.cid,
+                  text: n.text,
+                  userNickname: n.user_nickname,
+                  userUid: n.user_uid,
+                  createTime: n.create_time,
+                  diggCount: n.digg_count || 0,
+                  level: n.level as 1 | 2,
+                  rootId: n.rootId || undefined,
+                  parentId: n.parentId || undefined,
+                  replyToName: n.replyToName || undefined,
+                  replyId: n.reply_id || '0',
+                  subComments: [],
+                })),
+              });
+            }
+          }
+
+          logger.info({
+            awemeId: item.awemeId,
+            totalSnapshots: currentSnapshots.length,
+            newComments: newCommentsToUpsert.length,
+            isFirstCrawl: false,
+          }, '[Phase3] Incremental detection complete');
+
+          results.push({
+            awemeId: item.awemeId,
+            success: true,
+            comments: newCommentsToUpsert as any,
             commentGroups,
           } as any);
         }
