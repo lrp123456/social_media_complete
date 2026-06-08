@@ -1327,20 +1327,24 @@ function MonitorTab() {
                           ) : (
                             <div className="flex flex-col gap-2 pt-2">
                               {videoCommentsData.data.map((root: any) => (
-                                <div key={root.cid} className="bg-surface-variant/50 rounded-lg p-2.5 border-l-2 border-amber-500/40">
+                                <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
                                   <div className="flex items-start gap-1.5">
                                     <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
-                                    {root.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                    {root.isNew && (
+                                      <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                    )}
                                   </div>
                                   <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
                                   <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
                                   {root.replies?.length > 0 && (
                                     <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
                                       {root.replies.map((sub: any) => (
-                                        <div key={sub.cid} className="py-0.5">
+                                        <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
                                           <div className="flex items-start gap-1.5">
                                             <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
-                                            {sub.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                            {sub.isNew && (
+                                              <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                            )}
                                             {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                           </div>
                                           <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
@@ -1581,19 +1585,23 @@ function MonitorTab() {
                             ) : (
                               <div className="flex flex-col gap-2 pt-1">
                                 {videoCommentsData.data.map((root: any) => (
-                                  <div key={root.cid} className="bg-surface-variant/50 rounded-lg p-2.5 border-l-2 border-amber-500/40">
+                                  <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
                                     <div className="flex items-start gap-1.5">
                                       <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
-                                      {root.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                      {root.isNew && (
+                                        <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                      )}
                                     </div>
                                     <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
                                     {root.replies?.length > 0 && (
                                       <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
                                         {root.replies.map((sub: any) => (
-                                          <div key={sub.cid} className="py-0.5">
+                                          <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
                                             <div className="flex items-start gap-1.5">
                                               <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
-                                              {sub.isNew && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse shrink-0 mt-1" />}
+                                              {sub.isNew && (
+                                                <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                              )}
                                               {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                             </div>
                                             <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>

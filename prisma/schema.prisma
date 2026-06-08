@@ -23,6 +23,8 @@ model User {
   consecutiveNoUpdate  Int      @default(0) @map("consecutive_no_update")
   cooldownUntil        BigInt   @default(0) @map("cooldown_until")
   monitoringEnabled    Boolean  @default(true) @map("monitoring_enabled")
+  platformAuthorId     String?  @map("platform_author_id")    // 抖音uid / 快手userId
+  platformAuthorName   String?  @map("platform_author_name")  // 作者昵称
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
