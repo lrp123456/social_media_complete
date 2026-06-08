@@ -849,6 +849,22 @@ export class KuaishouCrawler {
 
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 快手两个数据源的 workId / photoId 不同，按 title+createTime 归一化 ID
+    const titleToDbId = new Map<string, string>();
+    for (const dv of dbVideos) {
+      const key = `${dv.description}|${dv.createTime}`;
+      titleToDbId.set(key, dv.id);
+    }
+
+    for (const v of videos) {
+      const key = `${v.description}|${v.create_time}`;
+      const existingId = titleToDbId.get(key);
+      if (existingId && existingId !== v.aweme_id) {
+        logger.info({ oldId: v.aweme_id, normalizedId: existingId, description: v.description?.slice(0, 30) }, '[Phase1] Kuaishou ID normalized (cross-source dedup)');
+        v.aweme_id = existingId;
+      }
+    }
+
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
     const commentsQueue: KuaishouCommentQueueItem[] = [];

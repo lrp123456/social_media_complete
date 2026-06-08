@@ -942,6 +942,23 @@ export class DouyinCrawler {
 
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 抖音两个数据源可能因 item_id/aweme_id 不同导致同一视频被误判为新视频
+    // 按 description+createTime 归一化 ID
+    const titleToDbId = new Map<string, string>();
+    for (const dv of dbVideos) {
+      const key = `${dv.description}|${dv.createTime}`;
+      titleToDbId.set(key, dv.id);
+    }
+
+    for (const v of videos) {
+      const key = `${v.description}|${v.create_time}`;
+      const existingId = titleToDbId.get(key);
+      if (existingId && existingId !== v.aweme_id) {
+        logger.info({ oldId: v.aweme_id, normalizedId: existingId, description: v.description?.slice(0, 30) }, '[Phase1] Douyin ID normalized (cross-source dedup)');
+        v.aweme_id = existingId;
+      }
+    }
+
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
     const commentsQueue: CommentQueueItem[] = [];
