@@ -706,6 +706,8 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // Phase 2: 导航到评论管理页
   onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 2: 导航到评论管理');
+  // 在导航到评论管理页面前注册评论API拦截器（页面加载时会触发初始API调用）
+  await douyinCrawler.registerCommentListener(page);
   const navSuccess = await douyinCrawler.navigateToCommentManage(page);
   if (!navSuccess) {
     logger.warn({ userId: task.userId }, '抖音 Phase 2 失败 — 退出策略');
@@ -725,6 +727,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     await db.updateUserStatus(task.userId, 'login_required');
     const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
     if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+    douyinCrawler.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
 
@@ -751,6 +754,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 
   onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
   await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+  douyinCrawler.unregisterCommentListener();
 
   logger.info({ userId: task.userId, processed: phase3Result.results.length, successful: successful.length }, '抖音 Phase 3 完成');
 
@@ -1278,76 +1282,104 @@ async function executeReplyAction(
   const { page } = await bm.connect(String(task.windowId), '', task.platform);
 
   try {
-    const currentUrl = page.url();
-    if (!currentUrl.includes('creator.douyin.com')) {
-      await douyinCrawler.navigateToCreatorHome(page);
-    }
-
-    const navSuccess = await douyinCrawler.navigateToCommentManage(page);
-    if (!navSuccess) {
-      logger.error('回复失败：无法导航到评论管理');
-      return;
-    }
-
-    const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
-    if (!drawerOpened) {
-      logger.error('回复失败：无法打开作品选择抽屉');
-      return;
-    }
-
-    await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, '');
-    await HumanActions.wait(page, 1500, 3000);
-
-    const containerCss = '[class*="container-sXKyMs"]';
-    const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
-    let targetNodeId: number | null = null;
-
-    for (const c of containers) {
-      if (c.text && c.text.includes(replyData.commentCid)) {
-        targetNodeId = c.nodeId;
-        break;
+    // ── 抖音回复 ──
+    if (task.platform === 'douyin') {
+      const currentUrl = page.url();
+      if (!currentUrl.includes('creator.douyin.com')) {
+        await douyinCrawler.navigateToCreatorHome(page);
       }
-    }
 
-    if (!targetNodeId) {
-      logger.warn({ commentCid: replyData.commentCid }, '回复：未精确匹配目标评论，尝试用第一个评论容器');
-      if (containers.length > 0) targetNodeId = containers[0].nodeId;
-      else {
-        logger.error('回复失败：未找到任何评论容器');
+      const navSuccess = await douyinCrawler.navigateToCommentManage(page);
+      if (!navSuccess) {
+        logger.error('回复失败：无法导航到评论管理');
         return;
       }
+
+      const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
+      if (!drawerOpened) {
+        logger.error('回复失败：无法打开作品选择抽屉');
+        return;
+      }
+
+      await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, '');
+      await HumanActions.wait(page, 1500, 3000);
+
+      const containerCss = '[class*="container-sXKyMs"]';
+      const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
+      let targetNodeId: number | null = null;
+
+      for (const c of containers) {
+        if (c.text && c.text.includes(replyData.commentCid)) {
+          targetNodeId = c.nodeId;
+          break;
+        }
+      }
+
+      if (!targetNodeId) {
+        logger.warn({ commentCid: replyData.commentCid }, '回复：未精确匹配目标评论，尝试用第一个评论容器');
+        if (containers.length > 0) targetNodeId = containers[0].nodeId;
+        else {
+          logger.error('回复失败：未找到任何评论容器');
+          return;
+        }
+      }
+
+      const replyBtnClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
+      if (!replyBtnClicked) {
+        logger.error('回复失败：无法点击回复按钮');
+        return;
+      }
+      await HumanActions.wait(page, 500, 1000);
+
+      const inputCss = 'div[contenteditable="true"]';
+      const inputClicked = await HumanActions.cdpClick(page, inputCss, { timeout: 5000 });
+      if (!inputClicked) {
+        logger.error('回复失败：无法定位输入框');
+        return;
+      }
+      await HumanActions.wait(page, 300, 500);
+
+      for (const char of replyData.text) {
+        await HumanActions.cdpKeyPress(page, char, char, char.charCodeAt(0));
+        await HumanActions.wait(page, 50, 150);
+      }
+
+      await HumanActions.cdpClick(page, '[class*="submit"]', { timeout: 5000 });
+      await HumanActions.wait(page, 1000, 2000);
+
+      logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '回复执行成功');
     }
 
-    const replyBtnClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
-    if (!replyBtnClicked) {
-      logger.error('回复失败：无法点击回复按钮');
+    // ── 视频号（Tencent）回复 ──
+    if (task.platform === 'tencent') {
+      const loggedIn = await tencentCrawler.handleLogin(page, task.userId);
+      if (!loggedIn) {
+        logger.error('回复失败：视频号登录失败');
+        return;
+      }
+
+      const navSuccess = await tencentCrawler.navigateToCommentManage(page);
+      if (!navSuccess) {
+        logger.error('回复失败：无法导航到评论管理');
+        return;
+      }
+
+      const replied = await tencentCrawler.replyToComment(page, replyData.commentCid, replyData.text);
+      if (replied) {
+        logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
+      }
+
+      await tencentCrawler.executeExitStrategy(page);
       return;
     }
-    await HumanActions.wait(page, 500, 1000);
-
-    const inputCss = 'div[contenteditable="true"]';
-    const inputClicked = await HumanActions.cdpClick(page, inputCss, { timeout: 5000 });
-    if (!inputClicked) {
-      logger.error('回复失败：无法定位输入框');
-      return;
-    }
-    await HumanActions.wait(page, 300, 500);
-
-    for (const char of replyData.text) {
-      await HumanActions.cdpKeyPress(page, char, char, char.charCodeAt(0));
-      await HumanActions.wait(page, 50, 150);
-    }
-
-    await HumanActions.cdpClick(page, '[class*="submit"]', { timeout: 5000 });
-    await HumanActions.wait(page, 1000, 2000);
-
-    logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '回复执行成功');
   } catch (err: any) {
     logger.error({ err: err.message }, '回复执行失败');
   } finally {
-    try {
-      await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-    } catch {}
+    if (task.platform === 'douyin') {
+      try {
+        await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+      } catch {}
+    }
   }
 }
 

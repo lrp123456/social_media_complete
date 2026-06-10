@@ -617,6 +617,65 @@ export class TencentCrawler {
     return optionClicked;
   }
 
+  /**
+   * 拟人化回复评论
+   */
+  async replyToComment(
+    page: Page,
+    commentCid: string,
+    replyText: string,
+  ): Promise<boolean> {
+    logger.info({ commentCid, textLength: replyText.length }, '[Reply] Starting reply');
+
+    try {
+      // 定位目标评论的 "回复" 按钮
+      const replyBtnClicked = await resolveAndClick(
+        page, 'comment.reply-btn', 'tencent', { timeout: 5000 }
+      );
+
+      if (!replyBtnClicked) {
+        // 回退：通过文本匹配
+        const textClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 3000 });
+        if (!textClicked) {
+          logger.error('[Reply] Reply button not found');
+          return false;
+        }
+      }
+
+      await HumanActions.wait(page, 500, 1000);
+
+      // 点击输入框
+      const inputDef = getSelector('comment.reply-input');
+      const inputCss = inputDef.css || 'div[contenteditable="true"], textarea';
+      const inputClicked = await HumanActions.cdpClick(page, inputCss, { timeout: 5000 });
+      if (!inputClicked) {
+        logger.error('[Reply] Reply input not found');
+        return false;
+      }
+      await HumanActions.wait(page, 300, 500);
+
+      // 逐字输入（拟人化，50-150ms/字）
+      for (const char of replyText) {
+        await HumanActions.cdpKeyPress(page, char, char, char.charCodeAt(0));
+        await HumanActions.wait(page, 50, 150);
+      }
+
+      await HumanActions.wait(page, 500, 1000);
+
+      // 点击发送
+      const submitDef = getSelector('comment.reply-submit');
+      const submitCss = submitDef.css || 'button:has-text("发送")';
+      await HumanActions.cdpClick(page, submitCss, { timeout: 5000 });
+      await HumanActions.wait(page, 1000, 2000);
+
+      logger.info({ commentCid }, '[Reply] Reply sent successfully');
+      return true;
+    } catch (err: any) {
+      logger.error({ error: err.message, commentCid }, '[Reply] Reply failed');
+      return false;
+    }
+  }
+
   // ════════════════════════════════════════
   // 退出策略
   // ════════════════════════════════════════
