@@ -286,12 +286,123 @@ export class TencentCrawler {
   // ════════════════════════════════════════
 
   async navigateToVideoList(page: Page): Promise<void> {
-    // 任务 5 实现
+    const currentUrl = page.url();
+    if (currentUrl.includes('/platform/post/list')) {
+      logger.info('[Phase1] Already on video list page');
+      return;
+    }
+
+    // 优先通过菜单导航（防风控）
+    const videoClicked = await resolveAndClick(
+      page, 'menu.content.video', 'tencent', { timeout: 10000 }
+    );
+
+    if (videoClicked) {
+      await HumanActions.wait(page, 3000, 5000);
+      await HumanActions.pageLoadBehavior(page);
+      logger.info('[Phase1] Navigated to video list via menu click');
+    } else {
+      logger.warn('[Phase1] Menu click failed, falling back to page.goto');
+      await page.goto('https://channels.weixin.qq.com/platform/post/list', {
+        waitUntil: 'domcontentloaded',
+      });
+      await HumanActions.wait(page, 3000, 5000);
+    }
   }
 
   async checkForUpdates(page: Page, userId: number): Promise<CheckResult> {
-    // 任务 5 实现
-    return { hasUpdate: false, commentsQueue: [], updatedVideos: [], riskControlDetected: false };
+    logger.info({ userId }, '[Phase1] Starting update check');
+
+    // 风控检测
+    const riskCheck = await this.detectRiskControl(page);
+    if (riskCheck.detected) {
+      return {
+        hasUpdate: false,
+        commentsQueue: [],
+        updatedVideos: [],
+        riskControlDetected: true,
+        riskControlInfo: riskCheck,
+      };
+    }
+
+    // 注册 API 监听
+    await this.registerListener(page, [POST_LIST_PATTERN]);
+
+    // 导航到视频列表
+    await this.navigateToVideoList(page);
+
+    // 触发数据加载（刷新）
+    await HumanActions.cdpF5Refresh(page);
+    HumanActions.clearCDPContext(page);
+    await HumanActions.wait(page, 3000, 5000);
+
+    // 获取拦截到的视频列表
+    const intercepted = await this.interceptor.waitForResponse(POST_LIST_PATTERN, 15000);
+    const videos: TencentVideoInfo[] = intercepted?.body?.list || [];
+
+    logger.info({ userId, videoCount: videos.length }, '[Phase1] Videos fetched');
+
+    // 对比数据库中的评论数
+    const dbVideos = await db.getVideosByUserId(userId);
+    const commentsQueue: CommentQueueItem[] = [];
+
+    for (const video of videos.slice(0, this.maxMonitorVideos)) {
+      const dbVideo = dbVideos.find(v => v.id === video.export_id);
+      const newCount = video.object_stat?.comment_count ?? 0;
+
+      if (!dbVideo) {
+        // 新视频
+        if (newCount > 0) {
+          commentsQueue.push({
+            exportId: video.export_id,
+            description: video.desc,
+            oldCount: 0,
+            newCount,
+            isFirstCrawl: true,
+            _userId: userId,
+          });
+        }
+        continue;
+      }
+
+      if (newCount > dbVideo.commentCount) {
+        commentsQueue.push({
+          exportId: video.export_id,
+          description: video.desc,
+          oldCount: dbVideo.commentCount,
+          newCount,
+          isFirstCrawl: false,
+          _userId: userId,
+        });
+      }
+    }
+
+    // 保存视频到数据库
+    const videoInfos = videos.slice(0, this.maxMonitorVideos).map(v => ({
+      aweme_id: v.export_id,
+      description: v.desc,
+      create_time: v.create_time,
+      comment_count: v.object_stat?.comment_count ?? 0,
+      metrics: v.object_stat,
+    }));
+    await db.upsertVideosBatch(userId, videoInfos);
+    await db.truncateVideosByUser(userId, this.maxMonitorVideos);
+
+    this.unregisterListener();
+
+    logger.info({ userId, queueLength: commentsQueue.length }, '[Phase1] Check complete');
+
+    return {
+      hasUpdate: commentsQueue.length > 0,
+      commentsQueue,
+      updatedVideos: videos.slice(0, this.maxMonitorVideos).map(v => ({
+        exportId: v.export_id,
+        description: v.desc,
+        oldCount: dbVideos.find(d => d.id === v.export_id)?.commentCount ?? 0,
+        newCount: v.object_stat?.comment_count ?? 0,
+      })),
+      riskControlDetected: false,
+    }
   }
 
   // ════════════════════════════════════════
