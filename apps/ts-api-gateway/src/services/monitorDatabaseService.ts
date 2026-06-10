@@ -133,8 +133,14 @@ export async function truncateVideosByUser(userId: number, maxVideos: number): P
   });
 
   if (excess.length > 0) {
+    const excessIds = excess.map((v) => v.id);
+    // 先清理无 FK 关联的子表
+    await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: excessIds } } });
+    await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: excessIds } } });
+    await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: excessIds } } });
+    // Video 删除 → 级联删除 Comment
     await prisma.video.deleteMany({
-      where: { id: { in: excess.map((v) => v.id) } },
+      where: { id: { in: excessIds } },
     });
     logger.debug(`清理用户 ${userId} 的旧视频: deleted=${excess.length}`);
   }
@@ -181,14 +187,13 @@ export async function upsertLightModeComment(
 // ============================================================
 
 /**
- * 设置用户冷却时间（同时标记为 blocked）
+ * 设置用户冷却时间
  */
 export async function setUserCooldown(userId: number, cooldownUntil: number): Promise<void> {
   await prisma.user.update({
     where: { id: userId },
     data: {
       cooldownUntil: BigInt(cooldownUntil),
-      status: 'blocked',
     },
   });
 }
@@ -236,15 +241,30 @@ export async function isUserInCooldown(userId: number): Promise<boolean> {
 }
 
 /**
- * 获取所有活跃用户（未屏蔽且启用了监控）
+ * 获取所有活跃用户（未屏蔽且启用了监控，且浏览器窗口未被删除）
  */
-export function getAllActiveUsers() {
-  return prisma.user.findMany({
+export async function getAllActiveUsers() {
+  const users = await prisma.user.findMany({
     where: {
-      status: { not: 'blocked' },
+      status: { notIn: ['blocked', 'login_required'] },
       monitoringEnabled: true,
     },
   });
+
+  if (users.length === 0) return [];
+
+  // 过滤：只保留 BrowserWindow 仍存在的用户（窗口解绑/删除后不再监控）
+  const windowExternalIds = [...new Set(users.map(u => u.fingerprintWindowId))];
+  const activeWindows = await prisma.browserWindow.findMany({
+    where: {
+      externalId: { in: windowExternalIds },
+      status: { not: 'error' },
+    },
+    select: { externalId: true },
+  });
+  const activeIds = new Set(activeWindows.map((w: any) => w.externalId));
+
+  return users.filter(u => activeIds.has(u.fingerprintWindowId));
 }
 
 /**
@@ -436,6 +456,55 @@ export async function upsertCommentTree(
       });
     }
   });
+}
+
+/**
+ * 批量 upsert 腾讯视频号评论
+ */
+export async function batchUpsertComments(
+  platform: string,
+  comments: Array<{
+    comment_id: string;
+    content: string;
+    nickname: string;
+    head_img_url: string;
+    create_time: number;
+    like_count: number;
+    reply_count: number;
+    export_id: string;
+    is_author: boolean;
+    level: 1 | 2;
+  }>,
+  userId: number,
+): Promise<void> {
+  if (comments.length === 0) return;
+
+  await prisma.$transaction(async (tx) => {
+    for (const c of comments) {
+      await tx.comment.upsert({
+        where: { cid: c.comment_id },
+        update: {
+          text: c.content,
+          diggCount: c.like_count,
+          level: c.level,
+        },
+        create: {
+          videoId: c.export_id,
+          cid: c.comment_id,
+          text: c.content,
+          userNickname: c.nickname,
+          userUid: c.head_img_url,
+          diggCount: c.like_count,
+          createTime: BigInt(c.create_time),
+          replyId: '0',
+          level: c.level,
+          isNew: 1,
+        },
+      });
+    }
+  });
+
+  logger.info({ platform, count: comments.length }, '批量写入评论完成');
 }
 
 /**

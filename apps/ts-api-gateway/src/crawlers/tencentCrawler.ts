@@ -495,8 +495,126 @@ export class TencentCrawler {
     queue: CommentQueueItem[],
     userId: number,
   ): Promise<CommentProcessResult[]> {
-    // 任务 7 实现
-    return [];
+    const results: CommentProcessResult[] = [];
+    logger.info({ queueLength: queue.length }, '[Phase3] Starting comment queue processing');
+
+    // 导航到评论管理页
+    const navigated = await this.navigateToCommentManage(page);
+    if (!navigated) {
+      logger.error('[Phase3] Failed to navigate to comment page');
+      return queue.map(q => ({
+        exportId: q.exportId,
+        success: false,
+        comments: [],
+        error: 'Failed to navigate to comment page',
+      }));
+    }
+
+    // 注册评论 API 监听
+    await this.registerListener(page, ALL_COMMENT_PATTERNS);
+
+    for (let i = 0; i < queue.length; i++) {
+      const item = queue[i];
+      logger.info({ index: i + 1, total: queue.length, exportId: item.exportId }, '[Phase3] Processing video');
+
+      try {
+        // 风控检测
+        const riskCheck = await this.detectRiskControl(page);
+        if (riskCheck.detected) {
+          logger.error({ exportId: item.exportId, riskType: riskCheck.type }, '[Phase3] Risk control detected');
+          results.push({ exportId: item.exportId, success: false, comments: [], error: 'Risk control detected' });
+          break;
+        }
+
+        // 选择目标视频（如果评论页支持切换视频）
+        if (item.description) {
+          await this.selectVideoForComments(page, item.exportId, item.description);
+        }
+
+        // 等待评论 API 响应
+        this.interceptor.clear(COMMENT_LIST_PATTERN);
+        await HumanActions.wait(page, 2000, 3000);
+
+        // 触发评论加载（滚动）
+        await HumanActions.humanScroll(page, 300, { minPause: 300, maxPause: 600 });
+        await HumanActions.wait(page, 1000, 2000);
+
+        const commentResp = await this.interceptor.waitForResponse(COMMENT_LIST_PATTERN, 15000);
+        const comments: TencentCommentInfo[] = (commentResp?.body?.list || []).map((c: any) => ({
+          comment_id: c.comment_id,
+          content: c.content || '',
+          nickname: c.nickname || '',
+          head_img_url: c.head_img_url || '',
+          create_time: c.create_time || 0,
+          like_count: c.like_count || 0,
+          reply_count: c.reply_count || 0,
+          export_id: item.exportId,
+          is_author: c.is_author || false,
+          level: 1 as const,
+        }));
+
+        // 入库
+        await db.batchUpsertComments('tencent', comments, userId);
+
+        results.push({
+          exportId: item.exportId,
+          success: true,
+          comments,
+        });
+
+        logger.info({ exportId: item.exportId, commentCount: comments.length }, '[Phase3] Video processed');
+
+        // 视频间冷却
+        await HumanActions.wait(page, 3000, 5000);
+      } catch (error: any) {
+        logger.error({ error: error.message, exportId: item.exportId }, '[Phase3] Comment processing failed');
+        results.push({
+          exportId: item.exportId,
+          success: false,
+          comments: [],
+          error: error.message,
+        });
+      }
+    }
+
+    this.unregisterListener();
+    return results;
+  }
+
+  /**
+   * 选择目标视频进行评论筛选
+   */
+  private async selectVideoForComments(
+    page: Page,
+    exportId: string,
+    videoTitle: string,
+  ): Promise<boolean> {
+    // 点击 "切换视频" 按钮
+    const switchClicked = await resolveAndClick(
+      page, 'page.switch-video-btn', 'tencent', { timeout: 8000 }
+    );
+
+    if (!switchClicked) {
+      logger.warn('[Phase3] Switch video button not found, using default video');
+      return false;
+    }
+
+    await HumanActions.wait(page, 1500, 2500);
+
+    // 在弹窗中搜索视频标题
+    if (videoTitle) {
+      const searchInput = await page.$('input[placeholder*="搜索"]');
+      if (searchInput) {
+        await searchInput.fill(videoTitle.slice(0, 20));
+        await HumanActions.wait(page, 1000, 2000);
+      }
+    }
+
+    // 点击目标视频选项
+    const optionClicked = await HumanActions.cdpClickByText(page, videoTitle.slice(0, 15), { timeout: 8000 });
+    await HumanActions.wait(page, 2000, 3000);
+
+    return optionClicked;
   }
 
   // ════════════════════════════════════════
