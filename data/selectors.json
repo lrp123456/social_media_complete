@@ -1,6 +1,6 @@
 {
-  "version": "2.1.0",
-  "updatedAt": "2026-06-05T03:30:00.000000Z",
+  "version": "2.2.0",
+  "updatedAt": "2026-06-09T12:00:00.000000Z",
   "platforms": {
     "douyin": {
       "flowRules": {
@@ -585,12 +585,13 @@
           ],
           "primary": "getByRole(\"button\", name=\"选择作品\")",
           "fallbacks": [
+            ".douyin-creator-interactive-button-primary:visible",
             ".douyin-creator-interactive-button:visible",
             "getByText(\"选择作品\", exact=True)",
             "xpath=//div/div[1]/div[2]/div/button"
           ],
           "selectorType": "role",
-          "description": "评论管理-选择作品按钮"
+          "description": "评论管理-选择作品按钮（interactive组件库主按钮）"
         },
         "btn_declare_confirm": {
           "purposes": [
@@ -617,6 +618,46 @@
           ],
           "selectorType": "role",
           "description": "抖音登录QR码"
+        },
+        "btn_drawer_confirm": {
+          "purposes": ["monitor"],
+          "primary": "getByRole(\"button\", name=\"确定\")",
+          "fallbacks": [
+            "button:has-text(\"确定\")",
+            "button:has-text(\"确认\")",
+            ".semi-button-primary:has-text(\"确\")"
+          ],
+          "selectorType": "role",
+          "description": "抖音评论管理-抽屉确认按钮"
+        },
+        "btn_expand_replies": {
+          "purposes": ["monitor"],
+          "primary": "text=/查看\\\\d+条回复/",
+          "fallbacks": [
+            "text=/展开/",
+            "[class*='expand-reply']"
+          ],
+          "selectorType": "text",
+          "description": "抖音评论区--展开子回复按钮"
+        },
+        "btn_reply_comment": {
+          "purposes": ["monitor"],
+          "primary": "text=回复",
+          "fallbacks": [
+            "[class*='reply-btn']"
+          ],
+          "selectorType": "text",
+          "description": "抖音评论区--回复按钮"
+        },
+        "btn_reply_submit": {
+          "purposes": ["monitor"],
+          "primary": "[class*='submit-btn']",
+          "fallbacks": [
+            "button[class*='submit']",
+            "div[class*='submit']"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论区--回复发送按钮"
         }
       },
       "regions": {
@@ -715,7 +756,115 @@
            ],
            "selectorType": "css",
            "description": "上传进度条（避开 video 播放器的 progress）"
-         }
+         },
+        "region_drawer_portal": {
+          "purposes": ["monitor"],
+          "primary": ".douyin-creator-interactive-portal",
+          "fallbacks": [
+            "[class*=\"semi-sidesheet\"]",
+            "[class*=\"drawer\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉容器portal"
+        },
+        "region_drawer_sidesheet": {
+          "purposes": ["monitor"],
+          "primary": "[class*=\"douyin-creator-interactive-sidesheet\"]",
+          "fallbacks": [
+            "[class*=\"sidesheet\"]",
+            "[class*=\"semi-sidesheet\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉侧面板（使用 interactive 组件库前缀）"
+        },
+        "region_drawer_mask": {
+          "purposes": ["monitor"],
+          "primary": ".douyin-creator-interactive-sidesheet-mask",
+          "fallbacks": [
+            "[class*=\"semi-sidesheet-mask\"]",
+            "[class*=\"mask\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉遮罩层"
+        },
+        "region_drawer_content": {
+          "purposes": ["monitor"],
+          "primary": ".douyin-creator-interactive-sidesheet-body",
+          "fallbacks": [
+            "[class*=\"sidesheet-body\"]",
+            "[class*=\"side-sheet-body\"]",
+            ".semi-sidesheet-body"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内容区（可滚动）"
+        },
+        "region_drawer_video_item": {
+          "purposes": ["monitor"],
+          "primary": "[class*=\"douyin-creator-interactive-list-items\"] > div",
+          "fallbacks": [
+            "[class*=\"container-Lkxos9\"]",
+            "[class*=\"video-item\"]",
+            "[class*=\"work-item\"]",
+            "[class*=\"content-item\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内视频条目容器（使用 interactive 组件库前缀）"
+        },
+        "region_drawer_video_title": {
+          "purposes": ["monitor"],
+          "primary": "[class*=\"douyin-creator-interactive-list-items\"] [class*=\"title-\"]",
+          "fallbacks": [
+            "[class*=\"title-LUOP3b\"]",
+            "[class*=\"title-\"]",
+            "[class*=\"desc\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理-抽屉内视频标题（使用组件库前缀定位）"
+        },
+        "region_sidebar": {
+          "purposes": ["monitor", "publish"],
+          "primary": ".douyin-creator-master-navigation-list",
+          "fallbacks": [
+            "nav",
+            "[class*=\"navigation\"]",
+            "[class*=\"sidebar\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音侧边栏导航列表"
+        },
+        "region_reply_list": {
+          "purposes": ["monitor"],
+          "primary": "[class*='reply-list']",
+          "fallbacks": [],
+          "selectorType": "css",
+          "description": "抖音评论区--子回复列表容器"
+        },
+        "region_comment_container": {
+          "purposes": ["monitor"],
+          "primary": "[data-cid]",
+          "fallbacks": [
+            "[class*='container-'][data-cid]",
+            "[class*='container-sXKyMs']"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论区--评论容器（data-cid 属性最稳定）"
+        },
+        "region_reply_input": {
+          "purposes": ["monitor"],
+          "primary": "div[contenteditable=\"true\"]",
+          "fallbacks": [],
+          "selectorType": "css",
+          "description": "抖音评论区--回复输入框"
+        },
+        "region_sidebar_scroll": {
+          "purposes": ["monitor", "publish"],
+          "primary": ".douyin-creator-master-navigation-list",
+          "fallbacks": [
+            "[class*='navigation-list']"
+          ],
+          "selectorType": "css",
+          "description": "抖音侧边栏滚动容器"
+        }
       },
       "textboxes": {
         "tb_title": {
@@ -2051,6 +2200,151 @@
           ],
           "selectorType": "placeholder",
           "description": "小红书话题标签输入框"
+        }
+      }
+    },
+    "tencent": {
+      "menus": {
+        "menu_home": {
+          "purposes": ["monitor"],
+          "primary": "getByText('span', '首页', {exact: true})",
+          "fallbacks": [
+            "#menuBar .finder-ui-desktop-menu__link_current:has(span:has-text('首页'))",
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('首页'))"
+          ],
+          "selectorType": "text",
+          "description": "首页菜单"
+        },
+        "menu_content": {
+          "purposes": ["monitor"],
+          "primary": "getByText('span', '内容管理')",
+          "fallbacks": [
+            ".js_nav_item:has(span:has-text('内容管理'))",
+            ".finder-ui-desktop-menu__sub__wrp:has(span:has-text('内容管理'))"
+          ],
+          "selectorType": "text",
+          "description": "内容管理 (可展开)"
+        },
+        "menu_content_video": {
+          "purposes": ["monitor"],
+          "primary": "getByText('span', '视频', {exact: true})",
+          "fallbacks": [
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('视频'))"
+          ],
+          "parent": "menu_content",
+          "selectorType": "text",
+          "description": "内容管理 > 视频"
+        },
+        "menu_interact": {
+          "purposes": ["monitor"],
+          "primary": "getByText('span', '互动管理')",
+          "fallbacks": [
+            ".js_nav_item:has(span:has-text('互动管理'))"
+          ],
+          "selectorType": "text",
+          "description": "互动管理 (可展开)"
+        },
+        "menu_interact_comment": {
+          "purposes": ["monitor"],
+          "primary": "getByText('span', '评论', {exact: true})",
+          "fallbacks": [
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('评论'))"
+          ],
+          "parent": "menu_interact",
+          "selectorType": "text",
+          "description": "互动管理 > 评论"
+        },
+        "menu_live": {
+          "purposes": [],
+          "primary": "getByText('span', '直播')",
+          "fallbacks": [".js_nav_item:has(span:has-text('直播'))"],
+          "selectorType": "text",
+          "description": "直播"
+        },
+        "menu_data_center": {
+          "purposes": [],
+          "primary": "getByText('span', '数据中心')",
+          "fallbacks": [".js_nav_item:has(span:has-text('数据中心'))"],
+          "selectorType": "text",
+          "description": "数据中心"
+        },
+        "menu_data_video": {
+          "purposes": [],
+          "primary": "getByText('span', '视频数据')",
+          "fallbacks": [".finder-ui-desktop-sub-menu__item:has(span:has-text('视频数据'))"],
+          "parent": "menu_data_center",
+          "selectorType": "text",
+          "description": "数据中心 > 视频数据"
+        },
+        "menu_data_follower": {
+          "purposes": [],
+          "primary": "getByText('span', '关注者数据')",
+          "fallbacks": [".finder-ui-desktop-sub-menu__item:has(span:has-text('关注者数据'))"],
+          "parent": "menu_data_center",
+          "selectorType": "text",
+          "description": "数据中心 > 关注者数据"
+        },
+        "menu_settings": {
+          "purposes": [],
+          "primary": "getByText('span', '设置')",
+          "fallbacks": [".js_nav_item:has(span:has-text('设置'))"],
+          "selectorType": "text",
+          "description": "设置"
+        }
+      },
+      "buttons": {
+        "btn_switch_video": {
+          "purposes": ["monitor"],
+          "primary": "getByText('button', '切换视频')",
+          "fallbacks": [".switch-video-btn", "text=切换视频"],
+          "filterTag": "BUTTON",
+          "description": "切换视频按钮"
+        },
+        "btn_comment_reply": {
+          "purposes": ["monitor"],
+          "primary": "getByText('button', '回复')",
+          "fallbacks": [".reply-btn", "text=回复"],
+          "filterTag": "BUTTON",
+          "description": "评论回复按钮"
+        },
+        "btn_reply_submit": {
+          "purposes": ["monitor"],
+          "primary": "getByText('button', '发送')",
+          "fallbacks": [".submit-reply-btn", "text=发送"],
+          "filterTag": "BUTTON",
+          "description": "回复发送按钮"
+        }
+      },
+      "regions": {
+        "region_sidebar": {
+          "purposes": ["monitor"],
+          "primary": "#side-bar",
+          "fallbacks": [".finder-ui-desktop-menu__wrp"],
+          "description": "侧边栏容器"
+        },
+        "region_comment_container": {
+          "purposes": ["monitor"],
+          "primary": ".comment-list-container",
+          "fallbacks": ["wujie-app .comment-list", "[class*='comment']"],
+          "description": "评论列表容器"
+        },
+        "region_reply_input": {
+          "purposes": ["monitor"],
+          "primary": ".reply-textarea",
+          "fallbacks": ["textarea[placeholder*='回复']", "div[contenteditable='true']"],
+          "description": "回复输入框"
+        },
+        "region_video_list_scroll": {
+          "purposes": ["monitor"],
+          "primary": ".video-list-container",
+          "fallbacks": ["wujie-app [class*='list']", "[class*='video-list']"],
+          "description": "视频列表滚动区域"
+        },
+        "region_comment_list_scroll": {
+          "purposes": ["monitor"],
+          "primary": ".comment-list-scroll",
+          "fallbacks": ["[class*='comment-list']", "wujie-app [class*='comment']"],
+          "description": "评论列表滚动区域"
         }
       }
     }
