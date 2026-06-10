@@ -81,7 +81,7 @@ export const PLATFORM_META: Record<PlatformName, PlatformMeta> = {
 };
 
 // 监控平台子集（仅支持评论监控的平台）
-export const MONITOR_PLATFORMS: PlatformName[] = ['douyin', 'kuaishou', 'xiaohongshu'];
+export const MONITOR_PLATFORMS: PlatformName[] = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'];
 
 // 发布平台全集
 export const PUBLISH_PLATFORMS: PlatformName[] = [
