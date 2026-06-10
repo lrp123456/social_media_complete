@@ -6,7 +6,8 @@ export type QuerySource = 'work_list' | 'item_list';
 export type PageType =
   | 'content_management' | 'data_center' | 'other'
   | 'kuaishou_content' | 'kuaishou_data_center' | 'kuaishou_interact'
-  | 'xhs_note_manage' | 'xhs_data_dashboard';
+  | 'xhs_note_manage' | 'xhs_data_dashboard'
+  | 'tencent_interact';
 
 export class ExitStrategy {
   static getRandomExitAction(): ExitAction {

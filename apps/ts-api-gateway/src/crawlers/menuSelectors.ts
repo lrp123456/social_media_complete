@@ -115,6 +115,41 @@ const CRAWLER_KEY_MAP: Record<string, Record<string, { category: SelectorCategor
     'region.note-list': { category: 'regions', name: 'region_note_list' },
     'region.note-list-scroll': { category: 'regions', name: 'region_note_list_scroll' },
   },
+  tencent: {
+    // 导航
+    'menu.home':       { category: 'menus', name: 'menu_home' },
+    'menu.content':    { category: 'menus', name: 'menu_content' },
+    'menu.interact':   { category: 'menus', name: 'menu_interact' },
+    'menu.live':       { category: 'menus', name: 'menu_live' },
+    'menu.data-center': { category: 'menus', name: 'menu_data_center' },
+    'menu.settings':   { category: 'menus', name: 'menu_settings' },
+
+    // 子菜单
+    'menu.content.video':    { category: 'menus', name: 'menu_content_video' },
+    'menu.content.image':    { category: 'menus', name: 'menu_content_image' },
+    'menu.content.draft':    { category: 'menus', name: 'menu_content_draft' },
+    'menu.interact.comment': { category: 'menus', name: 'menu_interact_comment' },
+    'menu.interact.danmaku': { category: 'menus', name: 'menu_interact_danmaku' },
+    'menu.interact.message': { category: 'menus', name: 'menu_interact_message' },
+    'menu.data-center.video':    { category: 'menus', name: 'menu_data_video' },
+    'menu.data-center.follower': { category: 'menus', name: 'menu_data_follower' },
+
+    // 页面元素
+    'page.switch-video-btn': { category: 'buttons', name: 'btn_switch_video' },
+
+    // 评论相关
+    'comment.reply-btn':    { category: 'buttons', name: 'btn_comment_reply' },
+    'comment.reply-submit': { category: 'buttons', name: 'btn_reply_submit' },
+    'comment.reply-input':  { category: 'regions', name: 'region_reply_input' },
+    'comment.container':    { category: 'regions', name: 'region_comment_container' },
+
+    // 滚动区域
+    'scroll.video-list':    { category: 'regions', name: 'region_video_list_scroll' },
+    'scroll.comment-list':  { category: 'regions', name: 'region_comment_list_scroll' },
+
+    // 侧边栏
+    'region.sidebar':       { category: 'regions', name: 'region_sidebar' },
+  },
 };
 
 let customSelectors: SelectorRegistry = {};
@@ -140,13 +175,19 @@ function extractTextFromSelector(entry: SelectorEntry): string | undefined {
   return undefined;
 }
 
+/** Strip jQuery-style :visible/:hidden/:eq() pseudo-selectors that CDP doesn't support. */
+function stripUnsupportedPseudo(css: string): string {
+  return css.replace(/:visible|:hidden|:eq\(\d+\)/g, '');
+}
+
 /** Convert a SelectorEntry from the SelectorReader into the legacy SelectorDef shape. */
 function entryToDef(entry: SelectorEntry): SelectorDef {
+  const rawCss = entry.primary.startsWith('getBy')
+    ? entry.fallbacks[0] || entry.primary
+    : entry.primary;
   return {
-    // If the primary is a getBy* locator, use the first CSS fallback as the css value
-    css: entry.primary.startsWith('getBy')
-      ? entry.fallbacks[0] || entry.primary
-      : entry.primary,
+    // Strip :visible/:hidden pseudo-selectors — CDP (Chrome DevTools Protocol) doesn't support them
+    css: stripUnsupportedPseudo(rawCss),
     text: extractTextFromSelector(entry),
     parentKey: entry.parent,
     expandCheckCss: entry.expandCheckCss,
@@ -325,6 +366,18 @@ export function getSubmenuKeyForPageType(
         return undefined;
     }
   }
+  if (platform === 'tencent') {
+    switch (pageType) {
+      case 'content_management':
+        return 'menu.content.video';
+      case 'data_center':
+        return 'menu.data-center.video';
+      case 'tencent_interact':
+        return 'menu.interact.comment';
+      default:
+        return undefined;
+    }
+  }
   switch (pageType) {
     case 'content_management':
       return 'menu.content.work-manage';
@@ -346,13 +399,22 @@ export function getSelectorChain(
   const chain: string[] = [];
   let currentKey: string | undefined = key;
   const visited = new Set<string>();
+  const platformMap = CRAWLER_KEY_MAP[platform];
 
   while (currentKey) {
     if (visited.has(currentKey)) break;
     visited.add(currentKey);
     chain.unshift(currentKey);
-    const def = getSelector(currentKey, platform);
-    currentKey = def.parentKey;
+
+    // Only call getSelector for keys that exist in CRAWLER_KEY_MAP
+    // (bare parent keys like "menu" are structural placeholders, not real selectors)
+    if (platformMap && currentKey in platformMap) {
+      const def = getSelector(currentKey, platform);
+      currentKey = def.parentKey || deriveParentKey(currentKey);
+    } else {
+      // Key not in map (bare parent) — derive parent from dot-notation only
+      currentKey = deriveParentKey(currentKey);
+    }
   }
 
   return chain;
