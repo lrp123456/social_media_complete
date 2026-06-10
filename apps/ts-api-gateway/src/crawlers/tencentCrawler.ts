@@ -406,11 +406,83 @@ export class TencentCrawler {
   }
 
   // ════════════════════════════════════════
-  // Phase 2: 评论管理导航（占位，任务 6 实现）
+  // Phase 2: 评论管理导航
   // ════════════════════════════════════════
 
   async navigateToCommentManage(page: Page): Promise<boolean> {
-    // 任务 6 实现
+    logger.info('[Phase2] Navigating to comment management page');
+
+    await HumanActions.thinkingPause(page, 800, 2000);
+
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // 检测是否已在评论页
+      const bodyText = await HumanActions.cdpGetBodyText(page);
+      const alreadyOnCommentPage = bodyText.includes('评论')
+        && (bodyText.includes('切换视频') || bodyText.includes('全部类型'));
+
+      if (alreadyOnCommentPage) {
+        logger.info({ attempt }, '[Phase2] Already on comment page');
+        return true;
+      }
+
+      // 方式1: 通过菜单点击
+      // 先展开 "互动管理" 父菜单
+      const interactClicked = await resolveAndClick(
+        page, 'menu.interact', 'tencent', { timeout: 8000 }
+      );
+      if (interactClicked) {
+        await HumanActions.wait(page, 1000, 2000);
+      }
+
+      // 再点击 "评论" 子菜单
+      const commentClicked = await resolveAndClick(
+        page, 'menu.interact.comment', 'tencent', { timeout: 10000 }
+      );
+
+      if (commentClicked) {
+        logger.info('[Phase2] Comment menu clicked, waiting for page load');
+        await HumanActions.wait(page, 3000, 5000);
+
+        const loaded = await this.waitForCommentManagePage(page);
+        if (loaded) {
+          logger.info('[Phase2] Comment page loaded');
+          return true;
+        }
+      }
+
+      // 方式2: 直接导航（回退）
+      if (attempt === maxRetries - 1) {
+        logger.warn('[Phase2] Menu click failed, falling back to page.goto');
+        await page.goto('https://channels.weixin.qq.com/platform/comment', {
+          waitUntil: 'domcontentloaded',
+        });
+        await HumanActions.wait(page, 3000, 5000);
+        const loaded = await this.waitForCommentManagePage(page);
+        if (loaded) return true;
+      }
+
+      await HumanActions.wait(page, 2000, 3000);
+    }
+
+    logger.error('[Phase2] Failed to navigate to comment page');
+    return false;
+  }
+
+  private async waitForCommentManagePage(page: Page): Promise<boolean> {
+    const startTime = Date.now();
+    const timeout = 30000;
+
+    while (Date.now() - startTime < timeout) {
+      const url = page.url();
+      if (url.includes('/comment') || url.includes('/platform/comment')) {
+        const bodyText = await HumanActions.cdpGetBodyText(page);
+        if (bodyText.includes('评论') && (bodyText.includes('切换视频') || bodyText.includes('全部类型'))) {
+          return true;
+        }
+      }
+      await HumanActions.wait(page, 800, 1500);
+    }
     return false;
   }
 
