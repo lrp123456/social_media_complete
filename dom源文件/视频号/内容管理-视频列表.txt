@@ -1,0 +1,146 @@
+<!-- 视频号助手 - 内容管理-视频列表页面 DOM (真实浏览器抓取) -->
+<!-- URL: https://channels.weixin.qq.com/platform/post/list -->
+<!-- 抓取时间: 2026-06-10 -->
+<!-- 微前端: wujie (无界), data-wujie-id="content" -->
+<!-- 监控用途: Phase 1 视频列表获取, 视频ID/标题/评论数/播放数等 -->
+
+<!-- ========== 主内容容器 ========== -->
+<!-- 外层结构: .app-body > #side-bar + .container-wrap > .container-center > .router-view > wujie-app -->
+<div class="container-wrap">
+<div class="container-center">
+<div class="router-view">
+<wujie-app data-wujie-id="content" class="wujie_iframe">
+
+<!-- ===== 页面标题和操作栏 ===== -->
+<div class="page-header">
+  <h1 class="page-title">视频管理</h1>
+  <div class="header-actions">
+    <!-- 发表视频按钮 (橙色圆角按钮) -->
+    <button class="publish-btn">发表视频</button>
+  </div>
+</div>
+
+<!-- ===== Tab切换: 视频 | 合集 ===== -->
+<div class="tab-bar">
+  <div class="tab-item tab-item-active">视频 (1)</div>
+  <div class="tab-item">合集 (0)</div>
+</div>
+
+<!-- ===== 搜索和操作区 ===== -->
+<div class="action-bar">
+  <!-- 搜索框 -->
+  <div class="search-box">
+    <svg class="search-icon"><!-- 搜索图标 --></svg>
+    <input type="text" class="search-input" placeholder="搜索视频" value="">
+  </div>
+  <!-- 秒剪推广 -->
+  <div class="promo-text">[秒剪] 自动字幕，免费不限次数</div>
+</div>
+
+<!-- ===== 视频列表区域 ===== -->
+<div class="video-list">
+
+  <!-- 单个视频卡片示例 (已发布) -->
+  <div class="video-card">
+    <!-- 封面图 -->
+    <div class="video-cover">
+      <img src="https://finder.video.qq.com/..." class="cover-img" alt="封面">
+      <!-- 视频时长 -->
+      <span class="duration-badge">01:23</span>
+    </div>
+
+    <!-- 视频信息 -->
+    <div class="video-info">
+      <div class="video-title">德瓦达</div>
+      <div class="video-meta">
+        <span class="publish-time">2026年05月15日 16:10</span>
+      </div>
+    </div>
+
+    <!-- 数据统计 (5个指标) -->
+    <div class="video-stats">
+      <div class="stat-item">
+        <svg class="stat-icon"><!-- 播放图标(眼睛) --></svg>
+        <span class="stat-value">682</span>
+      </div>
+      <div class="stat-item">
+        <svg class="stat-icon"><!-- 点赞图标(爱心) --></svg>
+        <span class="stat-value">5</span>
+      </div>
+      <div class="stat-item">
+        <svg class="stat-icon"><!-- 评论图标 --></svg>
+        <span class="stat-value">1</span>
+      </div>
+      <div class="stat-item">
+        <svg class="stat-icon"><!-- 分享图标 --></svg>
+        <span class="stat-value">11</span>
+      </div>
+      <div class="stat-item">
+        <svg class="stat-icon"><!-- 推荐图标(大拇指) --></svg>
+        <span class="stat-value">6</span>
+      </div>
+    </div>
+
+    <!-- 操作按钮 (hover显示) -->
+    <div class="video-actions">
+      <button class="action-btn">编辑</button>
+      <button class="action-btn">更多</button>
+    </div>
+  </div>
+
+  <!-- ... 更多视频卡片 ... -->
+</div>
+
+</wujie-app>
+</div><!-- /router-view -->
+</div><!-- /container-center -->
+</div><!-- /container-wrap -->
+
+<!--
+========== 已确认的真实API端点 (Network面板验证) ==========
+
+★ 视频列表API:
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/post/post_list
+  参数: _aid (应用ID), _rid (请求ID), _pageUrl
+  响应: 视频列表(export_id, desc, create_time, object_stat等)
+
+  合集列表API:
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/collection/get_collection_list
+  参数: _aid, _rid, _pageUrl
+
+  会话数据API:
+  URL: POST /cgi-bin/mmfinderassistant-bin/helper/hepler_merlin_mmdata
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/helper/hepler_merlin_mmdata
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/helper/helper_mmdata
+  说明: 获取用户信息/会话状态, 每次页面加载都会调用
+
+  性能上报:
+  URL: POST /cgi-bin/mmfinderassistant-bin/report-perf?pf=web
+
+  页面路由:
+  URL: GET /micro/content/post/list (HTML微前端入口)
+  URL: GET /micro/content/mf-manifest.json (微前端manifest)
+
+★ 视频数据指标说明 (来自截图验证):
+  播放量(眼睛图标) → play_count
+  点赞数(爱心图标) → like_count
+  评论数(评论图标) → comment_count
+  分享数(分享图标) → share_count
+  推荐数(大拇指)   → recommend_count (视频号特有)
+
+★ CDN域名:
+  静态资源: res.wx.qq.com/t/wx_fed/finder/helper/content/
+  视频封面: finder.video.qq.com
+  用户上传: res.wx.qq.com/t/fed_upload/
+
+========== 与抖音对比 ==========
+
+| 维度 | 视频号 | 抖音 |
+|------|--------|------|
+| 视频列表API | /mmfinderassistant-bin/post/post_list | /web/api/creator/item/list |
+| 视频ID字段 | export_id (推测) | aweme_id |
+| 评论数字段 | 视频列表直接包含 | 需单独获取 |
+| 分页方式 | 待确认 | cursor游标 |
+| 推荐指标 | 有(recommend_count) | 无 |
+| 微前端 | wujie无界 | 无 |
+-->

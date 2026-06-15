@@ -72,11 +72,17 @@ function PlatformRow({
   capability?: PlatformCapability;
 }) {
   const meta = PLATFORM_OPTIONS.find((p) => p.key === platform);
+
+  // Debug: Log capability for tencent platform
+  if (platform === 'tencent') {
+    console.log('[DEBUG] PlatformRow tencent capability:', capability);
+  }
+
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface border border-outline-variant group hover:border-primary/30 transition-colors">
       <PlatformIcon platform={platform as any} size={24} />
       <span className="text-body-sm text-on-surface font-medium flex-1">{meta?.label || platform}</span>
-      
+
       {/* Capability indicators */}
       {capability && (
         <div className="flex items-center gap-1.5 mr-2">
@@ -88,8 +94,8 @@ function PlatformRow({
           {capability.canMonitor && (
             <span className={cn(
               'text-[10px] px-1.5 py-0.5 rounded font-medium',
-              capability.canDeepCrawl 
-                ? 'bg-emerald-500/10 text-emerald-600' 
+              capability.canDeepCrawl
+                ? 'bg-emerald-500/10 text-emerald-600'
                 : 'bg-amber-500/10 text-amber-600'
             )} title={capability.canDeepCrawl ? '支持深度爬取' : '仅支持轻量通知'}>
               监控{capability.canDeepCrawl ? '·深度' : '·轻量'}
@@ -102,7 +108,7 @@ function PlatformRow({
           )}
         </div>
       )}
-      
+
       <LoginBadge status={loginStatus} />
       <button
         onClick={onVerify}
@@ -135,6 +141,15 @@ export default function OperatorManagement() {
   const limits = windowsData?.limits || { bitbrowser: { current: 0, max: 10 }, roxybrowser: { current: 0, max: 5 }, total: { current: 0, max: 15 } };
   const { data: capabilitiesData } = usePlatformCapabilities() as { data: PlatformCapability[] };
   const createOperator = useCreateOperator();
+
+  // Debug: Log capabilities data
+  useEffect(() => {
+    console.log('[DEBUG] capabilitiesData:', capabilitiesData);
+    if (capabilitiesData) {
+      const tencentCap = capabilitiesData.find((c) => c.platform === 'tencent');
+      console.log('[DEBUG] tencent capability:', tencentCap);
+    }
+  }, [capabilitiesData]);
   const updateOperator = useUpdateOperator();
   const deleteOperator = useDeleteOperator();
   const syncWindows = useSyncWindows();

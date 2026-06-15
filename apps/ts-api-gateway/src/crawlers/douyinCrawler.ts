@@ -80,7 +80,9 @@ const CREATOR_HOME = 'https://creator.douyin.com/creator-micro/home';
 
 const WORK_LIST_PATTERN = '/work_list';
 const ITEM_LIST_PATTERN = '/item/list';
-const COMMENT_LIST_PATTERN = '/comment/list/select';
+const COMMENT_LIST_PATTERN = '/aweme/v1/web/comment/list/select';
+const COMMENT_REPLY_PATTERN = '/aweme/v1/web/comment/list/reply'; // 子回复 API
+const ALL_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_REPLY_PATTERN];
 
 const MAX_SCROLL_ATTEMPTS = 30;
 const MAX_SCROLL_NO_NEW_DATA = 10;
@@ -126,6 +128,7 @@ export interface CheckResult {
 export class DouyinCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
+  private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
   private page?: Page;
 
@@ -215,6 +218,27 @@ export class DouyinCrawler {
       this.listenerPageId = null;
     }
     this.interceptor.clearAll();
+  }
+
+  /**
+   * 注册评论 API 拦截器（Phase2 调用，在导航到评论管理页面之前）
+   * 必须在页面加载前注册，才能捕获初始的评论 API 响应
+   */
+  async registerCommentListener(page: Page): Promise<void> {
+    this.unregisterCommentListener();
+    for (const p of ALL_COMMENT_PATTERNS) {
+      this.interceptor.clear(p);
+    }
+    this.commentListenerPageId = await this.interceptor.register(page, ALL_COMMENT_PATTERNS);
+    logger.info({ commentListenerPageId: this.commentListenerPageId }, 'Douyin comment API listener pre-registered (Phase2)');
+  }
+
+  unregisterCommentListener(): void {
+    if (this.commentListenerPageId) {
+      this.interceptor.unregister(this.commentListenerPageId);
+      this.commentListenerPageId = null;
+      logger.info('Douyin comment API listener unregistered');
+    }
   }
 
   async fetchVideoListFromSource(page: Page, source: QuerySource): Promise<VideoInfo[]> {
@@ -783,7 +807,7 @@ export class DouyinCrawler {
     ].filter(Boolean) as string[];
 
     const containerDef = getSelector('comment.container');
-    const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
+    const containerCss = containerDef.css || '[data-cid]';
 
     const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
     logger.info({ containerCount: containers.length }, '[Expand] Found comment containers');
@@ -800,12 +824,16 @@ export class DouyinCrawler {
       if (!isRootComment) continue;
 
       // 从容器 DOM 获取真实的 data-cid（而非文本截断的假 cid）
-      const rootCid = await page.evaluate((idx: number) => {
-        const containers = document.querySelectorAll('[class*="container-sXKyMs"]');
+      let rootCid = await page.evaluate((idx: number) => {
+        const containers = document.querySelectorAll('[data-cid]');
         const el = containers[idx] as HTMLElement;
         return el?.dataset?.cid || '';
       }, containerIdx);
-      if (!rootCid) continue;
+      if (!rootCid) {
+        // data-cid 不可用（抖音前端可能更新），用文本片段作为 fallback 标识
+        rootCid = containerText.slice(0, 25).replace(/\s+/g, '').toLowerCase() || `fallback-${containerIdx}`;
+        logger.info({ rootCid, containerIdx }, '[Expand] data-cid missing, using text fallback');
+      }
 
       const lastCount = lastCounts.get(rootCid);
       const isNewRoot = newRootCids.includes(rootCid);
@@ -822,6 +850,10 @@ export class DouyinCrawler {
         continue;
       }
 
+      // 先将当前根评论容器滚动到视口内（直接操作 scrollTop，避免 wheel 事件抖动）
+      await this.scrollCommentArea(page, 100);
+      await HumanActions.wait(page, 400, 800);
+
       for (const sel of expandSelectors) {
         const btnClicked = await HumanActions.cdpClickByText(page, sel, { timeout: 3000 });
         if (btnClicked) {
@@ -831,10 +863,33 @@ export class DouyinCrawler {
           // 滚动评论区加载更多
           await HumanActions.humanScroll(page, 200, { minPause: 300, maxPause: 600 });
 
-          const moreClicked = await HumanActions.cdpClickByText(page, 'text=/展开更多/', { timeout: 2000 });
-          if (moreClicked) {
+          // 循环点击"查看N条回复"直到所有回复加载完毕（超过10条回复时每次只加载10条）
+          // 抖音的加载更多按钮文本与首次展开相同："查看N条回复"
+          let loadMoreRounds = 0;
+          const MAX_LOAD_MORE = 10;
+          while (loadMoreRounds < MAX_LOAD_MORE) {
+            // 先将"查看N条回复"按钮滚动到视口内
+            const btnFound = await page.evaluate(() => {
+              const all = Array.from(document.querySelectorAll('*'));
+              const btn = all.find((el) => {
+                const t = (el.textContent || '').trim();
+                return /^查看\d+条回复$/.test(t) && el instanceof HTMLElement && el.children.length === 0;
+              });
+              return !!btn;
+            });
+            if (!btnFound) break;
+            await this.scrollCommentArea(page, 150);
             await HumanActions.wait(page, 300, 600);
-            expandedCount++;
+
+            const moreClicked = await this.clickExpandButton(page);
+            if (!moreClicked) break;
+            loadMoreRounds++;
+            await HumanActions.wait(page, 500, 1000);
+            await HumanActions.humanScroll(page, 150, { minPause: 200, maxPause: 400 });
+          }
+          if (loadMoreRounds > 0) {
+            expandedCount += loadMoreRounds;
+            logger.info({ videoId, rootCid, loadMoreRounds }, '[Expand] Loaded more replies');
           }
           break;
         }
@@ -861,7 +916,7 @@ export class DouyinCrawler {
   ): Promise<Array<{ text: string; replyToName: string }>> {
     const replies: Array<{ text: string; replyToName: string }> = [];
 
-    const containerCss = getSelector('comment.container')?.css || '[class*="container-sXKyMs"]';
+    const containerCss = getSelector('comment.container')?.css || '[data-cid]';
     const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
     logger.info({ containerCount: containers.length, rootCid }, '[ExpandRepliesForRoot] Found containers, searching for target');
 
@@ -881,17 +936,12 @@ export class DouyinCrawler {
         break;
       }
 
-      // 在容器内点击"查看 N 条回复"（限定在当前容器范围内，避免误点其他根评论的展开按钮）
-      const clicked = await page.evaluate(({ idx, cssSel }: { idx: number; cssSel: string }) => {
-        const containers = document.querySelectorAll(cssSel);
-        const el = containers[idx] as HTMLElement;
-        if (!el) return false;
-        const btn = Array.from(el.querySelectorAll('*')).find(
-          (e: Element) => /查看\d+条回复/.test(e.textContent || ''),
-        );
-        if (btn instanceof HTMLElement) { btn.click(); return true; }
-        return false;
-      }, { idx: containerIdx, cssSel: containerCss });
+      // 先将当前根评论容器滚动到视口内（直接操作 scrollTop）
+      await this.scrollCommentArea(page, 100);
+      await HumanActions.wait(page, 400, 800);
+
+      // 在容器内点击"查看 N 条回复"
+      const clicked = await this.clickExpandButton(page);
 
       if (clicked) {
         await HumanActions.wait(page, 500, 1000);
@@ -942,7 +992,7 @@ export class DouyinCrawler {
 
   private async parseCommentTreeFromDOM(page: Page): Promise<CommentNode[]> {
     const containerDef = getSelector('comment.container');
-    const containerCss = containerDef.css || '[class*="container-sXKyMs"]';
+    const containerCss = containerDef.css || '[data-cid]';
 
     const result = await page.evaluate((sel: string) => {
       const containers = document.querySelectorAll(sel);
@@ -1335,11 +1385,34 @@ export class DouyinCrawler {
     logger.info({ queueLength: queue.length }, '[Phase3] Starting comment queue processing');
 
     this.page = page;
-    this.interceptor.clear(COMMENT_LIST_PATTERN);
-    const commentListenerId = await this.interceptor.register(page, [COMMENT_LIST_PATTERN]);
-    logger.info({ commentListenerId }, '[Phase3] Comment API listener registered for entire queue');
+    logger.info({ existingListener: this.commentListenerPageId }, '[Phase3] Using pre-registered comment listener from Phase2');
 
     try {
+      // ── 优先处理默认选中视频（页面加载时已显示的评论）──
+      // 检查拦截器中是否已有评论 API 响应（默认选中视频的评论数据）
+      const existingResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+      if (existingResp.length > 0) {
+        const defaultComments = existingResp[existingResp.length - 1].body?.comments || [];
+        const defaultAwemeIds = [...new Set(defaultComments.map((c: any) => c.aweme_id))];
+        // 将队列中匹配默认视频的项移到首位（后续 PreCheck 会直接跳过抽屉）
+        for (const awemeId of defaultAwemeIds) {
+          const idx = queue.findIndex(item => item.awemeId === awemeId);
+          if (idx > 0) {
+            const [item] = queue.splice(idx, 1);
+            queue.unshift(item);
+            logger.info({ awemeId, defaultIdx: idx }, '[Phase3] 默认选中视频已在队列中，移到首位优先处理（无需抽屉）');
+            break;
+          } else if (idx === 0) {
+            logger.info({ awemeId }, '[Phase3] 默认选中视频已是队列首位');
+            break;
+          }
+        }
+      } else {
+        // 无默认响应，清空拦截器准备下一阶段
+        this.interceptor.clear(COMMENT_LIST_PATTERN);
+        this.interceptor.clear(COMMENT_REPLY_PATTERN);
+      }
+
       for (let i = 0; i < queue.length; i++) {
         const item = queue[i];
         logger.info({ index: i + 1, total: queue.length, awemeId: item.awemeId }, '[Phase3] Processing video in queue');
@@ -1350,32 +1423,86 @@ export class DouyinCrawler {
           return { results, riskDetected: true, riskInfo: riskCheck };
         }
 
-        this.interceptor.clear(COMMENT_LIST_PATTERN);
+        // ── 快速预检：判断当前页面已加载的评论是否属于目标视频 ──
+        // 注意：先检查拦截器已缓存的响应再清空，避免丢失页面初始加载的评论数据
+        let allResponses: any[] = [];
+        {
+          const preCheckStart = Date.now();
 
-        // 打开"选择作品"抽屉 → 找到并点击视频
-        const drawerOpened = await this.openSelectWorkDrawer(page);
-        if (!drawerOpened) {
-          logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open drawer — skipping video');
-          results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Failed to open drawer' });
-          continue;
+          // 先检查拦截器是否已有评论 API 响应（页面加载时默认视频的评论可能已被缓存）
+          const existingCommentResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+          if (existingCommentResp.length > 0) {
+            const latestResp = existingCommentResp[existingCommentResp.length - 1];
+            const preComments = latestResp.body?.comments || [];
+            const hasTarget = preComments.some((c: any) => c.aweme_id === item.awemeId);
+            if (hasTarget) {
+              logger.info({ awemeId: item.awemeId, preCheckMs: Date.now() - preCheckStart }, '[Phase3] Target video already loaded (interceptor has response), skipping drawer');
+              allResponses = await this.collectAllCommentResponses(page);
+            } else {
+              logger.info({ awemeId: item.awemeId, preCheckMs: Date.now() - preCheckStart }, '[Phase3] Pre-check: interceptor response for different video, clearing');
+              this.interceptor.clear(COMMENT_LIST_PATTERN);
+              this.interceptor.clear(COMMENT_REPLY_PATTERN);
+            }
+          }
+
+          if (allResponses.length === 0) {
+            // 无匹配的缓存响应，检查页面 DOM
+            const commentInfo = await page.evaluate(() => {
+              const commentEls = document.querySelectorAll('[data-cid]');
+              const textEls = document.querySelectorAll('[class*="comment-content-text"]');
+              return { cidCount: commentEls.length, textCount: textEls.length };
+            });
+            const hasCommentContent = commentInfo.cidCount > 0 || commentInfo.textCount > 0;
+            logger.info({
+              awemeId: item.awemeId,
+              cidCount: commentInfo.cidCount,
+              textCount: commentInfo.textCount,
+              preCheckMs: Date.now() - preCheckStart,
+            }, '[Phase3] Pre-check: comment content on page');
+
+            if (hasCommentContent) {
+              // 页面有评论内容但拦截器无匹配响应 → 直接开抽屉，不浪费时间滚动触发 API
+              this.interceptor.clear(COMMENT_LIST_PATTERN);
+              this.interceptor.clear(COMMENT_REPLY_PATTERN);
+              logger.info({ awemeId: item.awemeId, preCheckMs: Date.now() - preCheckStart }, '[Phase3] Pre-check: page has comments but no matching API response, opening drawer');
+            } else {
+              logger.info({ awemeId: item.awemeId }, '[Phase3] Pre-check: no comment content on page, opening drawer directly');
+            }
+          }
         }
 
-        const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
-        if (!clicked) {
-          logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in drawer — manually closing and skipping');
-          await this.closeDrawer(page);
-          results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Video not found in drawer' });
-          continue;
+        if (allResponses.length === 0) {
+          // 打开"选择作品"抽屉 → 找到并点击视频
+          const drawerT0 = Date.now();
+          const drawerOpened = await this.openSelectWorkDrawer(page);
+          logger.info({ awemeId: item.awemeId, drawerMs: Date.now() - drawerT0 }, '[Phase3] Drawer open completed');
+          if (!drawerOpened) {
+            logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open drawer — skipping video');
+            results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Failed to open drawer' });
+            continue;
+          }
+
+          const clickT0 = Date.now();
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+          logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer video click completed');
+          if (!clicked) {
+            logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in drawer — manually closing and skipping');
+            await this.closeDrawer(page);
+            results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Video not found in drawer' });
+            continue;
+          }
+
+          const reactionDelay = 1200 + Math.random() * 1300;
+          logger.info({ awemeId: item.awemeId, reactionDelay: Math.round(reactionDelay) }, '[Phase3] Reaction pause — drawer auto-closes after video selection');
+          await HumanActions.wait(page, reactionDelay, reactionDelay + 100);
+
+          // 拦截并收集所有分页的评论 API 响应（滚动加载直到 has_more=false）
+          const collectT0 = Date.now();
+          allResponses = await this.collectAllCommentResponses(page);
+          logger.info({ awemeId: item.awemeId, collectMs: Date.now() - collectT0, responseCount: allResponses.length }, '[Phase3] Comment API collection completed');
         }
 
-        const reactionDelay = 1200 + Math.random() * 1300;
-        logger.info({ awemeId: item.awemeId, reactionDelay: Math.round(reactionDelay) }, '[Phase3] Reaction pause — drawer auto-closes after video selection');
-        await HumanActions.wait(page, reactionDelay, reactionDelay + 100);
-
-        // 拦截评论 API 响应
-        const response = await this.waitForCommentResponse(page);
-
-        if (!response) {
+        if (allResponses.length === 0) {
           logger.warn({ awemeId: item.awemeId }, '[Phase3] No comment API response received');
           const drawerStillOpen = await this.isDrawerVisible(page);
           if (drawerStillOpen) {
@@ -1386,15 +1513,26 @@ export class DouyinCrawler {
           continue;
         }
 
-        // 从响应中解析根评论快照
-        const currentSnapshots = this.parseRootCommentSnapshots(response.body);
+        // 合并所有分页的 comments
+        const allComments = allResponses.flatMap((r: any) => r.body?.comments || []);
+        const wrappedBody = { comments: allComments };
+        const pageCommentCounts = allResponses.map((r: any, i: number) => ({
+          page: i + 1,
+          comments: (r.body?.comments || []).length,
+          has_more: r.body?.has_more,
+          cursor: r.body?.cursor,
+        }));
+        logger.info({ awemeId: item.awemeId, pages: allResponses.length, totalComments: allComments.length, pageCommentCounts }, '[Tree] API response pages merged');
+
+        // 从合并后的全量数据解析快照
+        const currentSnapshots = this.parseRootCommentSnapshots(wrappedBody);
         logger.info({
           awemeId: item.awemeId,
           snapshotCount: currentSnapshots.length,
-          hasComments: Array.isArray(response.body?.comments),
-          commentCount: response.body?.comments?.length || 0,
-          bodyKeys: response.body ? Object.keys(response.body).join(',') : 'null',
-        }, '[Phase3] Root comment snapshots parsed from API response');
+          totalResponses: allResponses.length,
+          totalComments: allComments.length,
+          bodyKeys: allResponses.length > 0 && allResponses[0].body ? Object.keys(allResponses[0].body).join(',') : 'null',
+        }, '[Phase3] Root comment snapshots parsed from merged API responses');
 
         // 加载上次快照
         const lastSnapshots = await db.getRootCommentCounts(item.awemeId);
@@ -1407,32 +1545,90 @@ export class DouyinCrawler {
         const lastCheckTime = monitorStatus?.lastCheckTime?.getTime() || 0;
 
         const isFirstCrawl = item.isFirstCrawl || lastSnapshots.size === 0;
+        logger.info({
+          awemeId: item.awemeId,
+          isFirstCrawl,
+          queueFlag: item.isFirstCrawl,
+          snapshotCount: lastSnapshots.size,
+          lastCheckTime: lastCheckTime ? new Date(lastCheckTime).toISOString() : 'none',
+          newCommentCount: item.newCount,
+        }, '[Tree] Decision: isFirstCrawl=%s, proceeding to %s path', isFirstCrawl, isFirstCrawl ? 'first' : 'incremental');
+
+        // ════════════════════════════════════════
+        // 公共：展开子回复 + 收集 API 数据（首次和增量都用）
+        // ════════════════════════════════════════
+
+        // 使用智能滚动+展开函数处理评论区
+        // 始终运行 SmartScroll——即使当前快照显示无回复，滚动过程中可能出现新按钮
+        const rootsWithReplies = currentSnapshots.filter(s => s.replyCount > 0).length;
+        logger.info({ awemeId: item.awemeId, rootsWithReplies, snapshotCount: currentSnapshots.length }, '[Tree] SmartScroll check: %d roots have replies out of %d snapshots', rootsWithReplies, currentSnapshots.length);
+          // 诊断：检查展开按钮是否已渲染到 DOM
+          const btnDiagnostic = await page.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('*'));
+            let totalMatches = 0;
+            let leafMatches = 0;
+            const positions: Array<{ text: string; top: number; visible: boolean }> = [];
+            const viewportH = window.innerHeight;
+            for (const el of all) {
+              const t = (el.textContent || '').trim();
+              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+              totalMatches++;
+              const isLeaf = !Array.from(el.children).some(child =>
+                /^查看\d+条回复$/.test((child.textContent || '').trim())
+              );
+              if (!isLeaf) continue;
+              leafMatches++;
+              const rect = el.getBoundingClientRect();
+              positions.push({ text: t, top: Math.round(rect.top), visible: rect.top >= 0 && rect.bottom <= viewportH });
+            }
+            return { totalMatches, leafMatches, positions };
+          });
+          logger.info({ awemeId: item.awemeId, rootsWithReplies, btnTotalMatches: btnDiagnostic.totalMatches, btnLeafMatches: btnDiagnostic.leafMatches, btnPositions: btnDiagnostic.positions }, '[Phase3] Pre-SmartScroll expand button diagnostic');
+
+          logger.info({ awemeId: item.awemeId, rootsWithReplies }, '[Phase3] Starting smart scroll and expand');
+          const expandT0 = Date.now();
+          const expandResult = await this.smartScrollAndExpandReplies(page, item.awemeId);
+          logger.info({
+            awemeId: item.awemeId,
+            expandMs: Date.now() - expandT0,
+            totalExpanded: expandResult.totalExpanded,
+            totalLoadedMore: expandResult.totalLoadedMore,
+            scrollRounds: expandResult.scrollRounds,
+          }, '[Phase3] Smart scroll and expand complete');
+
+        // 收集扩展期间拦截器累积的所有响应（select + reply 两个 pattern）
+        const allCapturedResponses: any[] = [];
+        const responseByPattern: Record<string, number> = {};
+        for (const p of ALL_COMMENT_PATTERNS) {
+          const resp = this.interceptor.getResponses(p);
+          allCapturedResponses.push(...resp);
+          responseByPattern[p] = resp.length;
+        }
+        const expandedComments = allCapturedResponses.flatMap((r: any) => r.body?.comments || []);
+        const existingCids = new Set(allComments.map((c: any) => c.cid));
+        const trulyNew = expandedComments.filter((c: any) => !existingCids.has(c.cid));
+        const allApiComments: any[] = [...allComments, ...trulyNew];
+
+        logger.info({
+          awemeId: item.awemeId,
+          responseByPattern,
+          totalResponses: allCapturedResponses.length,
+          expandedTotal: expandedComments.length,
+          trulyNew,
+          duplicateCount: expandedComments.length - trulyNew.length,
+        }, '[Tree] Sub-reply responses collected after expand: %d total, %d truly new', expandedComments.length, trulyNew.length);
 
         if (isFirstCrawl) {
           // ════════════════════════════════════════
-          // 首次采集：保存快照 + 全量展开 + isNew=0
+          // 首次采集：保存快照 + isNew=0
           // ════════════════════════════════════════
 
-          // 保存快照到 VideoRootCommentCount
+          logger.info({ awemeId: item.awemeId, snapshotCount: currentSnapshots.length }, '[Tree] Phase3a: saving root snapshots');
           await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
-            cid: s.cid,
-            replyCount: s.replyCount,
+            cid: s.cid, replyCount: s.replyCount,
           })));
 
-          // 全量展开所有回复（触发 API 加载子回复数据）
-          await this.expandAllReplies(page, item.awemeId, currentSnapshots.map(s => s.cid));
-
-          // 重新等待 API 响应以获取 expandAllReplies 后加载的子回复数据
-          const expandedResponse = await this.waitForCommentResponse(page);
-
-          // 合并所有 API 响应中的评论（初始化 + 展开后）
-          const allApiComments: any[] = [
-            ...(response.body?.comments || []),
-            ...(expandedResponse?.body?.comments || []),
-          ];
-          logger.info({ awemeId: item.awemeId, apiCommentCount: allApiComments.length }, '[Phase3] API comments for tree construction');
-
-          // 从 API 数据直接构建评论树（不依赖 DOM 选择器，避免抖音前端变更影响）
+          // 从 API 数据构建评论树
           const rootComments = allApiComments.filter((c: any) => {
             const replyId = c.reply_id ?? '0';
             return replyId === 0 || replyId === '0' || replyId === null;
@@ -1441,70 +1637,42 @@ export class DouyinCrawler {
             const replyId = c.reply_id ?? '0';
             return replyId !== 0 && replyId !== '0' && replyId !== null;
           });
+          logger.info({ awemeId: item.awemeId, apiTotal: allApiComments.length, roots: rootComments.length, subs: subReplies.length }, '[Tree] Phase3b: comment tree split — roots=%d subs=%d', rootComments.length, subReplies.length);
 
-          logger.info({ awemeId: item.awemeId, roots: rootComments.length, subs: subReplies.length }, '[Phase3] Comments classified');
-
-          // 展平为 upsertCommentTree 所需格式
           const allFlat: Array<{
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
           }> = [];
 
-          // 根评论 (level=1)
           for (const root of rootComments) {
             allFlat.push({
-              cid: root.cid,
-              text: root.text || '',
-              user_nickname: root.user?.nickname || '',
-              user_uid: root.user?.uid || '',
-              digg_count: root.digg_count || 0,
-              create_time: root.create_time,
-              reply_id: '0',
-              level: 1,
+              cid: root.cid, text: root.text || '',
+              user_nickname: root.user?.nickname || '', user_uid: root.user?.uid || '',
+              digg_count: root.digg_count || 0, create_time: root.create_time,
+              reply_id: '0', level: 1,
             });
           }
-
-          // 子回复 (level=2)，按 root cid 分组
           for (const sub of subReplies) {
             const replyId = String(sub.reply_id ?? '0');
             allFlat.push({
-              cid: sub.cid,
-              text: sub.text || '',
-              user_nickname: sub.user?.nickname || '',
-              user_uid: sub.user?.uid || '',
-              digg_count: sub.digg_count || 0,
-              create_time: sub.create_time,
-              reply_id: replyId,
-              rootId: replyId,
-              parentId: replyId,
-              level: 2,
-              replyToName: sub.reply_to_username || '',
+              cid: sub.cid, text: sub.text || '',
+              user_nickname: sub.user?.nickname || '', user_uid: sub.user?.uid || '',
+              digg_count: sub.digg_count || 0, create_time: sub.create_time,
+              reply_id: replyId, rootId: replyId, parentId: replyId,
+              level: 2, replyToName: sub.reply_to_username || '',
             });
           }
 
-          // upsertCommentTree 创建时默认 isNew=1，首次采集需全部设为 0
+          const dbStart = Date.now();
           await db.upsertCommentTree(item.awemeId, allFlat);
-          await prisma.comment.updateMany({
-            where: { videoId: item.awemeId },
-            data: { isNew: 0 },
-          });
-
+          await prisma.comment.updateMany({ where: { videoId: item.awemeId }, data: { isNew: 0 } });
           await db.updateCommentCount(item.awemeId, item.newCount);
+          const dbMs = Date.now() - dbStart;
 
-          logger.info({
-            awemeId: item.awemeId,
-            totalComments: allFlat.length,
-            newComments: 0,
-            isFirstCrawl: true,
-          }, '[Phase3] First crawl complete — all comments saved as isNew=0');
+          logger.info({ awemeId: item.awemeId, totalComments: allFlat.length, roots: rootComments.length, subs: subReplies.length, isFirstCrawl: true, dbWriteMs: dbMs }, '[Tree] Phase3c: first crawl DB write complete — all comments saved as isNew=0 (%dms)', dbMs);
 
-          results.push({
-            awemeId: item.awemeId,
-            success: true,
-            comments: [],
-            commentGroups: [],
-          } as any);
+          results.push({ awemeId: item.awemeId, success: true, comments: [], commentGroups: [] } as any);
         } else {
           // ════════════════════════════════════════
           // 后续增量检测：对比快照 + 新增/变更加载
@@ -1523,11 +1691,21 @@ export class DouyinCrawler {
           const currentUser = await db.getUserById(item._userId!);
           const platformAuthorId = currentUser?.platformAuthorId;
 
+          logger.info({
+            awemeId: item.awemeId,
+            apiRootCount: apiRootCids.size,
+            dbRootCount: dbRootCids.size,
+            authorFilter: !!platformAuthorId,
+            lastCheckTime: lastCheckTime ? new Date(lastCheckTime).toISOString() : 'none',
+          }, '[Tree] Incremental: starting comparison — API roots=%d DB roots=%d', apiRootCids.size, dbRootCids.size);
+
           // ── 3a. 新增根评论 ──
+          let newRootsFrom3a = 0;
           for (const snapshot of currentSnapshots) {
             if (!dbRootCids.has(snapshot.cid)) {
               if (snapshot.createTime * 1000 > lastCheckTime) {
                 const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
+                newRootsFrom3a++;
                 newCommentsToUpsert.push({
                   cid: snapshot.cid,
                   text: snapshot.text,
@@ -1545,15 +1723,51 @@ export class DouyinCrawler {
             }
           }
 
+          logger.info({ awemeId: item.awemeId, newRootsFrom3a }, '[Tree] Incremental 3a: new root comments found=%d', newRootsFrom3a);
+
+          // ── 3b-0. 将 trulyNew 中的子评论直接计入 newSubs ──
+          let newSubsFromTrulyNew = 0;
+          for (const c of trulyNew) {
+            const replyId = c.reply_id ?? '0';
+            const isSub = replyId !== 0 && replyId !== '0' && replyId !== null;
+            if (!isSub) continue;
+            const createTime = c.create_time || 0;
+            if (createTime * 1000 <= lastCheckTime) continue;
+            const isAuthor = platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false;
+            if (isAuthor) continue;
+            newSubsFromTrulyNew++;
+            newCommentsToUpsert.push({
+              cid: String(c.cid || ''),
+              text: c.text || '',
+              user_nickname: c.user?.nickname || '',
+              user_uid: c.user?.uid || '',
+              digg_count: c.digg_count || 0,
+              create_time: createTime,
+              reply_id: String(replyId),
+              rootId: String(replyId),
+              parentId: String(replyId),
+              level: 2,
+              replyToName: c.reply_to_reply_id ? undefined : undefined,
+            });
+          }
+          if (newSubsFromTrulyNew > 0) {
+            logger.info({ awemeId: item.awemeId, count: newSubsFromTrulyNew }, '[Tree] Incremental 3b-0: new subs from API interceptor=%d', newSubsFromTrulyNew);
+          }
+
           // ── 3b. 根评论 replyCount 增加 → 局部展开 ──
+          let rootsWithReplyIncrease = 0;
+          let newSubsFrom3b = 0;
           for (const snapshot of currentSnapshots) {
             const lastCount = lastSnapshots.get(snapshot.cid);
             if (lastCount !== undefined && snapshot.replyCount > lastCount) {
+              rootsWithReplyIncrease++;
+              const diff = snapshot.replyCount - lastCount;
+              logger.info({ awemeId: item.awemeId, rootCid: snapshot.cid, oldReplyCount: lastCount, newReplyCount: snapshot.replyCount, diff }, '[Tree] Incremental 3b: replyCount increased for root');
               const replies = await this.expandRepliesForRoot(page, snapshot.cid);
               if (replies.length > 0) {
-                const apiReplies = response.body.comments?.filter(
+                const apiReplies = (allApiComments || []).filter(
                   (c: any) => String(c.reply_id) === snapshot.cid
-                ) || [];
+                );
 
                 for (const reply of replies) {
                   const apiMatch = apiReplies.find((c: any) => c.text?.includes(reply.text.slice(0, 10)));
@@ -1564,6 +1778,7 @@ export class DouyinCrawler {
                   if (createTime * 1000 > lastCheckTime) {
                     const isAuthor = platformAuthorId ? userUid === platformAuthorId : false;
                     if (!isAuthor) {
+                      newSubsFrom3b++;
                       newCommentsToUpsert.push({
                         cid: apiMatch?.cid || '',
                         text: reply.text,
@@ -1594,12 +1809,25 @@ export class DouyinCrawler {
           })));
 
           // ── 3e. 新评论入库（isNew=1 由 upsertCommentTree 自动设置）──
+          const dbStart = Date.now();
           if (newCommentsToUpsert.length > 0) {
             await db.upsertCommentTree(item.awemeId, newCommentsToUpsert);
           }
 
           // ── 3f. 更新 commentCount ──
           await db.updateCommentCount(item.awemeId, item.newCount);
+          const dbMs = Date.now() - dbStart;
+
+          logger.info({
+            awemeId: item.awemeId,
+            totalSnapshots: currentSnapshots.length,
+            newRoots: newRootsFrom3a,
+            newSubs: newSubsFromTrulyNew + newSubsFrom3b,
+            rootsWithReplyIncrease,
+            totalNewComments: newCommentsToUpsert.length,
+            isFirstCrawl: false,
+            dbWriteMs: dbMs,
+          }, '[Tree] Incremental complete: %d new roots + %d new subs (%d from API + %d from expand) = %d total, DB write %dms', newRootsFrom3a, newSubsFromTrulyNew + newSubsFrom3b, newSubsFromTrulyNew, newSubsFrom3b, newCommentsToUpsert.length, dbMs);
 
           // 构建 commentGroups 用于返回（只包含有新增的组）
           const involvedRootCids = new Set<string>();
@@ -1665,15 +1893,16 @@ export class DouyinCrawler {
           } as any);
         }
 
-        // 每个视频处理后，滚回页面顶部，确保"选择作品"按钮在可视范围内
-        await page.evaluate(() => { window.scrollTo(0, 0); });
-        await HumanActions.wait(page, 300, 500);
+      // 每个视频处理后关闭抽屉（抽屉打开时会自动定位到按钮，无需手动回顶）
+      const closeT0 = Date.now();
+      await this.closeDrawer(page).catch(() => {});
+      logger.info({ awemeId: item.awemeId, closeMs: Date.now() - closeT0 }, '[Phase3] Drawer close completed');
 
-        if (i < queue.length - 1) {
-          const transitionDelay = 1200 + Math.random() * 1300;
-          logger.info({ delayMs: Math.round(transitionDelay) }, '[Phase3] Transition pause before next video (human reaction time)');
-          await HumanActions.wait(page, transitionDelay, transitionDelay + 100);
-        }
+      if (i < queue.length - 1) {
+        const transitionDelay = 1200 + Math.random() * 1300;
+        logger.info({ delayMs: Math.round(transitionDelay) }, '[Phase3] Transition pause before next video (human reaction time)');
+        await HumanActions.wait(page, transitionDelay, transitionDelay + 100);
+      }
 
         if ((i + 1) % HumanActions.randomDelay(3, 5) === 0 && i < queue.length - 1) {
           const antiDetectDelay = HumanActions.randomDelay(10000, 20000);
@@ -1682,10 +1911,7 @@ export class DouyinCrawler {
         }
       }
     } finally {
-      if (commentListenerId) {
-        this.interceptor.unregister(commentListenerId);
-        logger.info('[Phase3] Comment API listener unregistered');
-      }
+      logger.info('[Phase3] Comment queue processing finished');
     }
 
     const elapsed = Date.now() - startTime;
@@ -1701,23 +1927,55 @@ export class DouyinCrawler {
     const selectWorkDef = getSelector('page.select-work-btn');
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const attemptT0 = Date.now();
       logger.info({ attempt }, '[Drawer] Attempting to open [选择作品] drawer');
 
-      // 使用 tryClickBySelector 统一处理（text优先 + CSS回退）
-      const clicked = await tryClickBySelector(page, selectWorkDef, { timeout: 10000 });
+      // 回顶部：hover 到主内容区域 → 鼠标滚轮向上滚
+      const scrollT0 = Date.now();
+      await HumanActions.withCDPContext(page, async (ctx) => {
+        const viewport = await ctx.cdp.getLayoutViewport();
+        const hoverX = Math.round(viewport.clientWidth * 0.6 + (Math.random() - 0.5) * 100);
+        const hoverY = Math.round(viewport.clientHeight * 0.4 + (Math.random() - 0.5) * 100);
+        await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+        await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+        for (let i = 0; i < 20; i++) {
+          await ctx.mouse.dispatchWheel(0, -(300 + Math.random() * 200));
+          await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
+        }
+      });
+      await HumanActions.wait(page, 500, 1000);
+      logger.info({ scrollMs: Date.now() - scrollT0 }, '[Drawer] Scroll-to-top completed');
+
+      // 精确定位评论管理页的"选择作品"按钮
+      const clickT0 = Date.now();
+      const clicked = await HumanActions.cdpClick(
+        page,
+        '.container-AFENbv button.douyin-creator-interactive-button-primary, .header-TONxG8 button',
+        { timeout: 8000 }
+      );
+      logger.info({ clickMs: Date.now() - clickT0, clicked }, '[Drawer] Button click completed');
 
       if (clicked) {
-        logger.info({ attempt }, '[Drawer] Button click succeeded, waiting for drawer');
+        const waitT0 = Date.now();
         await HumanActions.wait(page, 1500, 3000);
+        logger.info({ waitMs: Date.now() - waitT0 }, '[Drawer] Post-click wait completed');
 
+        const detectT0 = Date.now();
         const drawerVisible = await this.isDrawerVisible(page);
+        logger.info({ detectMs: Date.now() - detectT0, visible: drawerVisible }, '[Drawer] Visibility check completed');
         if (drawerVisible) {
-          logger.info('[Drawer] Drawer confirmed visible');
-          return true;
+          const contentT0 = Date.now();
+          const contentLoaded = await this.waitForDrawerContent(page);
+          logger.info({ contentMs: Date.now() - contentT0, loaded: contentLoaded }, '[Drawer] Content load wait completed');
+          if (contentLoaded) {
+            logger.info({ attemptMs: Date.now() - attemptT0 }, '[Drawer] Drawer confirmed visible with content loaded');
+            return true;
+          }
+          logger.warn({ attempt }, '[Drawer] Drawer visible but content not loaded — retrying');
+        } else {
+          logger.warn({ attempt }, '[Drawer] Click succeeded but drawer not detected — retrying');
         }
-
-        logger.warn({ attempt }, '[Drawer] Click succeeded but drawer not detected by selectors, proceeding anyway');
-        return true;
+        // 不 return true，继续重试
       } else {
         logger.warn({ attempt }, '[Drawer] All click methods failed');
         await HumanActions.wait(page, 1000, 2000);
@@ -1730,28 +1988,78 @@ export class DouyinCrawler {
 
   private async isDrawerVisible(page: Page): Promise<boolean> {
     try {
-      // 使用管理的选择器检测抽屉可见性
+      // 检测抽屉遮罩层：通过 evaluate 判断元素是否存在且宽高 > 0
+      const hasMask = await page.evaluate(() => {
+        const maskSelectors = [
+          '.douyin-creator-interactive-sidesheet-mask',
+          '[class*="semi-sidesheet-mask"]',
+          '[class*="drawer-mask"]',
+          '[class*="sidesheet-mask"]',
+        ];
+        for (const sel of maskSelectors) {
+          const el = document.querySelector(sel) as HTMLElement | null;
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.width > 50 && rect.height > 50) {
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      if (hasMask) {
+        logger.info('Drawer detected: mask element visible');
+        return true;
+      }
+
+      // 回退：检测抽屉侧面板或内容区
       const drawerSelectors = [
         getSelector('drawer.portal').css,
         getSelector('drawer.sidesheet').css,
         getSelector('drawer.content').css,
-        '.semi-sidesheet-visible',
-        '.semi-modal-content',
       ].filter(Boolean) as string[];
 
       for (const selector of drawerSelectors) {
         const visible = await HumanActions.cdpIsElementVisible(page, selector);
         if (visible) {
-          logger.info({ selector }, 'Drawer detected as visible');
+          logger.info({ selector }, 'Drawer detected: panel element visible');
+          return true;
+        }
+      }
+
+      // 最终回退：检查 body 是否有 overflow:hidden（抽屉打开时 body 会被锁定）
+      const bodyOverflow = await page.evaluate(() => {
+        const body = document.body;
+        const style = body?.getAttribute('style') || '';
+        return style.includes('overflow: hidden') || style.includes('overflow:hidden');
+      });
+      if (bodyOverflow) {
+        // body 被锁定但需要排除正常页面滚动锁定
+        // 检查是否有 video-info 元素（抽屉内特有）
+        const hasVideoInfo = await page.evaluate(() => {
+          return document.querySelectorAll('.video-info, [class*="douyin-creator-interactive-list-items"] > div').length > 0;
+        });
+        if (hasVideoInfo) {
+          logger.info('Drawer detected: body locked + video items present');
           return true;
         }
       }
 
       try {
         const bodyText = await HumanActions.cdpGetBodyText(page);
-        if (bodyText.includes('选择作品') && (bodyText.includes('评论数') || bodyText.includes('发布于'))) {
-          logger.info('Drawer content detected via body text (选择作品 + 评论数/发布于)');
-          return true;
+        // "选择作品" 在主页面就存在，不能作为抽屉判断依据
+        // 改用抽屉内特有的视频条目文本（"发布于" + "评论数" 同时出现说明是抽屉视频列表）
+        if (bodyText.includes('发布于') && bodyText.includes('评论数') && bodyText.includes('选择作品')) {
+          // 额外检查：主页面评论区通常不会有"发布于"文字，只有抽屉视频列表才有
+          const hasDrawerVideoItems = await page.evaluate(() => {
+            // 检查是否有抽屉特有的视频条目（非主页面内容）
+            const items = document.querySelectorAll('[class*="video-item"], [class*="douyin-creator-interactive-list-items"] > div, [class*="work-item"]');
+            return items.length > 0;
+          });
+          if (hasDrawerVideoItems) {
+            logger.info('Drawer content detected via body text + video items');
+            return true;
+          }
         }
       } catch {}
 
@@ -1759,6 +2067,44 @@ export class DouyinCrawler {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Wait for drawer video list content to load.
+   * Checks for video item containers inside the drawer.
+   */
+  private async waitForDrawerContent(page: Page): Promise<boolean> {
+    const maxWait = 8000;
+    const interval = 500;
+    const start = Date.now();
+
+    while (Date.now() - start < maxWait) {
+      const hasContent = await page.evaluate(() => {
+        // Check for any video item containers in the drawer
+        const selectors = [
+          '[class*="douyin-creator-interactive-list-items"] > div',
+          '[class*="video-item"]',
+          '[class*="work-item"]',
+          '[class*="content-item"]',
+          '.video-info',
+        ];
+        for (const sel of selectors) {
+          const els = document.querySelectorAll(sel);
+          if (els.length > 0) return true;
+        }
+        return false;
+      });
+
+      if (hasContent) {
+        logger.info({ elapsed: Date.now() - start }, '[Drawer] Video items detected in drawer');
+        return true;
+      }
+
+      await HumanActions.wait(page, interval, interval + 100);
+    }
+
+    logger.warn({ elapsed: Date.now() - start }, '[Drawer] Timed out waiting for video items');
+    return false;
   }
 
   private async closeDrawer(page: Page): Promise<boolean> {
@@ -1810,7 +2156,7 @@ export class DouyinCrawler {
     awemeId: string,
     description: string
   ): Promise<boolean> {
-    const MAX_SCROLL_ATTEMPTS_DRAWER = 20;
+    const MAX_SCROLL_ATTEMPTS_DRAWER = 25;
     const descLower = description.toLowerCase();
     const descPrefix = descLower.substring(0, Math.min(descLower.length, 25));
 
@@ -1819,7 +2165,7 @@ export class DouyinCrawler {
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      const containerSelector = getSelector('drawer.video-item').css || '.container-Lkxos9';
+      const containerSelector = getSelector('drawer.video-item').css || '[class*="douyin-creator-interactive-list-items"] > div';
       const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
       if (!containerElements || containerElements.length === 0) {
         logger.info({ scrollAttempt }, '[Drawer] No video containers found in current viewport');
@@ -1878,7 +2224,8 @@ export class DouyinCrawler {
   }
 
   private async tryClickMatchedContainer(page: Page, descLower: string, descPrefix: string): Promise<boolean> {
-    const containerElements = await HumanActions.queryElementsWithInfo(page, '.container-Lkxos9');
+    const containerSelector = getSelector('drawer.video-item').css || '[class*="douyin-creator-interactive-list-items"] > div';
+    const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
     if (!containerElements) return false;
 
     for (const container of containerElements) {
@@ -1896,7 +2243,7 @@ export class DouyinCrawler {
 
       logger.info('[Drawer] Container click failed, trying title node');
 
-      const titleSelector = getSelector('drawer.video-title').css || '.title-LUOP3b';
+      const titleSelector = getSelector('drawer.video-title').css || '[class*="douyin-creator-interactive-list-items"] [class*="title-"]';
       const titleEls = await HumanActions.queryElementsWithInfo(page, titleSelector);
       if (titleEls) {
         for (const titleEl of titleEls) {
@@ -1916,34 +2263,553 @@ export class DouyinCrawler {
     return false;
   }
 
+  /**
+   * 滚动抽屉：hover 到抽屉容器 → 模拟鼠标滚轮
+   */
   private async scrollDrawerForMore(page: Page, scrollAttempt: number): Promise<void> {
     logger.info({ scrollAttempt }, '[Drawer] Scrolling drawer to load more videos');
 
-    // 使用选择器配置中的 drawer scroll 选择器
-    const drawerScrollDef = getSelector('scroll.drawer');
-    const drawerContentDef = getSelector('drawer.content');
-
-    const drawerScrollSelectors = [
-      drawerScrollDef.css || drawerScrollDef.text || '',
-      drawerContentDef.css || drawerContentDef.text || '',
+    const drawerSelectors = [
       '.douyin-creator-interactive-sidesheet-body',
-    ].filter(Boolean) as string[];
+      '[class*="sidesheet-body"]',
+      'ul.douyin-creator-interactive-list-items',
+      '.drawer__content',
+    ];
 
-    const scrollContainer = await HumanActions.cdpFindScrollContainer(page, drawerScrollSelectors);
-    if (scrollContainer) {
-      logger.info({ selector: scrollContainer.sel }, '[Drawer] Scrolling drawer container');
-      await HumanActions.cdpSmartScroll(page, [scrollContainer.sel], 250, 'down');
-    } else {
-      const bodyCss = drawerContentDef.css || '.douyin-creator-interactive-sidesheet-body';
-      logger.info({ fallback: bodyCss }, '[Drawer] No scroll container found, trying fallback on drawer body');
-      await HumanActions.cdpSmartScroll(page, [bodyCss], 250, 'down');
-    }
+    await HumanActions.withCDPContext(page, async (ctx) => {
+      // 0. 刷新 CDP DOM 树（抽屉刚打开，旧树可能找不到抽屉容器）
+      await ctx.dom.refreshDocument();
+
+      // 1. 找到抽屉滚动容器
+      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
+      for (const sel of drawerSelectors) {
+        const nodeId = await ctx.cdp.querySelector(sel);
+        if (nodeId && nodeId > 0) {
+          const box = await ctx.cdp.getBoxModel(nodeId);
+          if (box && box.width > 0 && box.height > 0) {
+            containerRect = {
+              x: box.content[0],
+              y: box.content[1],
+              width: box.width,
+              height: box.height,
+            };
+            logger.info({ selector: sel }, '[Drawer] Found scrollable drawer container');
+            break;
+          }
+        }
+      }
+
+      if (!containerRect) {
+        logger.warn('[Drawer] No scrollable drawer container found');
+        return;
+      }
+
+      // 2. hover 到抽屉容器底部区域（滚动方向向下，鼠标靠近底部更容易触发滚动）
+      const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
+      const hoverY = Math.round(containerRect.y + containerRect.height * (0.6 + Math.random() * 0.2));
+      await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+
+      // 3. 分段滚动：每次滚 150-250px，段间等待 500-800ms 让无限滚动加载新内容
+      const segments = 2 + Math.floor(Math.random() * 2); // 2-3 段
+      for (let seg = 0; seg < segments; seg++) {
+        const segAmount = 150 + Math.random() * 100;
+        let remaining = segAmount;
+        while (remaining > 0) {
+          const step = Math.min(50 + Math.random() * 50, remaining);
+          await ctx.mouse.dispatchWheel(0, step);
+          remaining -= step;
+          await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
+        }
+        // 段间等待，让无限滚动触发加载
+        if (seg < segments - 1) {
+          await new Promise(r => setTimeout(r, 500 + Math.random() * 300));
+        }
+      }
+
+      logger.info({ segments }, '[Drawer] Drawer scrolled incrementally via hover + wheel');
+    });
 
     await HumanActions.wait(page, 1000, 2000);
   }
 
-  private async waitForCommentResponse(page: Page): Promise<InterceptedResponse | null> {
-    const timeout = 20000;
+  /**
+   * 点击视口内的"查看N条回复"按钮（page.evaluate 定位 + CDP 鼠标点击）
+   * 不用 cdpClickByText，因为 performSearch 不支持正则匹配
+   * @returns 点击的按钮文本，或 null
+   */
+  private async clickExpandButton(page: Page): Promise<string | null> {
+    const btnPos = await page.evaluate(() => {
+      const viewportH = window.innerHeight;
+      const all = Array.from(document.querySelectorAll('*'));
+      for (const el of all) {
+        const t = (el.textContent || '').trim();
+        if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+        const isLeaf = !Array.from(el.children).some(child =>
+          /^查看\d+条回复$/.test((child.textContent || '').trim())
+        );
+        if (!isLeaf) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.top >= 0 && rect.bottom <= viewportH && rect.width > 0 && rect.height > 0) {
+          return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), text: t };
+        }
+      }
+      return null;
+    });
+
+    if (!btnPos) return null;
+
+    await HumanActions.withCDPContext(page, async (ctx) => {
+      await ctx.mouse.moveTo({ x: btnPos.x, y: btnPos.y });
+      await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+      await ctx.mouse.clickAt(btnPos.x, btnPos.y);
+    });
+
+    logger.info({ text: btnPos.text, x: btnPos.x, y: btnPos.y }, '[Expand] Clicked expand button');
+    return btnPos.text;
+  }
+
+  /**
+   * 滚动评论区加载所有分页的评论 API 响应
+   * 抖音评论 API /comment/list/select 每页返回最多 ~10 条，
+   * 需要通过滚动触发后续分页请求，直到 has_more === 0
+   */
+  /**
+   * Scroll the comment-area container by setting its scrollTop directly.
+   * This is far more reliable than `End` key + cdpSmartScroll because:
+   *  - `End` key scrolls the PAGE (body), not the comment scroll container
+   *  - cdpSmartScroll selectors (`[class*="comment"] [class*="scroll"]`) may resolve
+   *    to individual `[data-cid]` elements (not scrollable) → falls back to page scroll
+   *  - Direct scrollTop always targets the correct overflow container
+   */
+  /**
+   * 滚动评论容器：hover 到容器上 → 模拟鼠标滚轮
+   * 比直接修改 scrollTop 更拟人，且滚动事件精准命中目标容器
+   */
+  private async scrollCommentArea(page: Page, direction: 'bottom' | 'top' | number): Promise<boolean> {
+    const t0 = Date.now();
+    const selectors = [
+      '.douyin-creator-interactive-tabs-content',
+      '[class*="tabs-content"][class*="top"]',
+      '[class*="tabs-pane-active"]',
+    ];
+
+    return await HumanActions.withCDPContext(page, async (ctx) => {
+      // 0. 刷新 CDP DOM 树（抽屉关闭后页面结构变化，旧树找不到容器）
+      const t1 = Date.now();
+      await ctx.dom.refreshDocument();
+      const t2 = Date.now();
+      logger.info({ refreshMs: t2 - t1 }, '[scrollCommentArea] refreshDocument');
+
+      // 1. 找到评论滚动容器
+      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
+      for (const sel of selectors) {
+        const nodeId = await ctx.cdp.querySelector(sel);
+        if (nodeId && nodeId > 0) {
+          const box = await ctx.cdp.getBoxModel(nodeId);
+          if (box && box.width > 0 && box.height > 0) {
+            containerRect = {
+              x: box.content[0],
+              y: box.content[1],
+              width: box.width,
+              height: box.height,
+            };
+            break;
+          }
+        }
+      }
+
+      const t3 = Date.now();
+      logger.info({ queryMs: t3 - t2 }, '[scrollCommentArea] querySelector loop');
+
+      if (!containerRect) {
+        logger.warn('[scrollCommentArea] Container not found, falling back to cdpSmartScroll');
+        await HumanActions.cdpSmartScroll(page, selectors, direction === 'top' ? 99999 : direction === 'bottom' ? 99999 : Math.abs(direction), direction === 'top' ? 'up' : 'down');
+        return true;
+      }
+
+      // 2. hover 到容器中心（带随机偏移，模拟人类鼠标位置）
+      const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
+      const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
+      await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+      const t4 = Date.now();
+      logger.info({ hoverMs: t4 - t3 }, '[scrollCommentArea] mouse hover');
+      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+
+      // 3. 模拟鼠标滚轮（减少 CDP 调用次数，每次滚动量增大）
+      if (direction === 'top') {
+        // 5-8 次向上滚，每次 1000-2000px（CDP mouseWheel 支持大 delta）
+        const scrollCount = 5 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < scrollCount; i++) {
+          await ctx.mouse.dispatchWheel(0, -(1000 + Math.random() * 1000));
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        }
+      } else if (direction === 'bottom') {
+        const scrollCount = 5 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < scrollCount; i++) {
+          await ctx.mouse.dispatchWheel(0, 1000 + Math.random() * 1000);
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        }
+      } else {
+        const dir = direction >= 0 ? 1 : -1;
+        let remaining = Math.abs(direction);
+        while (remaining > 0) {
+          const step = Math.min(200 + Math.random() * 200, remaining);
+          await ctx.mouse.dispatchWheel(0, step * dir);
+          remaining -= step;
+          await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+      logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
+      return true;
+    });
+  }
+
+  /**
+   * 智能滚动评论区并展开所有回复
+   * 整合滚动加载和展开回复功能，确保所有评论内容完整加载
+   * @param page 浏览器页面
+   * @param awemeId 视频ID（用于日志）
+   * @returns 展开的回复数量统计
+   */
+  private async smartScrollAndExpandReplies(page: Page, awemeId: string): Promise<{
+    totalExpanded: number;
+    totalLoadedMore: number;
+    scrollRounds: number;
+  }> {
+    const result = { totalExpanded: 0, totalLoadedMore: 0, scrollRounds: 0 };
+    const MAX_SCROLL_ROUNDS = 30;
+    const MAX_EXPAND_ROUNDS = 20;
+    const MAX_LOAD_MORE_PER_ROOT = 10;
+    const processedCids = new Set<string>();
+
+    const smartT0 = Date.now();
+    logger.info({ awemeId }, '[SmartScroll] Starting intelligent comment scroll and expand');
+
+    // 重置评论区滚动到顶部
+    await this.scrollCommentArea(page, 'top');
+    await HumanActions.wait(page, 500, 800);
+    logger.info({ awemeId, topScrollMs: Date.now() - smartT0 }, '[SmartScroll] Scroll-to-top completed');
+
+    // 预扫描：检查是否有展开按钮被隐藏在视窗外
+    // 如果有，通过 cdpSmartScroll 滚动评论区域将按钮带到可见位置
+    const preScrollResult = await page.evaluate(() => {
+      const viewportH = window.innerHeight;
+      const all = Array.from(document.querySelectorAll('*'));
+      for (const el of all) {
+        const t = (el.textContent || '').trim();
+        if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+        const isLeaf = !Array.from(el.children).some(child =>
+          /^查看\d+条回复$/.test((child.textContent || '').trim())
+        );
+        if (!isLeaf) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.top < 0 || rect.bottom > viewportH) {
+          return { found: true, scrolled: true, top: Math.round(rect.top) };
+        }
+      }
+      return { found: false };
+    });
+
+    if (preScrollResult.found && preScrollResult.scrolled) {
+      // 向下滚动评论区域以将按钮带入视窗（直接操作 scrollTop，避免 wheel 事件滚页面 body）
+      await this.scrollCommentArea(page, 300);
+      logger.info({ awemeId, buttonTop: preScrollResult.top }, '[SmartScroll] Expand button outside viewport, scrolled into view');
+      await HumanActions.wait(page, 500, 800);
+    }
+
+    for (let scrollRound = 0; scrollRound < MAX_SCROLL_ROUNDS; scrollRound++) {
+      result.scrollRounds = scrollRound + 1;
+      logger.info({ awemeId, scrollRound: scrollRound + 1 }, '[SmartScroll] Scroll round starting');
+
+      // ════════════════════════════════════════
+      // 阶段1：检测并点击视窗内的展开按钮
+      // ════════════════════════════════════════
+      let expandClicked = 0;
+      for (let expandRound = 0; expandRound < MAX_EXPAND_ROUNDS; expandRound++) {
+        // 诊断：统计所有"查看N条回复"按钮的匹配和过滤情况（只读）
+        const expandResult = await page.evaluate(() => {
+          const viewportH = window.innerHeight;
+
+          // 找到评论滚动容器
+          const scrollContainer = (
+            document.querySelector('.douyin-creator-interactive-tabs-content') ||
+            document.querySelector('[class*="tabs-pane-active"]')
+          ) as HTMLElement | null;
+          const containerRect = scrollContainer?.getBoundingClientRect();
+
+          // Diagnostic: count ALL text matches and track why they're filtered
+          let totalMatches = 0;
+          let leafMatches = 0;
+          let viewportFiltered = 0;
+          let containerFiltered = 0;
+          const diagnostics: Array<{ text: string; top: number; bottom: number; containerTop: number; containerBottom: number; reason: string }> = [];
+
+          const all = Array.from(document.querySelectorAll('*'));
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            // 匹配"查看N条回复"格式
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            totalMatches++;
+
+            // 检查是否是叶子元素（避免重复点击父容器）
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            leafMatches++;
+
+            // 检查元素是否在视窗内 且 在滚动容器的可见区域内
+            const rect = el.getBoundingClientRect();
+            if (rect.top < 0 || rect.bottom > viewportH) {
+              viewportFiltered++;
+              diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: containerRect ? Math.round(containerRect.top) : -1, containerBottom: containerRect ? Math.round(containerRect.bottom) : -1, reason: 'viewport' });
+              continue;
+            }
+            if (containerRect && (rect.top < containerRect.top || rect.bottom > containerRect.bottom)) {
+              containerFiltered++;
+              diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: Math.round(containerRect.top), containerBottom: Math.round(containerRect.bottom), reason: 'container' });
+              continue;
+            }
+          }
+          return { totalMatches, leafMatches, viewportFiltered, containerFiltered, diagnostics };
+        });
+
+        // Log diagnostics for debugging expand button detection
+        if (expandRound === 0 && expandResult.totalMatches > 0) {
+          logger.info({
+            awemeId,
+            totalMatches: expandResult.totalMatches,
+            leafMatches: expandResult.leafMatches,
+            viewportFiltered: expandResult.viewportFiltered,
+            containerFiltered: expandResult.containerFiltered,
+          }, '[SmartScroll] Expand button scan diagnostics');
+          if (expandResult.diagnostics.length > 0) {
+            logger.info({ awemeId, diagnostics: expandResult.diagnostics }, '[SmartScroll] Filtered expand buttons detail');
+          }
+        }
+
+        // 用 page.evaluate 找到视口内展开按钮的坐标，再用 CDP 鼠标点击
+        let clicked = 0;
+        const btnPos = await page.evaluate(() => {
+          const viewportH = window.innerHeight;
+          const all = Array.from(document.querySelectorAll('*'));
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.top >= 0 && rect.bottom <= viewportH && rect.width > 0 && rect.height > 0) {
+              return {
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                text: t,
+              };
+            }
+          }
+          return null;
+        });
+
+        if (btnPos) {
+          // CDP 鼠标点击：先 hover 到按钮 → 等待 → 点击
+          const cdpClicked = await HumanActions.withCDPContext(page, async (ctx) => {
+            await ctx.mouse.moveTo({ x: btnPos.x, y: btnPos.y });
+            await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+            await ctx.mouse.clickAt(btnPos.x, btnPos.y);
+            return true;
+          });
+          if (cdpClicked) {
+            clicked = 1;
+            logger.info({ text: btnPos.text, x: btnPos.x, y: btnPos.y }, '[SmartScroll] Expand button clicked via CDP');
+          }
+        }
+        if (clicked === 0) break;
+
+        expandClicked += clicked;
+        result.totalExpanded += clicked;
+        logger.info({ awemeId, expandRound: expandRound + 1, clicked, total: result.totalExpanded }, '[SmartScroll] Expand buttons clicked');
+
+        await HumanActions.wait(page, 1500, 2500);
+
+        // ════════════════════════════════════════
+        // 阶段2：处理超过10条回复的多次展开
+        // ════════════════════════════════════════
+        for (let loadMore = 0; loadMore < MAX_LOAD_MORE_PER_ROOT; loadMore++) {
+          // 先检查是否有展开按钮存在（只读）
+          const hasMoreBtn = await page.evaluate(() => {
+            const all = Array.from(document.querySelectorAll('*'));
+            for (const el of all) {
+              const t = (el.textContent || '').trim();
+              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+              const isLeaf = !Array.from(el.children).some(child =>
+                /^查看\d+条回复$/.test((child.textContent || '').trim())
+              );
+              if (isLeaf) return true;
+            }
+            return false;
+          });
+
+          if (!hasMoreBtn) break;
+
+          // 先滚动评论区域使按钮可见（直接操作 scrollTop）
+          await this.scrollCommentArea(page, 150);
+
+          // 使用 page.evaluate + CDP 鼠标点击
+          const moreClicked = await this.clickExpandButton(page);
+
+          if (!moreClicked) break;
+
+          result.totalLoadedMore++;
+          logger.info({ awemeId, loadMoreRound: loadMore + 1 }, '[SmartScroll] Loaded more replies');
+          await HumanActions.wait(page, 800, 1500);
+        }
+      }
+
+      // ════════════════════════════════════════
+      // 阶段3：滚动评论区加载更多内容
+      // ════════════════════════════════════════
+      const scrollHeight = await page.evaluate(() => {
+        const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
+        return container ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop, clientHeight: container.clientHeight } : null;
+      });
+
+      if (!scrollHeight) {
+        logger.warn({ awemeId }, '[SmartScroll] Comment container not found, stopping');
+        break;
+      }
+
+      const wasAtBottom = scrollHeight.scrollTop + scrollHeight.clientHeight >= scrollHeight.scrollHeight - 10;
+
+      // 如果已经在底部且没有展开新内容，说明已加载完所有评论
+      // 但在第一轮且没有展开任何按钮时，先做一次完整的滚动搜索（可能按钮在下方）
+      if (wasAtBottom && expandClicked === 0) {
+        if (scrollRound === 0 && result.totalExpanded === 0) {
+          // 第一轮就到底了且没有展开按钮 — 可能是按钮在折叠区域
+          // 检查DOM中是否有未展开的按钮（不管是否在可视区域）
+          const hiddenBtnCount = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll('*')).filter(el => {
+              const t = (el.textContent || '').trim();
+              if (!/^查看\d+条回复$/.test(t)) return false;
+              if (!(el instanceof HTMLElement)) return false;
+              const isLeaf = !Array.from(el.children).some(child =>
+                /^查看\d+条回复$/.test((child.textContent || '').trim())
+              );
+              return isLeaf;
+            }).length;
+          });
+          if (hiddenBtnCount > 0) {
+            logger.info({ awemeId, hiddenBtnCount }, '[SmartScroll] Hidden expand buttons found, scrolling to reveal');
+            // 滚动到评论区域中间位置来揭示隐藏的按钮
+            await this.scrollCommentArea(page, 300);
+            await HumanActions.wait(page, 500, 800);
+            continue;
+          }
+        }
+        logger.info({ awemeId, scrollRound: scrollRound + 1 }, '[SmartScroll] Reached bottom with no new content — all comments loaded');
+        break;
+      }
+
+      // 滚动一个视窗高度的距离
+      const scrollAmount = scrollHeight.clientHeight * 0.8;
+      await this.scrollCommentArea(page, scrollAmount);
+      await HumanActions.wait(page, 1000, 1500);
+
+      // 记录当前页面评论数（用于诊断）
+      const currentCids = await page.evaluate(() => {
+        const containers = document.querySelectorAll('[data-cid]');
+        return Array.from(containers).map(el => el.getAttribute('data-cid')).filter(Boolean) as string[];
+      });
+      currentCids.forEach(cid => processedCids.add(cid));
+
+      // 记录本轮结束后仍有展开按钮的 cid（这些下一轮仍可展开）
+      const remainingExpandCids = await page.evaluate(() => {
+        const expandable: string[] = [];
+        const all = document.querySelectorAll('*');
+        for (const el of all) {
+          const t = (el.textContent || '').trim();
+          if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+          const isLeaf = !Array.from(el.children).some(child =>
+            /^查看\d+条回复$/.test((child.textContent || '').trim())
+          );
+          if (!isLeaf) continue;
+          const parent = el.closest('[data-cid]');
+          const cid = parent?.getAttribute('data-cid');
+          if (cid) expandable.push(cid);
+        }
+        return [...new Set(expandable)];
+      });
+
+      logger.info({ awemeId, scrollRound: scrollRound + 1, expandClicked, totalCids: processedCids.size, remainingExpandable: remainingExpandCids.length, remainingCids: remainingExpandCids }, '[SmartScroll] Scroll round complete');
+    }
+
+    // 最终记录
+    const finalCids = await page.evaluate(() => {
+      const containers = document.querySelectorAll('[data-cid]');
+      return containers.length;
+    });
+
+    logger.info({
+      awemeId,
+      totalExpanded: result.totalExpanded,
+      totalLoadedMore: result.totalLoadedMore,
+      scrollRounds: result.scrollRounds,
+      totalComments: finalCids,
+    }, '[SmartScroll] Smart scroll and expand complete');
+
+    return result;
+  }
+
+  private async collectAllCommentResponses(page: Page): Promise<InterceptedResponse[]> {
+    const allResponses: InterceptedResponse[] = [];
+    let response = await this.waitForCommentResponse(page);
+    if (!response) return [];
+    allResponses.push(response);
+
+    const MAX_COMMENT_PAGES = 10;
+    for (let pageNum = 1; pageNum < MAX_COMMENT_PAGES; pageNum++) {
+      const lastResp = allResponses[allResponses.length - 1];
+      const hasMore = lastResp?.body?.has_more ?? 0;
+      if (!hasMore) {
+        logger.info({ pages: allResponses.length }, '[Phase3] All comment pages loaded');
+        break;
+      }
+
+      logger.info({ page: pageNum + 1, cursor: lastResp?.body?.cursor }, '[Phase3] Scrolling to load more comments');
+
+      // Scroll the comment-area container to its bottom via direct scrollTop.
+      // This reliably triggers pagination because it targets the actual overflow
+      // container instead of relying on `End` key (which may hit the page body).
+      const scrolled = await this.scrollCommentArea(page, 'bottom');
+      if (!scrolled) {
+        // Fallback: End key + cdpSmartScroll (for unusual DOM layouts)
+        logger.warn('[Phase3] Comment scroll container not found — falling back to End key');
+        await HumanActions.cdpKeyPress(page, 'End', 'End', 35);
+        await HumanActions.wait(page, 300, 500);
+        await HumanActions.cdpSmartScroll(page, [
+          '.douyin-creator-interactive-tabs-content',
+          '[class*="tabs-pane-active"]',
+        ], 500, 'down');
+      }
+      await HumanActions.wait(page, 1500, 2500);
+
+      response = await this.waitForCommentResponse(page);
+      if (response) {
+        allResponses.push(response);
+      } else {
+        logger.info({ page: pageNum + 1 }, '[Phase3] No more comment responses');
+        break;
+      }
+    }
+
+    return allResponses;
+  }
+
+  private async waitForCommentResponse(page: Page, timeout: number = 20000): Promise<InterceptedResponse | null> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
@@ -1958,5 +2824,249 @@ export class DouyinCrawler {
 
     logger.warn({ timeout }, '[Phase3] Comment API response wait timed out');
     return null;
+  }
+
+  /** Short-timeout variant for the pre-check phase (avoids wasting 20s when comments are stale). */
+  private async waitForCommentResponseShort(page: Page, timeout: number = 5000): Promise<InterceptedResponse | null> {
+    return this.waitForCommentResponse(page, timeout);
+  }
+
+  // ════════════════════════════════════════
+  // 回复评论（拟人化 CDP 操作）
+  // ════════════════════════════════════════
+
+  /**
+   * 拟人化回复评论
+   * 流程：定位目标评论 → 点击回复按钮 → 输入内容 → 点击发送 → 验证结果
+   * 基于调研报告：DOM 无 data-cid，通过文本内容匹配定位评论
+   */
+  async replyToComment(
+    page: Page,
+    commentText: string,
+    replyText: string,
+  ): Promise<boolean> {
+    logger.info({ commentText: commentText.slice(0, 30), textLength: replyText.length }, '[Reply] Starting douyin reply');
+
+    try {
+      // 模拟人类思考时间
+      await HumanActions.thinkingPause(page, 800, 2000);
+
+      // Step 0: 展开所有”查看N条回复”链接，确保子评论可见
+      const expandCount = await this.expandAllReplyThreads(page);
+      if (expandCount > 0) {
+        logger.info({ expandCount }, '[Reply] Expanded sub-comment threads');
+        await HumanActions.wait(page, 500, 1000);
+      }
+
+      // Step 1: 定位目标评论容器（通过文本匹配，data-cid 已失效）
+      // 同时匹配一级评论和子评论的容器
+      const containerCsses = [
+        '[class*=”container-sXKyMs”]',        // 一级评论
+        '[class*=”reply-item”]',               // 子评论容器
+        '[class*=”sub-reply”]',                // 子回复变体
+        '[class*=”container-”] [class*=”comment-content-text”]', // 评论文本兜底
+      ];
+      let targetNodeId: number | null = null;
+      let targetContainerText = '';
+
+      for (const containerCss of containerCsses) {
+        if (targetNodeId) break;
+        const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
+        for (const c of containers) {
+          if (c.text && c.text.includes(commentText)) {
+            targetNodeId = c.nodeId;
+            targetContainerText = c.text;
+            break;
+          }
+        }
+      }
+
+      if (!targetNodeId) {
+        // 最后尝试：直接搜索包含目标文本的任意容器
+        const allContainers = await HumanActions.queryElementsWithInfo(page, '[class*=”container”]');
+        for (const c of allContainers) {
+          if (c.text && c.text.includes(commentText)) {
+            targetNodeId = c.nodeId;
+            targetContainerText = c.text;
+            break;
+          }
+        }
+      }
+
+      if (!targetNodeId) {
+        logger.warn({ commentText: commentText.slice(0, 30) }, '[Reply] Target comment not found by text match, using first container');
+        const containers = await HumanActions.queryElementsWithInfo(page, '[class*=”container-sXKyMs”]');
+        if (containers.length > 0) targetNodeId = containers[0].nodeId;
+        else {
+          logger.error('[Reply] No comment containers found');
+          return false;
+        }
+      } else {
+        logger.info({ commentText: commentText.slice(0, 30), matchedText: targetContainerText.slice(0, 60) }, '[Reply] Found target comment container');
+      }
+
+      // Step 2: 在目标评论容器内点击”回复”按钮（scoped 搜索，避免误点其他评论的回复）
+      // 使用 page.evaluate 在目标容器子树内定位并返回”回复”按钮坐标
+      const replyCoords = await page.evaluate((searchText) => {
+        // 在所有容器中搜索包含目标文本的容器
+        const allContainers = document.querySelectorAll('[class*=”container-sXKyMs”],[class*=”reply-item”]');
+        const containers = Array.from(allContainers);
+        for (const container of containers) {
+          const el = container as HTMLElement;
+          if (el.innerText && el.innerText.includes(searchText)) {
+            // 找到目标容器，在其内部查找”回复”按钮
+            const allItems = Array.from(container.querySelectorAll('[class*=”item-”]'));
+            for (const item of allItems) {
+              const itemEl = item as HTMLElement;
+              if (itemEl.innerText?.trim() === '回复') {
+                const rect = itemEl.getBoundingClientRect();
+                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+              }
+            }
+            // 回退：找到的第一个操作栏 item
+            const replyBtn = (container as Element).querySelector('[class*=”item-”]') as HTMLElement | null;
+            if (replyBtn) {
+              const rect = replyBtn.getBoundingClientRect();
+              return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+            }
+          }
+        }
+        return { x: 0, y: 0, found: false };
+      }, commentText);
+
+      let clickedReplyBtn = false;
+      if (replyCoords.found) {
+        // 使用坐标点击目标容器内的”回复”按钮
+        await page.mouse.click(replyCoords.x, replyCoords.y);
+        clickedReplyBtn = true;
+        logger.info({ x: Math.round(replyCoords.x), y: Math.round(replyCoords.y) }, '[Reply] Scoped click on reply button within target container');
+      }
+
+      if (!clickedReplyBtn) {
+        // 回退1: 通过文本全局搜索”回复”
+        logger.info('[Reply] Scoped reply button search failed, falling back to global search');
+        clickedReplyBtn = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
+      }
+      if (!clickedReplyBtn) {
+        // 回退2: 通过操作栏内的 item class
+        const opsClicked = await HumanActions.cdpClick(
+          page, '[class*=”operations”] [class*=”item-”]', { timeout: 3000 }
+        );
+        if (!opsClicked) {
+          logger.error('[Reply] Reply button not found');
+          return false;
+        }
+        clickedReplyBtn = true;
+      }
+
+      // 等待输入框展开动画
+      await HumanActions.wait(page, 800, 1500);
+
+      // Step 3: 点击回复输入框（限定在 reply-content 容器内，避免误选顶部主输入框）
+      const inputSelectors = [
+        '[class*=”reply-content”] div[contenteditable=”true”]',
+        'div[contenteditable=”true”].input-d24X73',
+        'div[contenteditable=”true”]',
+      ];
+
+      let inputClicked = false;
+      for (const sel of inputSelectors) {
+        inputClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
+        if (inputClicked) break;
+      }
+
+      if (!inputClicked) {
+        logger.error('[Reply] Reply input not found after trying all selectors');
+        return false;
+      }
+      await HumanActions.wait(page, 300, 600);
+
+      // Step 4: 拟人化输入（使用 safeCDPType，自带随机延迟）
+      await HumanActions.safeCDPType(page, replyText);
+
+      await HumanActions.wait(page, 500, 1200);
+
+      // Step 5: 点击发送按钮 — 限死在回复表单区域内，排除 header 的 “选择作品” 按钮
+      // 关键：不能全局搜索 button-primary，因为 header 的 “选择作品” 按钮也有这个 class
+      const submitSelectors = [
+        // 优先级1: 回复区域内的 primary button (不含 disabled)
+        '[class*=”reply-content”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
+        '[class*=”footer”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
+        // 优先级2: 最近出现的非 disabled primary button（排除 header）
+        'button.douyin-creator-interactive-button-primary:not([class*=”disabled”]):not([class*=”large”])',
+        // 优先级3: 文本匹配 “发送”（最稳定）
+      ];
+
+      let submitClicked = false;
+      for (const sel of submitSelectors) {
+        submitClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
+        if (submitClicked) {
+          logger.info({ selector: sel }, '[Reply] Submit button clicked');
+          break;
+        }
+      }
+      if (!submitClicked) {
+        // 回退：文本匹配 “发送”（排除 “选择作品” 的干扰）
+        submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
+        if (submitClicked) {
+          logger.info('[Reply] Submit button clicked via text match');
+        }
+      }
+      if (!submitClicked) {
+        logger.warn('[Reply] Submit button not found, but text was typed');
+      }
+
+      // 等待发送完成
+      await HumanActions.wait(page, 1500, 3000);
+
+      // 模拟发送后的人类行为
+      await HumanActions.betweenActionsPause(page);
+
+      logger.info({ commentText: commentText.slice(0, 30), submitClicked }, '[Reply] Douyin reply sent successfully');
+      return true;
+    } catch (err: any) {
+      logger.error({ error: err.message, commentText: commentText.slice(0, 30) }, '[Reply] Douyin reply failed');
+      return false;
+    }
+  }
+
+  /**
+   * 展开所有”查看N条回复”链接，让子评论可见
+   */
+  private async expandAllReplyThreads(page: Page): Promise<number> {
+    let expandedCount = 0;
+    try {
+      // 查找所有 “查看N条回复” 的链接文本
+      const expandTexts = await page.evaluate(() => {
+        const result: string[] = [];
+        const allDivs = Array.from(document.querySelectorAll('div'));
+        for (const div of allDivs) {
+          const text = (div as HTMLElement).innerText?.trim() || '';
+          // 匹配 “查看X条回复” 格式
+          if (/^查看\d+条回复$/.test(text)) {
+            result.push(text);
+          }
+        }
+        return result;
+      });
+
+      if (expandTexts.length === 0) return 0;
+
+      // 逐个点击展开
+      for (const text of expandTexts) {
+        try {
+          const clicked = await HumanActions.cdpClickByText(page, text, { timeout: 3000 });
+          if (clicked) {
+            expandedCount++;
+            await HumanActions.wait(page, 300, 600);
+          }
+        } catch {
+          // 单次展开失败不影响其他
+        }
+      }
+    } catch (err: any) {
+      logger.info({ error: err.message }, '[Reply] Expand reply threads failed (non-critical)');
+    }
+    return expandedCount;
   }
 }

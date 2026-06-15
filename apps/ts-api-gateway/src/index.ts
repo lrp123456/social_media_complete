@@ -32,6 +32,7 @@ import matrixRouter from './routes/matrix';
 import materialsRouter from './routes/materials';
 import operatorsRouter from './routes/operators';
 import wecomBotRouter from './routes/wecom-bot';
+import llmReplyRouter from './routes/llmReply';
 
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
@@ -107,6 +108,7 @@ app.use('/api/v1/matrix', matrixRouter);                     // 社媒矩阵: �
 app.use('/api/v1/materials', materialsRouter);               // 素材更新: 采集+归档+统计
 app.use('/api/v1/operators', operatorsRouter);               // 操作员管理: 用户+窗口+平台
 app.use('/api/v1/wecom-bot', wecomBotRouter);                // 企业微信机器人: 连接+消息+绑定
+app.use('/api/v1/llm/reply', llmReplyRouter);               // AI 客服: 回复建议生成
 
 // 404
 app.use(notFoundHandler);

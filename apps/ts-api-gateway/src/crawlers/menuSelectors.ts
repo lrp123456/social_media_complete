@@ -136,6 +136,7 @@ const CRAWLER_KEY_MAP: Record<string, Record<string, { category: SelectorCategor
 
     // 页面元素
     'page.switch-video-btn': { category: 'buttons', name: 'btn_switch_video' },
+    'page.publish-video-btn': { category: 'buttons', name: 'btn_publish_video' },
 
     // 评论相关
     'comment.reply-btn':    { category: 'buttons', name: 'btn_comment_reply' },

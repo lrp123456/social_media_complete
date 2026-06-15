@@ -36,12 +36,10 @@ export async function resolveAndClick(
   for (let i = 0; i < chain.length - 1; i++) {
     const parentKey = chain[i];
     const childKey = chain[i + 1];
-    const parentDef = getSelector(parentKey, platform);
+
+    // Bare parent keys (like "menu") may not be in CRAWLER_KEY_MAP.
+    // In that case, just verify child visibility and skip parent interaction.
     const childDef = getSelector(childKey, platform);
-
-    logger.info({ i, parentKey, childKey, parentDef_css: parentDef.css, parentDef_expandCss: parentDef.expandCheckCss, childDef_css: childDef.css, childDef_text: childDef.text }, '[menuNav] Chain step inspection');
-
-    // Step 1: If child already visible, no need to expand parent
     if (childDef.css) {
       const childVisible = await HumanActions.cdpIsElementVisible(page, childDef.css);
       if (childVisible) {
@@ -49,6 +47,9 @@ export async function resolveAndClick(
         continue;
       }
     }
+
+    const parentDef = getSelector(parentKey, platform);
+    logger.info({ i, parentKey, childKey, parentDef_css: parentDef.css, parentDef_expandCss: parentDef.expandCheckCss, childDef_css: childDef.css, childDef_text: childDef.text }, '[menuNav] Chain step inspection');
 
     // Step 2: Check parent expand state via expandCheckCss (or parent's own css as fallback)
     const expandCss = parentDef.expandCheckCss || parentDef.css;

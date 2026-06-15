@@ -8,6 +8,14 @@ import { createLogger } from '../lib/logger';
 import { WindowMutex } from '../lib/redlock';
 import { HumanActions, BrowserManager, ExitStrategy } from '@social-media/browser-core';
 import { getBrowserManager } from '../lib/browserManager';
+import {
+  monitorQueue,
+  enqueueMonitor,
+  cancelledJobIds,
+  markJobCancelled,
+  isJobCancelled,
+  cleanupCancelledJob,
+} from './unifiedQueue';
 import type { PlatformName } from '@social-media/shared-config';
 import { DouyinCrawler } from '../crawlers/douyinCrawler';
 import { KuaishouCrawler } from '../crawlers/kuaishouCrawler';
@@ -120,7 +128,7 @@ function getPlatformInfo(platform: string): {
   }
 }
 
-async function sendMonitorNotification(
+export async function sendMonitorNotification(
   userId: number,
   platform: string,
   type: 'new_comments' | 'risk_detected',
@@ -213,8 +221,13 @@ async function sendMonitorNotification(
         jump_list: [
           {
             type: 3,
-            title: '回复评论',
-            question: `回复 ${group.awemeId} ${group.rootComment.cid}`,
+            title: '🤖 AI 生成回复',
+            question: `ai生成 ${platform} ${group.rootComment.cid}`,
+          },
+          {
+            type: 3,
+            title: '📤 发送 AI 回复',
+            question: `ai发送 ${platform} ${group.rootComment.cid}`,
           },
           ...(pinfo.cardActionUrl ? [{
             type: 1 as const,
@@ -248,6 +261,76 @@ async function sendMonitorNotification(
   } catch (err) {
     logger.error({ userId, platform, type, err }, '发送企业微信通知失败');
   }
+}
+
+// ============================================================
+// AI 客服建议生成
+// ============================================================
+
+import { replyGenerator } from './llmService';
+import type { CommentContext } from './llmService';
+
+/**
+ * 为新评论生成 AI 回复建议（fire-and-forget）
+ * 查询 suggestionStatus='none' 的新评论，批量调用 LLM 生成建议
+ */
+export async function generateSuggestionsForNewComments(userId: number, platform: string): Promise<void> {
+  const comments = await db.getCommentsNeedingSuggestion(userId, 30);
+  if (comments.length === 0) return;
+
+  logger.info({ userId, platform, count: comments.length }, '开始为新评论生成 AI 回复建议');
+
+  // 获取视频描述用于上下文
+  const videoIds = [...new Set(comments.map((c) => c.videoId))];
+  const videos = await prisma.video.findMany({
+    where: { id: { in: videoIds } },
+    select: { id: true, description: true },
+  });
+  const videoMap = new Map(videos.map((v) => [v.id, v.description]));
+
+  // 获取父评论文本（level 2 评论）
+  const parentCids = comments
+    .filter((c) => c.level === 2 && c.parentId)
+    .map((c) => c.parentId!);
+  const parents = parentCids.length > 0
+    ? await prisma.comment.findMany({ where: { cid: { in: parentCids } }, select: { cid: true, text: true } })
+    : [];
+  const parentMap = new Map(parents.map((p) => [p.cid, p.text]));
+
+  // 构建 LLM 上下文
+  const batchInput = comments.map((c) => ({
+    id: c.id,
+    ctx: {
+      text: c.text,
+      commenterName: c.userNickname,
+      platform,
+      videoDescription: videoMap.get(c.videoId) || '',
+      parentCommentText: c.level === 2 && c.parentId ? parentMap.get(c.parentId) : undefined,
+    } as CommentContext,
+  }));
+
+  // 批量生成
+  const results = await replyGenerator.batchGenerate(batchInput);
+
+  // 更新数据库
+  let successCount = 0;
+  let errorCount = 0;
+  for (const { id, result } of results) {
+    if (result.success && result.reply) {
+      await db.updateCommentSuggestion(id, {
+        suggestedReply: result.reply,
+        suggestionStatus: 'ready',
+        suggestionModel: result.model,
+        suggestionLatencyMs: result.latencyMs,
+      });
+      successCount++;
+    } else {
+      await db.markSuggestionError(id, result.error || '未知错误');
+      errorCount++;
+    }
+  }
+
+  logger.info({ userId, total: comments.length, successCount, errorCount }, 'AI 回复建议生成完成');
 }
 
 // ============================================================
@@ -287,6 +370,13 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
         'img[src*="qrcode"]',
         'canvas',
       ],
+      tencent: [
+        'iframe[src*="login-for-iframe"]',
+        'img[src*="qrcode"]',
+        'img[src*="qr"]',
+        'canvas',
+        '[class*="qrcode"] img',
+      ],
     };
 
     // 通用兜底选择器
@@ -302,6 +392,57 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
 
     let buf: Buffer | undefined;
     const PADDING = 40; // 二维码周围留白
+
+    // 视频号（tencent）登录页：先等待登录页加载完成，再找二维码
+    if (platform === 'tencent') {
+      try {
+        // 从 /platform 重定向到登录页需要时间，等待 URL 变为 login 或出现二维码元素
+        const loginStart = Date.now();
+        const LOGIN_TIMEOUT = 15000;
+        let loginPageReady = false;
+
+        while (Date.now() - loginStart < LOGIN_TIMEOUT) {
+          const url = page.url();
+          if (url.includes('/login')) {
+            loginPageReady = true;
+            break;
+          }
+          // 检查是否有登录二维码元素
+          for (const sel of selectors) {
+            const el = await page.$(sel).catch(() => null);
+            if (el) {
+              const box = await el.boundingBox().catch(() => null);
+              if (box && box.width > 50 && box.height > 50) {
+                loginPageReady = true;
+                break;
+              }
+            }
+          }
+          if (loginPageReady) break;
+          await page.waitForTimeout(500);
+        }
+
+        if (!loginPageReady) {
+          logger.warn({ userId }, '[QR] Tencent login page did not render within 15s, trying fallback');
+        }
+
+        // 点击二维码区域刷新（确保二维码是新的）
+        for (const sel of selectors) {
+          const el = await page.$(sel).catch(() => null);
+          if (el) {
+            const box = await el.boundingBox();
+            if (box && box.width > 50 && box.height > 50) {
+              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+              await page.waitForTimeout(2500);
+              logger.info({ platform, userId, selector: sel }, '已点击二维码区域刷新');
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 尝试找二维码元素并截图（带边距）
 
     // 尝试找二维码元素并截图（带边距）
     for (const sel of selectors) {
@@ -350,213 +491,15 @@ const tencentCrawler = new TencentCrawler(MAX_MONITOR_VIDEOS);
 // BullMQ 队列
 // ============================================================
 
-// 任务超时时间：5分钟（防止卡死的任务无限占用资源）
-const JOB_TIMEOUT_MS = 5 * 60 * 1000;
-
-export const monitorQueue = new Queue<MonitorTask>('monitor', {
-  connection: getRedis(),
-  defaultJobOptions: {
-    attempts: 2,
-    backoff: { type: 'fixed', delay: 300_000 }, // 5min 重试
-    removeOnComplete: 50,
-    removeOnFail: 100,
-  },
-});
+// 任务超时时间：10分钟（评论采集需要处理多个视频的抽屉点击+滚动+展开）
+const JOB_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ============================================================
-// BullMQ Worker
+// 向后兼容：从 unifiedQueue 导入并重新导出
+// cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob, monitorQueue
 // ============================================================
 
-export const monitorWorker = new Worker<MonitorTask>(
-  'monitor',
-  async (job: Job<MonitorTask>) => {
-    const task = job.data;
-
-    // 回复任务特殊处理
-    if (job.name === 'execute_reply') {
-      const replyData = (task as any).replyData;
-      if (replyData) {
-        await executeReplyAction(task, replyData);
-      }
-      return;
-    }
-
-    logger.info(`🔍 监控任务开始: ${task.taskId} → ${task.platform}:${task.userId}`);
-
-    let lock: any = null;
-    try {
-      // 1. 获取窗口互斥锁
-      await job.updateProgress({ phase: '等待', step: '正在获取窗口锁', percent: 5 });
-      lock = await WindowMutex.acquireWithBackoff(task.windowId);
-
-      // 2. 连接指纹浏览器 + 执行3阶段爬取（带超时保护）
-      const onProgress = (p: { phase: string; step: string; percent: number; detail?: string }) => {
-        job.updateProgress(p).catch(() => {});
-      };
-
-      const result = await Promise.race([
-        executeMonitorCheck(task, onProgress),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`任务超时: 超过 ${JOB_TIMEOUT_MS / 1000}s`)), JOB_TIMEOUT_MS),
-        ),
-      ]);
-
-      // 3. 记录结果
-      await prisma.operationLog.create({
-        data: {
-          action: 'monitor_check',
-          details: JSON.stringify({
-            hasUpdate: result.hasUpdate,
-            newComments: result.newComments,
-            updatedVideos: result.updatedVideos,
-            phase: result.phase,
-          }),
-          userId: String(task.userId),
-          userName: task.platform,
-          result: result.riskDetected ? 'failure' : 'success',
-          level: result.riskDetected ? 'error' : 'info',
-        },
-      });
-
-      // 3.5 更新 MonitorStatus — 供前端"上次检查"展示
-      try {
-        const videoCount = await prisma.video.count({ where: { userId: task.userId } });
-        const totalComments = await prisma.video.aggregate({
-          where: { userId: task.userId },
-          _sum: { commentCount: true },
-        });
-        await db.updateMonitorStatus(
-          task.userId,
-          task.platform,
-          videoCount,
-          totalComments._sum.commentCount ?? 0,
-          result.riskDetected ? 'failure' : 'success',
-        );
-      } catch (statusErr: any) {
-        logger.warn({ err: statusErr.message }, '更新 MonitorStatus 失败（不影响主流程）');
-      }
-
-      if (result.hasUpdate) {
-        logger.info(`✅ 监控: ${task.taskId} (${task.platform}) - ${result.newComments} 新评论, ${result.updatedVideos.length} 视频更新`);
-
-        // 发送新评论通知（Deep 模式）
-        if (result.newComments > 0) {
-          const phase3Result = (result as any)._phase3Result;
-          const queue = (result as any)._queue || [];
-
-          // 查询平台作者 ID 以过滤作者自己的评论
-          const user = await prisma.user.findUnique({ where: { id: task.userId } });
-          const platformAuthorId = user?.platformAuthorId;
-
-          const commentGroups = phase3Result?.results
-            ?.filter((r: any) => r.success && r.commentGroups)
-            ?.flatMap((r: any) =>
-              r.commentGroups
-                .map((g: any) => {
-                  // 从 newInGroup 中提取子回复（level=2），并补充到 subReplies
-                  const newSubReplies = g.newInGroup
-                    .filter((n: any) => n.level === 2 && n.userUid !== platformAuthorId)
-                    .map((n: any) => ({
-                      cid: n.cid,
-                      text: n.text,
-                      userNickname: n.userNickname,
-                      replyToName: n.replyToName,
-                      createTime: n.createTime,
-                    }));
-                  // 合并 crawler 返回的 subReplies 和从 newInGroup 提取的子回复
-                  const allSubReplies = [
-                    ...g.subReplies.filter((s: any) => s.userUid !== platformAuthorId),
-                    ...newSubReplies,
-                  ];
-                  // 去重（按 cid）
-                  const seenCids = new Set<string>();
-                  const dedupedSubReplies = allSubReplies.filter((s: any) => {
-                    if (seenCids.has(s.cid)) return false;
-                    seenCids.add(s.cid);
-                    return true;
-                  });
-
-                  return {
-                    awemeId: r.awemeId,
-                    description: queue.find((q: any) => q.awemeId === r.awemeId)?.description || '',
-                    rootComment: g.rootComment,
-                    subReplies: dedupedSubReplies,
-                    newCids: new Set(
-                      g.newInGroup
-                        .filter((n: any) => n.userUid !== platformAuthorId)
-                        .map((n: any) => n.cid)
-                    ),
-                  };
-                })
-                .filter((g: any) => g.newCids.size > 0) // 过滤后无新增的组跳过
-            ) || [];
-
-          if (commentGroups.length > 0) {
-            await sendMonitorNotification(task.userId, task.platform, 'new_comments', {
-              newComments: result.newComments,
-              commentGroups,
-            });
-          } else {
-            // Light 模式或无评论群时回退到简单通知
-            await sendMonitorNotification(task.userId, task.platform, 'new_comments', {
-              newComments: result.newComments,
-              commentGroups: [],
-            });
-          }
-        }
-      } else {
-        logger.info(`✅ 监控: ${task.taskId} (${task.platform}) - 无更新`);
-      }
-
-      // 报告任务完成（用于动态调整调度频率）
-      reportMonitorComplete(result.hasUpdate);
-    } catch (err: any) {
-      logger.error(`❌ 监控失败: ${task.taskId} - ${err.message}`);
-      await prisma.operationLog.create({
-        data: {
-          action: 'monitor_check',
-          details: JSON.stringify({ error: err.message }),
-          userId: String(task.userId),
-          result: 'failure',
-          level: 'error',
-        },
-      }).catch(() => {}); // 忽略日志写入失败
-
-      // 报告任务完成（失败也算完成，否则调度器会卡死）
-      reportMonitorComplete(false);
-
-      // 发送风控告警通知
-      if (err.message?.includes('风控') || err.message?.includes('captcha') || err.message?.includes('验证码')) {
-        await sendMonitorNotification(task.userId, task.platform, 'risk_detected').catch(() => {});
-      }
-    } finally {
-      // 确保锁一定被释放（即使 lock 为 null 也不会报错）
-      if (lock) {
-        await WindowMutex.release(lock, task.windowId).catch((releaseErr) => {
-          logger.warn({ taskId: task.taskId, windowId: task.windowId, error: releaseErr.message }, '锁释放异常（将由TTL自动过期）');
-        });
-      }
-    }
-  },
-  {
-    connection: getRedis(),
-    concurrency: 3,
-    limiter: { max: 10, duration: 60_000 },
-    stalledInterval: 120_000, // 2分钟内无心跳则标记为stalled
-  },
-);
-
-// Worker 事件处理：确保 stalled/failed 任务也触发 reportMonitorComplete
-monitorWorker.on('stalled', (jobId: string) => {
-  logger.warn({ jobId }, '⚠️ 任务被标记为stalled（worker可能崩溃），触发调度恢复');
-  reportMonitorComplete(false);
-});
-monitorWorker.on('failed', (job: Job<MonitorTask> | undefined, err: Error) => {
-  if (job && job.name !== 'execute_reply') {
-    logger.warn({ jobId: job.id, task: job.data.taskId, err: err.message }, 'Worker failed event');
-    // 注意：catch 块中已调用 reportMonitorComplete，这里仅作为双保险
-  }
-});
+export { cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob, monitorQueue };
 
 // ============================================================
 // 核心爬取逻辑 — 3阶段流水线 (Phase 1 → Phase 2 → Phase 3)
@@ -575,8 +518,13 @@ interface MonitorResult {
   riskDetected: boolean;
 }
 
-async function executeMonitorCheck(task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function executeMonitorCheck(
+  task: MonitorTask,
+  onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void,
+  checkCancelled?: () => void,
+): Promise<MonitorResult> {
   const bm = getBrowserManager();
+  checkCancelled?.();
   onProgress?.({ phase: '连接', step: '正在连接指纹浏览器', percent: 10 });
 
   // 连接指纹浏览器（带超时，60 秒）
@@ -776,17 +724,29 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const crawlMode = await db.getCrawlMode('kuaishou');
 
+  // Phase 0: 登录检测
+  onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 5, detail: '正在检测快手登录状态' });
+
+  // 先导航到快手创作者中心
+  const currentUrl = page.url();
+  if (!currentUrl.includes('cp.kuaishou.com')) {
+    await kuaishouCrawler.navigateToHome(page);
+  }
+
+  // 检测登录状态（支持扫码等待）
+  const loginSuccess = await kuaishouCrawler.handleLogin(page, task.userId, onProgress);
+  if (!loginSuccess) {
+    logger.error({ userId: task.userId }, '快手登录失败');
+    await db.updateUserStatus(task.userId, 'login_required');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+  }
+
   // 注册 API 拦截器
   await kuaishouCrawler.registerListener(page, [
     '/rest/cp/works/v2/video/pc/photo/list',
     '/rest/cp/creator/analysis/pc/photo/list',
     '/rest/cp/comment/pc/list',
   ]);
-
-  const currentUrl = page.url();
-  if (!currentUrl.includes('cp.kuaishou.com')) {
-    await kuaishouCrawler.navigateToHome(page);
-  }
 
   // Phase 1 — 随机选择数据源
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
@@ -1088,20 +1048,45 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
 }
 
 // ============================================================
-// 定时调度：轮询排期规则 + 自动入队
-// 支持高频/空闲两种模式自动切换
+// 定时调度：每 (窗口, 平台) 独立计时 + 空闲/活跃模式自动切换
 // ============================================================
 
-let schedulerTimer: NodeJS.Timeout | null = null;
-let schedulerIntervalMs = 900_000;
-let lastSchedulerRunAt = 0;
-let nextScheduledRunAt = 0;
+interface SchedulerState {
+  timer: NodeJS.Timeout | null;
+  intervalMs: number;
+  nextRunAt: number;
+  lastRunAt: number;
+  mode: 'active' | 'idle';
+  consecutiveNoUpdates: number;
+  pendingTaskCount: number;
+  scheduleAfterCompletion: boolean;
+}
 
-// 动态频率控制
-let schedulerMode: 'active' | 'idle' = 'active';
-let consecutiveNoUpdates = 0;
-let pendingTaskCount = 0;
-let scheduleAfterCompletion = false;
+/** key = `${windowId}_${platform}`，每 (窗口, 平台) 独立调度 */
+const schedulerStates = new Map<string, SchedulerState>();
+
+function stateKey(windowId: string, platform: string): string {
+  return `${windowId}_${platform}`;
+}
+
+function getOrCreateSchedulerState(windowId: string, platform: string): SchedulerState {
+  const key = stateKey(windowId, platform);
+  let st = schedulerStates.get(key);
+  if (!st) {
+    st = {
+      timer: null,
+      intervalMs: getRandomIntervalForMode('active'),
+      nextRunAt: 0,
+      lastRunAt: 0,
+      mode: 'active',
+      consecutiveNoUpdates: 0,
+      pendingTaskCount: 0,
+      scheduleAfterCompletion: false,
+    };
+    schedulerStates.set(key, st);
+  }
+  return st;
+}
 
 /** 从 AUTOMATION 配置读取参数（所有值单位：秒） */
 function getMonitorConfig() {
@@ -1133,156 +1118,200 @@ function getRandomIntervalForMode(mode: 'active' | 'idle'): number {
   return seconds * 1000;
 }
 
-/**
- * 获取调度器状态（供前端展示倒计时）
- */
-export function getSchedulerStatus() {
-  const now = Date.now();
-  const remaining = Math.max(0, nextScheduledRunAt - now);
-  return {
-    intervalMs: schedulerIntervalMs,
-    lastRunAt: lastSchedulerRunAt,
-    nextRunAt: nextScheduledRunAt,
-    remainingMs: remaining,
-    isRunning: schedulerTimer !== null,
-    mode: schedulerMode,
-    consecutiveNoUpdates,
-  };
+/** 调度器状态（供前端展示每 (窗口, 平台) 倒计时） */
+export interface PlatformSchedulerStatus {
+  windowId: string;
+  platform: string;
+  intervalMs: number;
+  lastRunAt: number;
+  nextRunAt: number;
+  remainingMs: number;
+  mode: 'active' | 'idle';
+  consecutiveNoUpdates: number;
 }
 
 /**
- * 调度一次监控检查，等待所有任务完成后根据结果决定下一次间隔
+ * 获取所有调度器状态（供前端展示多平台倒计时）
  */
-async function runOneSchedule(): Promise<void> {
-  const startTime = Date.now();
+export function getAllSchedulerStatuses(): PlatformSchedulerStatus[] {
+  const now = Date.now();
+  const results: PlatformSchedulerStatus[] = [];
+  for (const [key, st] of schedulerStates.entries()) {
+    // key = "windowId_platform"，platform 是最后一节（may contain underscores in windowId）
+    const lastUnderscore = key.lastIndexOf('_');
+    const windowId = key.substring(0, lastUnderscore);
+    const platform = key.substring(lastUnderscore + 1);
+    results.push({
+      windowId,
+      platform,
+      intervalMs: st.intervalMs,
+      lastRunAt: st.lastRunAt,
+      nextRunAt: st.nextRunAt,
+      remainingMs: Math.max(0, st.nextRunAt - now),
+      mode: st.mode,
+      consecutiveNoUpdates: st.consecutiveNoUpdates,
+    });
+  }
+  // 按 nextRunAt 升序排列
+  results.sort((a, b) => a.nextRunAt - b.nextRunAt);
+  return results;
+}
+
+/**
+ * 调度一次监控检查 — 只入队指定 (windowId, platform) 的用户
+ */
+async function runOneSchedule(windowId: string, platform: string): Promise<void> {
+  const st = getOrCreateSchedulerState(windowId, platform);
+  st.lastRunAt = Date.now();
   try {
     const rules = await prisma.scheduleRule.findMany({ where: { enabled: true } });
     const canRun = rules.length === 0 || evaluateRules(rules);
 
     if (!canRun) {
-      logger.debug('排期规则限制，跳过本轮监控');
+      logger.debug({ windowId, platform }, '[调度] 排期规则限制，跳过本轮');
+      scheduleNext(windowId, platform);
       return;
     }
 
     const users = await db.getAllActiveUsers();
 
-    // 按 window_id 分组
-    const byWindow = new Map<string, typeof users>();
-    for (const u of users) {
-      const items = byWindow.get(u.fingerprintWindowId) || [];
-      items.push(u);
-      byWindow.set(u.fingerprintWindowId, items);
+    // 只保留匹配该 (windowId, platform) 的用户
+    const matched = users.filter(
+      (u: any) => u.fingerprintWindowId === windowId && u.platform === platform,
+    );
+
+    if (matched.length === 0) {
+      logger.debug({ windowId, platform }, '[调度] 无匹配用户，跳过');
+      scheduleNext(windowId, platform);
+      return;
     }
 
     // 去重：查询当前队列中是否已有同用户任务
     const existingJobs = await monitorQueue.getJobs(['active', 'waiting']);
     const activeUserIds = new Set(
-      existingJobs.map((j) => j.data.userId).filter(Boolean),
+      existingJobs.map((j) => (j.data as any).userId).filter(Boolean),
     );
-    if (activeUserIds.size > 0) {
-      logger.info({ activeUserIds: [...activeUserIds] }, '已有运行中的用户任务，跳过');
-    }
 
     // 入队（跳过已有任务的用户）
     let queued = 0;
-    for (const [, userGroup] of byWindow) {
-      for (const u of userGroup) {
-        if (activeUserIds.has(u.id)) {
-          logger.debug({ userId: u.id, platform: u.platform }, '跳过：已有运行中的任务');
-          continue;
-        }
-        await monitorQueue.add(u.platform, {
-          taskId: `mon_${Date.now()}_${u.id}`,
-          userId: u.id,
-          platform: u.platform as PlatformName,
-          windowId: u.fingerprintWindowId,
-          fingerprintWindowId: u.fingerprintWindowId,
-        });
-        queued++;
+    for (const u of matched) {
+      if (activeUserIds.has(u.id)) {
+        logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：已有运行中的任务');
+        continue;
       }
+      await enqueueMonitor({
+        taskId: `mon_${Date.now()}_${u.id}`,
+        userId: u.id,
+        platform: u.platform as PlatformName,
+        windowId: u.fingerprintWindowId,
+        fingerprintWindowId: u.fingerprintWindowId,
+      });
+      queued++;
     }
 
     if (queued === 0 && activeUserIds.size > 0) {
-      // 全部被去重，不设置 pendingTaskCount，等当前任务完成后由 reportMonitorComplete 触发下一轮
-      logger.info(`📊 监控调度: 全部用户已有任务运行中，跳过入队`);
+      // 全部用户已有任务运行中（外部手动触发入队的任务）
+      // 设 scheduleAfterCompletion，等任务完成后 reportMonitorComplete 触发下一轮
+      st.scheduleAfterCompletion = true;
+      logger.info({ windowId, platform }, '[调度] 全部用户已有任务运行中，等待完成');
       return;
     }
 
-    logger.info(`📊 监控调度完成: ${queued} 任务入队 (跳过 ${activeUserIds.size} 个已运行, ${byWindow.size} 窗口)`);
-    pendingTaskCount = queued;
-    scheduleAfterCompletion = true;
-    // 不再立即 scheduleNext，等待所有任务完成后 reportMonitorComplete 触发
+    logger.info({ windowId, platform, queued, skipped: activeUserIds.size }, '[调度] 完成任务入队');
+    st.pendingTaskCount = queued;
+    st.scheduleAfterCompletion = true;
+    // 不立即 scheduleNext，等待所有任务完成后 reportMonitorComplete 触发
   } catch (err) {
-    logger.error('监控调度异常:', (err as Error).message);
-    scheduleNext();
+    logger.error({ windowId, platform, err: (err as Error).message }, '[调度] 异常');
+    scheduleNext(windowId, platform);
   }
 }
 
 /**
- * 报告一次监控完成（Worker 调用）— 用于动态调整调度频率
+ * 报告一次监控完成（Worker 调用）— 更新该 (windowId, platform) 的空闲/活跃模式
  */
-export function reportMonitorComplete(hadUpdate: boolean): void {
+export function reportMonitorComplete(windowId: string, platform: string, hadUpdate: boolean): void {
+  const st = getOrCreateSchedulerState(windowId, platform);
+
   if (hadUpdate) {
-    schedulerMode = 'active';
-    consecutiveNoUpdates = 0;
+    st.mode = 'active';
+    st.consecutiveNoUpdates = 0;
   } else {
-    consecutiveNoUpdates++;
+    st.consecutiveNoUpdates++;
     const cfg = getMonitorConfig();
-    if (consecutiveNoUpdates >= cfg.idleThreshold && schedulerMode === 'active') {
-      schedulerMode = 'idle';
-      logger.info(`💤 连续 ${consecutiveNoUpdates} 次无更新，切换为空闲模式`);
+    if (st.consecutiveNoUpdates >= cfg.idleThreshold && st.mode === 'active') {
+      st.mode = 'idle';
+      logger.info({ windowId, platform, consecutive: st.consecutiveNoUpdates }, '💤 切换为空闲模式');
     }
   }
-  pendingTaskCount = Math.max(0, pendingTaskCount - 1);
-  if (pendingTaskCount === 0 && scheduleAfterCompletion) {
-    scheduleAfterCompletion = false;
-    scheduleNext();
+
+  st.pendingTaskCount = Math.max(0, st.pendingTaskCount - 1);
+  if (st.pendingTaskCount === 0 && st.scheduleAfterCompletion) {
+    st.scheduleAfterCompletion = false;
+    scheduleNext(windowId, platform);
   }
 }
 
 /**
- * 重置调度器计时器——将倒计时置为 0，立即排队执行下一轮监控
+ * 手动触发后重置倒计时 — 只设置标志，由任务完成后 reportMonitorComplete 触发下一轮
  */
-export function resetSchedulerTimer(): void {
-  // 防止在任务执行期间重复入队
-  if (pendingTaskCount > 0) {
-    logger.info(`🔄 调度器重置请求被延迟: 当前仍有 ${pendingTaskCount} 个任务执行中`);
-    scheduleAfterCompletion = true;
-    return;
+export function resetSchedulerTimer(windowId: string, platform: string): void {
+  const st = getOrCreateSchedulerState(windowId, platform);
+
+  // 清除旧定时器（如果有）
+  if (st.timer) {
+    clearTimeout(st.timer);
+    st.timer = null;
   }
 
-  if (schedulerTimer) {
-    clearTimeout(schedulerTimer);
-    schedulerTimer = null;
-  }
-  logger.info('🔄 调度器已重置，立即排队执行');
-  scheduleNext(0);
+  // 设置标志：当前批完成后自动安排下一轮
+  st.scheduleAfterCompletion = true;
+  logger.info({ windowId, platform }, '🔄 调度器手动重置，等待任务完成后重新计时');
 }
 
-/** 根据当前模式计算下次运行间隔并调度 */
-function scheduleNext(forceInterval?: number): void {
-  lastSchedulerRunAt = Date.now();
-  const nextInterval = forceInterval ?? getRandomIntervalForMode(schedulerMode);
-  schedulerIntervalMs = nextInterval;
-  nextScheduledRunAt = Date.now() + nextInterval;
-  schedulerTimer = setTimeout(runOneSchedule, nextInterval);
+/** 为该 (windowId, platform) 设置下一次调度定时器 */
+function scheduleNext(windowId: string, platform: string, forceInterval?: number): void {
+  const st = getOrCreateSchedulerState(windowId, platform);
+
+  // 清除旧定时器
+  if (st.timer) {
+    clearTimeout(st.timer);
+    st.timer = null;
+  }
+
+  st.lastRunAt = Date.now();
+  const nextInterval = forceInterval ?? getRandomIntervalForMode(st.mode);
+  st.intervalMs = nextInterval;
+  st.nextRunAt = Date.now() + nextInterval;
+  st.timer = setTimeout(() => runOneSchedule(windowId, platform), nextInterval);
+
   const cfg = getMonitorConfig();
-  logger.info(`⏰ 下次: ${Math.round(nextInterval / 1000)}秒 (${schedulerMode}, 无更新${consecutiveNoUpdates}/${cfg.idleThreshold})`);
+  logger.info({ windowId, platform, seconds: Math.round(nextInterval / 1000), mode: st.mode, noUpdate: st.consecutiveNoUpdates }, '⏰ 下次调度');
 }
 
 // ============================================================
 // 回复执行
 // ============================================================
 
-async function executeReplyAction(
+export async function executeReplyAction(
   task: MonitorTask,
   replyData: { videoId: string; commentCid: string; text: string },
 ): Promise<void> {
   const bm = getBrowserManager();
   const { page } = await bm.connect(String(task.windowId), '', task.platform);
 
+  // 查找评论的数字 ID 以便更新回复状态
+  const { prisma } = await import('../lib/prisma');
+  const commentRow = await prisma.comment.findFirst({
+    where: { cid: replyData.commentCid },
+    select: { id: true, text: true, video: { select: { description: true } } },
+  });
+  const commentDbId = commentRow?.id;
+  const commentText = commentRow?.text || replyData.commentCid;
+  const videoDescription = commentRow?.video?.description || '';
+
   try {
-    // ── 抖音回复 ──
+    // ── 抖音回复：委托给 douyinCrawler.replyToComment ──
     if (task.platform === 'douyin') {
       const currentUrl = page.url();
       if (!currentUrl.includes('creator.douyin.com')) {
@@ -1292,62 +1321,54 @@ async function executeReplyAction(
       const navSuccess = await douyinCrawler.navigateToCommentManage(page);
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         return;
       }
 
       const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
       if (!drawerOpened) {
         logger.error('回复失败：无法打开作品选择抽屉');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         return;
       }
 
-      await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, '');
+      await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
       await HumanActions.wait(page, 1500, 3000);
 
-      const containerCss = '[class*="container-sXKyMs"]';
-      const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
-      let targetNodeId: number | null = null;
+      const replied = await douyinCrawler.replyToComment(page, commentText, replyData.text);
+      if (replied) {
+        logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+      } else {
+        logger.error({ commentCid: replyData.commentCid }, '抖音回复执行失败');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+      }
+    }
 
-      for (const c of containers) {
-        if (c.text && c.text.includes(replyData.commentCid)) {
-          targetNodeId = c.nodeId;
-          break;
-        }
+    // ── 快手回复：导航到评论页 → 委托给 kuaishouCrawler.replyToComment ──
+    if (task.platform === 'kuaishou') {
+      const currentUrl = page.url();
+      if (!currentUrl.includes('cp.kuaishou.com')) {
+        await kuaishouCrawler.navigateToHome(page);
       }
 
-      if (!targetNodeId) {
-        logger.warn({ commentCid: replyData.commentCid }, '回复：未精确匹配目标评论，尝试用第一个评论容器');
-        if (containers.length > 0) targetNodeId = containers[0].nodeId;
-        else {
-          logger.error('回复失败：未找到任何评论容器');
-          return;
-        }
-      }
-
-      const replyBtnClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
-      if (!replyBtnClicked) {
-        logger.error('回复失败：无法点击回复按钮');
+      const navSuccess = await kuaishouCrawler.navigateToCommentPageDirect(page);
+      if (!navSuccess) {
+        logger.error('回复失败：无法导航到评论管理页面');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         return;
       }
-      await HumanActions.wait(page, 500, 1000);
 
-      const inputCss = 'div[contenteditable="true"]';
-      const inputClicked = await HumanActions.cdpClick(page, inputCss, { timeout: 5000 });
-      if (!inputClicked) {
-        logger.error('回复失败：无法定位输入框');
-        return;
+      await HumanActions.wait(page, 1500, 3000);
+
+      const replied = await kuaishouCrawler.replyToComment(page, replyData.commentCid, replyData.text);
+      if (replied) {
+        logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+      } else {
+        logger.error({ commentCid: replyData.commentCid }, '快手回复执行失败');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
       }
-      await HumanActions.wait(page, 300, 500);
-
-      for (const char of replyData.text) {
-        await HumanActions.cdpKeyPress(page, char, char, char.charCodeAt(0));
-        await HumanActions.wait(page, 50, 150);
-      }
-
-      await HumanActions.cdpClick(page, '[class*="submit"]', { timeout: 5000 });
-      await HumanActions.wait(page, 1000, 2000);
-
-      logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '回复执行成功');
     }
 
     // ── 视频号（Tencent）回复 ──
@@ -1355,18 +1376,47 @@ async function executeReplyAction(
       const loggedIn = await tencentCrawler.handleLogin(page, task.userId);
       if (!loggedIn) {
         logger.error('回复失败：视频号登录失败');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         return;
       }
 
       const navSuccess = await tencentCrawler.navigateToCommentManage(page);
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         return;
       }
 
-      const replied = await tencentCrawler.replyToComment(page, replyData.commentCid, replyData.text);
+      await HumanActions.wait(page, 1500, 3000);
+
+      // 查询视频标题用于切换到正确的视频
+      let videoTitle = '';
+      try {
+        const videoRow = await prisma.video.findUnique({
+          where: { id: replyData.videoId },
+          select: { description: true },
+        });
+        videoTitle = videoRow?.description || '';
+      } catch (e: any) {
+        logger.warn({ error: e.message }, '查询视频号视频标题失败，将使用默认视频');
+      }
+
+      // 切换到目标视频（通过 wujie shadow DOM 内的视频列表点击）
+      if (videoTitle) {
+        const videoSwitched = await (tencentCrawler as any).switchToVideoForReply(page, videoTitle);
+        if (!videoSwitched) {
+          logger.warn({ videoTitle }, '视频号切换到目标视频失败，将尝试在当前视频下回复');
+        }
+        await HumanActions.wait(page, 2000, 3000);
+      }
+
+      const replied = await tencentCrawler.replyToComment(page, replyData.commentCid, replyData.text, commentRow?.text || '');
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+      } else {
+        logger.error({ commentCid: replyData.commentCid }, '视频号回复执行失败');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
       }
 
       await tencentCrawler.executeExitStrategy(page);
@@ -1374,22 +1424,45 @@ async function executeReplyAction(
     }
   } catch (err: any) {
     logger.error({ err: err.message }, '回复执行失败');
+    if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
   } finally {
     if (task.platform === 'douyin') {
       try {
         await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
       } catch {}
     }
+    if (task.platform === 'kuaishou') {
+      try {
+        await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+      } catch {}
+    }
   }
 }
 
 export function startMonitorScheduler(): void {
-  const cfg = getMonitorConfig();
-  schedulerMode = 'active';
-  const initialInterval = getRandomIntervalForMode(schedulerMode);
-  nextScheduledRunAt = Date.now() + initialInterval;
-  schedulerTimer = setTimeout(runOneSchedule, initialInterval);
-  logger.info(`⏰ 调度器启动: ${Math.round(initialInterval / 1000)}秒后首次运行 (${schedulerMode}, 无更新${consecutiveNoUpdates}/${cfg.idleThreshold})`);
+  // 扫描所有活跃用户，为每个 (windowId, platform) 创建独立定时器
+  db.getAllActiveUsers().then((users: any[]) => {
+    const pairs = new Set<string>();
+    for (const u of users) {
+      const key = stateKey(u.fingerprintWindowId, u.platform);
+      if (pairs.has(key)) continue;
+      pairs.add(key);
+
+      // 立即创建状态（让 countdown 立即可见）
+      const st = getOrCreateSchedulerState(u.fingerprintWindowId, u.platform);
+      // 错开启动：每个 pair 随机延迟 5-30 秒后执行首次 runOneSchedule
+      const stagger = 5000 + Math.floor(Math.random() * 25000);
+      st.intervalMs = stagger;
+      st.nextRunAt = Date.now() + stagger;
+      st.timer = setTimeout(() => {
+        runOneSchedule(u.fingerprintWindowId, u.platform);
+      }, stagger);
+      logger.info({ windowId: u.fingerprintWindowId, platform: u.platform, stagger }, '⏰ 调度器注册');
+    }
+    logger.info({ pairs: pairs.size, totalUsers: users.length }, '⏰ 调度器启动完成');
+  }).catch((err: Error) => {
+    logger.error({ err: err.message }, '调度器启动失败');
+  });
 }
 
 function evaluateRules(rules: any[]): boolean {

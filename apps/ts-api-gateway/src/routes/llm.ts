@@ -3,87 +3,63 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger } from '../lib/logger';
+import { llmClient } from '../services/llmService';
 
 const router = Router();
 const logger = createLogger('routes:llm');
 
 // ============================================================
-// 硬编码 Provider 配置（对应 design 图 LLM Key 卡片）
+// Provider 管理（对接 LiteLLM 真实接口）
 // ============================================================
 
-const PROVIDERS = [
-  {
-    name: 'groq' as const,
-    displayName: 'GroqCloud',
-    role: 'primary' as const,
-    apiKeyMasked: 'gsk_xxxxxx_mock_key_xxxxxx',
-    failoverEnabled: true,
-    monthlyUsage: { used: 450000, total: 1000000 },
-    status: 'healthy' as const,
-  },
-  {
-    name: 'google' as const,
-    displayName: 'Google Gemini',
-    role: 'fallback_1' as const,
-    apiKeyMasked: 'AIza_xxxxxx_mock_key_xxxxxx',
-    failoverEnabled: true,
-    monthlyUsage: { used: 120000, total: 1000000 },
-    status: 'healthy' as const,
-  },
-  {
-    name: 'zhipu' as const,
-    displayName: '智谱AI',
-    role: 'fallback_2' as const,
-    apiKeyMasked: 'zp_xxxxxx_mock_key_xxxxxx',
-    failoverEnabled: false,
-    monthlyUsage: { used: 980000, total: 1000000 },
-    status: 'quota_exceeded' as const,
-  },
-];
-
-/** GET /api/v1/llm/providers - LLM Provider 列表 */
+/** GET /api/v1/llm/providers - 获取 LiteLLM 可用模型列表 */
 router.get('/providers', async (_req: Request, res: Response) => {
-  res.json({ success: true, data: PROVIDERS });
+  try {
+    const models = await llmClient.listModels();
+    // 按 provider 分组
+    const providerMap = new Map<string, any>();
+    for (const m of models) {
+      const provider = m.owned_by || 'unknown';
+      if (!providerMap.has(provider)) {
+        providerMap.set(provider, {
+          name: provider,
+          displayName: provider,
+          role: 'primary' as const,
+          apiKeyMasked: '***',
+          failoverEnabled: true,
+          monthlyUsage: { used: 0, total: 0 },
+          status: 'healthy' as const,
+          models: [] as string[],
+        });
+      }
+      providerMap.get(provider)!.models.push(m.id);
+    }
+    const providers = Array.from(providerMap.values());
+    res.json({ success: true, data: providers, total: models.length });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '获取 LLM providers 失败');
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
-/** POST /api/v1/llm/providers/:name/test - 测试连接 */
+/** POST /api/v1/llm/providers/:name/test - 测试 LLM 连接 */
 router.post('/providers/:name/test', async (req: Request, res: Response) => {
   try {
-    const paramsSchema = z.object({
-      name: z.enum(['groq', 'google', 'zhipu']),
-    });
-    const { name } = paramsSchema.parse(req.params);
-
-    // 模拟 150-450ms 随机延迟
-    const latencyMs = Math.floor(Math.random() * 300) + 150;
-    await new Promise((resolve) => setTimeout(resolve, latencyMs));
-
-    if (name === 'zhipu') {
-      // zhipu 始终返回 false 模拟超额
-      return res.json({
-        success: true,
-        data: {
-          success: false,
-          latencyMs,
-          message: '配额已用完，请续费或切换到其他 Provider',
-        },
-      });
-    }
-
+    const { name } = req.params;
+    const health = await llmClient.healthCheck();
     res.json({
       success: true,
       data: {
-        success: true,
-        latencyMs,
-        message: '连接成功',
+        success: health.ok,
+        latencyMs: health.latencyMs,
+        model: health.model,
+        message: health.ok ? '连接成功' : (health.error || '连接失败'),
+        provider: name,
       },
     });
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      return res.status(400).json({ success: false, errors: err.errors });
-    }
-    logger.error({ err: (err as Error).message }, '测试 LLM 连接失败');
-    res.status(500).json({ success: false, error: (err as Error).message });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '测试 LLM 连接失败');
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

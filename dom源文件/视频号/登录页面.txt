@@ -1,0 +1,79 @@
+<!-- 视频号助手 - 登录页面 DOM -->
+<!-- URL: https://channels.weixin.qq.com/login.html -->
+<!-- 抓取时间: 2026-06-10 (浏览器实际验证) -->
+<!-- 技术栈: Vue 3 SPA, wujie微前端, Element UI -->
+<!-- 登录方式: 仅微信扫码登录, 无账号密码登录 -->
+<!-- 应用名: finder-helper-web -->
+
+<!-- ========== 顶部导航栏 ========== -->
+<header class="header">
+  <div class="header-inner">
+    <!-- Logo -->
+    <div class="logo">
+      <svg class="logo-icon"><!-- 橙色W形图标 --></svg>
+      <span class="logo-text">视频号</span>
+    </div>
+    <!-- 导航链接区域 -->
+    <nav class="nav-links">
+      <a href="/login.html?from=assistant" class="nav-item nav-item-active">视频号助手</a>
+      <a href="/login.html?from=promote" class="nav-item">加热平台</a>
+      <a href="/login.html?from=mcn" class="nav-item">机构管理</a>
+      <span class="nav-separator">|</span>
+      <a href="/effect/" class="nav-item">特效平台</a>
+      <a href="https://store.weixin.qq.com/shop?fromScene=6" class="nav-item">微信小店</a>
+      <a href="https://store.weixin.qq.com/ec-agency/" class="nav-item">联盟带货机构</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ========== 主体区域 ========== -->
+<main class="login-page-main">
+  <!-- 左侧价值主张 -->
+  <div class="feature-section">
+    <h1 class="feature-title">一站式服务，让创作更简单。</h1>
+    <!-- 6个功能卡片: 多人运营/内容管理/互动管理/数据中心/变现功能/认证管理 -->
+  </div>
+
+  <!-- 右侧登录区域 -->
+  <div class="login-section">
+    <div class="login-card">
+      <!-- 二维码容器 (iframe嵌入) -->
+      <div class="qrcode-container">
+        <iframe
+          src="https://channels.weixin.qq.com/platform/login-for-iframe?dark_mode=true&host_type=1"
+          class="login-iframe"
+          frameborder="0"
+        ></iframe>
+      </div>
+      <!-- 登录状态提示 -->
+      <p class="status-text">微信扫码登录 视频号助手</p>
+      <!-- 状态变体: "已扫码需在手机上进行确认" / "二维码已过期，点击刷新" -->
+    </div>
+  </div>
+</main>
+
+<!-- ========== 底部信息 ========== -->
+<footer class="footer">
+  <a href="https://www.tencent.com/">关于腾讯</a>
+  <a href="https://weixin.qq.com/cgi-bin/readtemplate?t=weixin_agreement&s=video">微信视频号运营规范</a>
+  <a href="javascript:void(0)" class="feedback-link">问题咨询</a>
+  <p class="copyright">© 1998-2026 Tencent Inc. All Rights Reserved.</p>
+</footer>
+
+<!--
+========== 登录流程自动化 ==========
+
+1. 导航到 https://channels.weixin.qq.com/login.html
+2. 等待iframe加载: iframe[src*="login-for-iframe"]
+3. 截取二维码区域 → 发送给用户扫码
+4. 轮询检测:
+   - URL跳转到 /platform → 登录成功
+   - 文本"已扫码" → 等待确认
+   - 文本"已过期" → 刷新二维码
+5. 登录成功后 Cookie 自动设置
+
+风控注意:
+  - Cookie域名: .weixin.qq.com, channels.weixin.qq.com
+  - 会话有效期: 数小时到数天不等
+  - 无Playwright自动化指纹泄露风险(patchright已处理)
+-->

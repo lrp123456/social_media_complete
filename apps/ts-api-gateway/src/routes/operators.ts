@@ -5,6 +5,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { monitorQueue, resetSchedulerTimer } from '../services/monitorService';
 import {
   syncWindows,
   syncAllWindows,
@@ -53,7 +54,53 @@ async function syncOperatorToMonitorUser(operatorId: number): Promise<void> {
     }
 
     // 监控平台列表（只有这些平台需要创建 User 记录）
-    const monitorPlatforms = ['douyin', 'kuaishou', 'xiaohongshu'];
+    const monitorPlatforms = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'];
+
+    // 操作员当前拥有的监控平台集合
+    const operatorMonitorPlatforms = new Set(
+      operator.platforms
+        .filter((p) => monitorPlatforms.includes(p.platform))
+        .map((p) => p.platform),
+    );
+
+    // 清理孤儿 User 记录：该窗口下存在但操作员已不再拥有的平台
+    const staleUsers = await prisma.user.findMany({
+      where: {
+        fingerprintWindowId: boundWindow.externalId,
+        platform: { in: monitorPlatforms },
+      },
+      include: { videos: { select: { id: true } } },
+    });
+
+    for (const staleUser of staleUsers) {
+      if (!operatorMonitorPlatforms.has(staleUser.platform)) {
+        // ── 先清理无 FK 关联的子表（必须在 User 删除前执行）──
+        const videoIds = staleUser.videos.map((v) => v.id);
+        if (videoIds.length > 0) {
+          await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+          await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: videoIds } } });
+          await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+        }
+        await prisma.monitorStatus.deleteMany({ where: { accountId: String(staleUser.id) } });
+
+        // User 删除 → 级联删除 Video → 级联删除 Comment
+        await prisma.user.delete({ where: { id: staleUser.id } });
+        logger.info({ operatorId, platform: staleUser.platform, windowId: boundWindow.externalId, userId: staleUser.id, cleanedVideoRecordCount: videoIds.length }, '已清理孤儿监控用户及其关联数据');
+
+        // 移除 BullMQ 中该用户的待处理监控任务
+        const staleJobs = await monitorQueue.getJobs(['waiting', 'delayed']);
+        let removedJobs = 0;
+        for (const job of staleJobs) {
+          if (job.data.userId === staleUser.id) {
+            await job.remove().catch(() => {});
+            removedJobs++;
+          }
+        }
+        if (removedJobs > 0) {
+          logger.info({ operatorId, userId: staleUser.id, removedJobs }, '已清理 BullMQ 残留任务');
+        }
+      }
+    }
 
     // 为每个已添加的监控平台创建 User 记录
     for (const plat of operator.platforms) {
@@ -527,9 +574,67 @@ router.delete('/:id/platforms/:platform', async (req: Request, res: Response) =>
 
     const { id, platform } = schema.parse(req.params);
 
+    // 先获取操作员绑定的窗口，用于清理 User 记录
+    const operator = await prisma.operator.findUnique({
+      where: { id },
+      include: { windows: { where: { status: 'bound' } } },
+    });
+
     await prisma.operatorPlatform.delete({
       where: { idx_operator_platform: { operatorId: id, platform } },
     });
+
+    // 清理对应的 User（监控用户）记录及其关联数据，防止孤儿记录继续被调度
+    if (operator) {
+      const boundWindow = operator.windows.find((w) => w.status === 'bound');
+      if (boundWindow) {
+        // 先查出所有要删除的 User 及其视频 ID（必须在 User 删除前获取）
+        const usersToDelete = await prisma.user.findMany({
+          where: { fingerprintWindowId: boundWindow.externalId, platform },
+          include: { videos: { select: { id: true } } },
+        });
+
+        // 收集所有视频 ID
+        const allVideoIds: string[] = [];
+        const userIds: number[] = [];
+        for (const u of usersToDelete) {
+          userIds.push(u.id);
+          allVideoIds.push(...u.videos.map((v) => v.id));
+        }
+
+        // 清理无 FK 关联的子表
+        if (allVideoIds.length > 0) {
+          await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: allVideoIds } } });
+          await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: allVideoIds } } });
+          await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: allVideoIds } } });
+        }
+        if (userIds.length > 0) {
+          await prisma.monitorStatus.deleteMany({ where: { accountId: { in: userIds.map(String) } } });
+        }
+
+        // User 删除 → 级联删除 Video → 级联删除 Comment
+        const deleted = await prisma.user.deleteMany({
+          where: { fingerprintWindowId: boundWindow.externalId, platform },
+        });
+        if (deleted.count > 0) {
+          logger.info({ operatorId: id, platform, windowId: boundWindow.externalId, deletedCount: deleted.count, cleanedVideoRecordCount: allVideoIds.length }, '已清理对应的监控用户记录及关联数据');
+
+          // 移除 BullMQ 中该用户的所有待处理监控任务
+          const staleJobs = await monitorQueue.getJobs(['waiting', 'delayed']);
+          let removedJobs = 0;
+          const deletedUserIds = new Set(userIds);
+          for (const job of staleJobs) {
+            if (deletedUserIds.has(job.data.userId)) {
+              await job.remove().catch(() => {});
+              removedJobs++;
+            }
+          }
+          if (removedJobs > 0) {
+            logger.info({ operatorId: id, platform, removedJobs }, '已清理 BullMQ 残留任务');
+          }
+        }
+      }
+    }
 
     res.json({ success: true });
   } catch (err) {
@@ -620,11 +725,40 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
 
     const loginStatus = result.loggedIn ? 'logged_in' : 'not_logged_in';
 
+    // 获取之前的登录状态，用于检测状态变化
+    const previousPlatform = await prisma.operatorPlatform.findUnique({
+      where: { idx_operator_platform: { operatorId: id, platform } },
+      select: { loginStatus: true },
+    });
+    const previousStatus = previousPlatform?.loginStatus || 'unknown';
+
     // 更新平台登录状态（即使验证失败也会执行）
     await prisma.operatorPlatform.update({
       where: { idx_operator_platform: { operatorId: id, platform } },
       data: { loginStatus, lastVerifiedAt: new Date() },
     });
+
+    // 关键修复：当登录状态从非登录变为已登录时，重置调度器倒计时
+    // 这确保用户登录后监控能立即开始执行
+    const statusChangedToLoggedIn = previousStatus !== 'logged_in' && loginStatus === 'logged_in';
+    if (statusChangedToLoggedIn) {
+      logger.info({ operatorId: id, platform, previousStatus }, '登录状态变化为已登录，重置调度器倒计时');
+      resetSchedulerTimer(window.externalId, platform);
+
+      // 关键修复：同时将 User.status 从 'login_required' 恢复为 'active'
+      // 否则用户会被 getAllActiveUsers() 过滤掉，导致无法加入监控队列
+      const updatedUser = await prisma.user.updateMany({
+        where: {
+          fingerprintWindowId: window.externalId,
+          platform,
+          status: 'login_required',
+        },
+        data: { status: 'active' },
+      });
+      if (updatedUser.count > 0) {
+        logger.info({ operatorId: id, platform, updatedCount: updatedUser.count }, '用户状态已从 login_required 恢复为 active');
+      }
+    }
 
     // 记录验证日志
     await prisma.loginVerification.create({
@@ -666,6 +800,8 @@ router.post('/verify-all', async (_req: Request, res: Response) => {
     });
 
     const results: Array<{ operatorId: number; platform: string; status: string }> = [];
+    // 跟踪登录状态变化的 (windowId, platform) 对
+    const changedPairs = new Set<string>();
 
     for (const op of operators) {
       if (op.windows.length === 0) continue;
@@ -681,6 +817,24 @@ router.post('/verify-all', async (_req: Request, res: Response) => {
           );
           const loginStatus = result.loggedIn ? 'logged_in' : 'not_logged_in';
 
+          // 检查状态变化
+          const previousStatus = plat.loginStatus || 'unknown';
+          const statusChangedToLoggedIn = previousStatus !== 'logged_in' && loginStatus === 'logged_in';
+          if (statusChangedToLoggedIn) {
+            changedPairs.add(`${window.externalId}_${plat.platform}`);
+            logger.info({ operatorId: op.id, platform: plat.platform, previousStatus }, '批量验证：登录状态变化为已登录');
+
+            // 同时将 User.status 从 'login_required' 恢复为 'active'
+            await prisma.user.updateMany({
+              where: {
+                fingerprintWindowId: window.externalId,
+                platform: plat.platform,
+                status: 'login_required',
+              },
+              data: { status: 'active' },
+            }).catch(() => {});
+          }
+
           await prisma.operatorPlatform.update({
             where: { idx_operator_platform: { operatorId: op.id, platform: plat.platform } },
             data: { loginStatus, lastVerifiedAt: new Date() },
@@ -691,6 +845,15 @@ router.post('/verify-all', async (_req: Request, res: Response) => {
           results.push({ operatorId: op.id, platform: plat.platform, status: 'error' });
         }
       }
+    }
+
+    // 如果有平台状态变化为已登录，重置对应 (windowId, platform) 的调度器
+    for (const pairKey of changedPairs) {
+      const lastUnderscore = pairKey.lastIndexOf('_');
+      const windowId = pairKey.substring(0, lastUnderscore);
+      const platform = pairKey.substring(lastUnderscore + 1);
+      logger.info({ windowId, platform }, '批量验证：重置调度器');
+      resetSchedulerTimer(windowId, platform);
     }
 
     res.json({ success: true, data: results });

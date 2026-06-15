@@ -78,7 +78,7 @@ export abstract class BasePublisher {
    * 发布主流程（模板方法）
    *
    * 流程：
-   * 1. 获取窗口互斥锁 (Redlock)
+   * 1. 获取窗口互斥锁 (Redlock) — 可通过 skipLock=true 跳过（unifiedQueue 已获取）
    * 2. 下载 OSS 视频到本地临时目录
    * 3. 启动/连接指纹浏览器
    * 4. 平台登录
@@ -87,8 +87,10 @@ export abstract class BasePublisher {
    * 7. 填写元数据
    * 8. 提交发布
    * 9. 清理资源 + 释放锁
+   *
+   * @param skipLock 跳过锁获取（调用方已持有锁时使用）
    */
-  async publish(task: PublishTask): Promise<PublishResult> {
+  async publish(task: PublishTask, skipLock: boolean = false): Promise<PublishResult> {
     const startTime = Date.now();
     const localVideoPath = `/tmp/publish_${task.taskId}_${task.video.filename}`;
 
@@ -96,7 +98,10 @@ export abstract class BasePublisher {
       this.state = 'idle';
 
       // Step 1: 获取窗口互斥锁（防止并发操控同一指纹浏览器）
-      this.lock = await WindowMutex.acquireWithBackoff(task.windowId);
+      // 如果调用方（unifiedQueue）已持有锁，跳过
+      if (!skipLock) {
+        this.lock = await WindowMutex.acquireWithBackoff(task.windowId);
+      }
 
       // Step 2: 初始化浏览器
       await this.initBrowser(task);
@@ -107,7 +112,14 @@ export abstract class BasePublisher {
         page: this.page!,
         credentials: task.credentials,
         windowId: task.windowId,
+        accountId: task.accountId,
       });
+
+      // 登录后验证：如果页面仍在登录页，说明登录失败
+      const postLoginUrl = this.page!.url();
+      if (postLoginUrl.includes('/login')) {
+        throw new Error(`[${task.platform}] 登录验证失败：页面仍在登录页 (${postLoginUrl})`);
+      }
       logger.info(`[${task.platform}] 登录完成`);
 
       // Step 4: 导航到发布页

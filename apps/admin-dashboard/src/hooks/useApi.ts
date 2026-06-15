@@ -175,7 +175,7 @@ export function useMonitorVideos(platform?: string, search?: string) {
 export function useVideoComments(videoId: string) {
   return useQuery({
     queryKey: ['monitor', 'videos', videoId, 'comments'],
-    queryFn: () => api.get(`/matrix/monitor/videos/${videoId}/comments`).then((r) => r.data),
+    queryFn: () => api.get(`/matrix/monitor/videos/${encodeURIComponent(videoId)}/comments`).then((r) => r.data),
     enabled: !!videoId,
   });
 }
@@ -410,6 +410,37 @@ export function useReplyComment() {
 }
 
 // ============================================================
+// AI 客服回复建议
+// ============================================================
+
+export function useGenerateAiReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { commentId: number; serviceType?: 'simple' | 'intelligent' }) =>
+      api.post('/llm/reply/generate', input).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['monitor'] }),
+  });
+}
+
+export function useRegenerateAiReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { commentId: number; previousReply: string; feedback?: string; serviceType?: 'simple' | 'intelligent' }) =>
+      api.post('/llm/reply/regenerate', input).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['monitor'] }),
+  });
+}
+
+export function useAcceptAiReply() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { commentId: number; text: string }) =>
+      api.post(`/matrix/monitor/comments/${input.commentId}/accept-reply`, { text: input.text }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['monitor'] }),
+  });
+}
+
+// ============================================================
 // 监控账户管理（新增）
 // ============================================================
 
@@ -418,6 +449,10 @@ export type MonitorAccount = {
   platform: string;
   platformName: string;
   fingerprintWindowId: string;
+  windowName: string;
+  operatorId: number | null;
+  operatorName: string;
+  wechatUserId: string;
   status: string;
   monitoringEnabled: boolean;
   videoCount: number;
@@ -491,6 +526,17 @@ export function useToggleMonitor() {
   });
 }
 
+export function useClearUserData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) =>
+      api.post(`/matrix/monitor/accounts/${userId}/clear`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor'] });
+    },
+  });
+}
+
 export type NewCommentVideo = {
   id: string;
   description: string;
@@ -521,6 +567,12 @@ export type MonitorTaskStatus = {
   userId: number;
   error?: string;
   details?: Record<string, any>;
+  progress?: {
+    phase: string;
+    step: string;
+    percent: number;
+    detail?: string;
+  } | null;
 };
 
 export function useMonitorTaskStatuses(taskIds: string[]) {
@@ -544,25 +596,84 @@ export function useMonitorTaskStatuses(taskIds: string[]) {
 }
 
 // ============================================================
-// 调度器状态（下次检查倒计时）
+// 活跃监控任务（常驻队列 — 所有窗口并行展示）
 // ============================================================
 
-export type SchedulerStatus = {
+export type ActiveWindowTasks = {
+  windowId: string;
+  tasks: MonitorTaskStatus[];
+};
+
+export type ActiveTasksData = {
+  total: number;
+  running: number;
+  queued: number;
+  windows: ActiveWindowTasks[];
+};
+
+export function useActiveMonitorTasks() {
+  return useQuery({
+    queryKey: ['monitor', 'active-tasks'],
+    queryFn: () =>
+      api.get('/matrix/monitor/active-tasks').then((r) => r.data as ActiveTasksData),
+    refetchInterval: 2000, // 每2秒轮询，快速反映任务进度
+    retry: 2,
+    staleTime: 1000,
+  });
+}
+
+export function useCancelMonitorTask() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (taskId: string) =>
+      api.post(`/matrix/monitor/tasks/${taskId}/cancel`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor', 'active-tasks'] });
+    },
+  });
+}
+
+export function useCancelAllMonitorTasks() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post('/matrix/monitor/active-tasks/cancel-all').then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor', 'active-tasks'] });
+    },
+  });
+}
+
+// ============================================================
+// 调度器状态（每 (窗口, 平台) 独立倒计时）
+// ============================================================
+
+export type PlatformSchedulerStatus = {
+  windowId: string;
+  platform: string;
   intervalMs: number;
   lastRunAt: number;
   nextRunAt: number;
   remainingMs: number;
-  isRunning: boolean;
+  mode: 'active' | 'idle';
+  consecutiveNoUpdates: number;
+};
+
+export type SchedulerStatusResponse = {
+  statuses: PlatformSchedulerStatus[];
 };
 
 export function useSchedulerStatus() {
   return useQuery({
     queryKey: ['monitor', 'scheduler-status'],
     queryFn: () =>
-      api.get('/matrix/monitor/scheduler-status').then((r) => r.data as SchedulerStatus),
+      api.get('/matrix/monitor/scheduler-status').then((r) => {
+        const data = r.data as { success: boolean; data: SchedulerStatusResponse };
+        return data.data;
+      }),
     refetchInterval: 10000, // 每10秒同步一次
-    retry: 2, // 失败重试2次
-    staleTime: 8000, // 8秒内认为数据新鲜
+    retry: 2,
+    staleTime: 8000,
   });
 }
 
@@ -626,7 +737,10 @@ export type PlatformCapability = {
 export function usePlatformCapabilities() {
   return useQuery({
     queryKey: ['platforms', 'capabilities'],
-    queryFn: () => api.get('/matrix/platforms/capabilities').then((r) => r.data),
+    queryFn: () => api.get('/matrix/platforms/capabilities').then((r) => {
+      console.log('[DEBUG] capabilities API response:', r.data);
+      return r.data;
+    }),
   });
 }
 
@@ -1227,5 +1341,117 @@ export function useSendWecomMessage() {
   return useMutation({
     mutationFn: (data: { userids: string[]; content: string }) =>
       api.post('/wecom-bot/send', data).then((r) => r.data),
+  });
+}
+
+// ============================================================
+// 选择器配置 & 有效性追踪
+// ============================================================
+
+export type SelectorEntry = {
+  purposes: string[];
+  primary: string;
+  fallbacks: string[];
+  selectorType: string;
+  description?: string;
+  parent?: string;
+  expandCheckCss?: string;
+  enabled?: boolean;
+  filterTag?: string;
+  filterText?: string;
+  scopeKey?: string;
+};
+
+export type PlatformSelectors = {
+  menus: Record<string, SelectorEntry>;
+  buttons: Record<string, SelectorEntry>;
+  regions: Record<string, SelectorEntry>;
+  textboxes: Record<string, SelectorEntry>;
+  flowRules?: Record<string, unknown>;
+};
+
+export type SelectorConfig = {
+  version: string;
+  updatedAt: string;
+  platforms: Record<string, PlatformSelectors>;
+};
+
+export type SelectorEffectivenessStats = {
+  platform: string;
+  category: string;
+  name: string;
+  strategy: string;
+  totalAttempts: number;
+  successCount: number;
+  failureCount: number;
+  successRate: number;
+  avgDurationMs: number;
+  lastUsedAt: number;
+  lastSuccessAt: number;
+  lastFailureAt: number;
+};
+
+export function useSelectorConfig() {
+  return useQuery({
+    queryKey: ['selectors', 'config'],
+    queryFn: () =>
+      api.get('/config-automation/selectors/full').then((r) => r.data.data as SelectorConfig),
+    staleTime: 30_000,
+  });
+}
+
+export function useSelectorEffectiveness(platform?: string) {
+  return useQuery({
+    queryKey: ['selectors', 'effectiveness', platform],
+    queryFn: () =>
+      api.get('/config-automation/selectors/effectiveness', {
+        params: platform ? { platform } : undefined,
+      }).then((r) => {
+        const d = r.data.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
+        return { stats: d.stats, failed: d.failed };
+      }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useFailedSelectors(threshold = 0.3, minAttempts = 5) {
+  return useQuery({
+    queryKey: ['selectors', 'failed', threshold, minAttempts],
+    queryFn: () =>
+      api.get('/config-automation/selectors/effectiveness', {
+        params: { threshold, minAttempts },
+      }).then((r) => {
+        const d = r.data.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
+        return d.failed;
+      }),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+}
+
+export function useUpsertSelector() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: {
+      platform: string;
+      category: string;
+      name: string;
+      entry: SelectorEntry;
+    }) => api.put('/config-automation/selectors', data).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['selectors'] });
+    },
+  });
+}
+
+export function useDeleteSelector() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { platform: string; category: string; name: string }) =>
+      api.delete('/config-automation/selectors', { data }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['selectors'] });
+    },
   });
 }

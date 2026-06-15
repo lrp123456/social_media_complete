@@ -537,7 +537,7 @@ export async function checkPlatformLogin(
     xiaohongshu: 'https://creator.xiaohongshu.com/new/home',
     bilibili: 'https://member.bilibili.com',
     baijiahao: 'https://baijiahao.baidu.com',
-    tencent: 'https://mp.weixin.qq.com',
+    tencent: 'https://channels.weixin.qq.com/platform',
     tiktok: 'https://creator.tiktok.com',
   };
 
@@ -576,7 +576,16 @@ export async function checkPlatformLogin(
     })()`,
     bilibili: `(() => { const el = document.querySelector('.login-btn, .login-button'); return !!el && el.offsetParent !== null; })()`,
     baijiahao: `(() => { const el = document.querySelector('.login-btn'); return !!el && el.offsetParent !== null; })()`,
-    tencent: `(() => { const el = document.querySelector('.login-btn, #login'); return !!el && el.offsetParent !== null; })()`,
+    tencent: `(() => {
+      // 视频号创作者平台：检查是否被重定向到登录页
+      const url = window.location.href;
+      if (url.includes('/login')) return true;
+      // 已登录状态：URL 包含 /platform 且页面中有创作者后台元素
+      if (url.includes('channels.weixin.qq.com/platform')) return false;
+      // 回退：检查登录相关元素
+      const el = document.querySelector('.login-btn, #login, [class*="login"]');
+      return !!el && el.offsetParent !== null;
+    })()`,
     tiktok: `(() => { const el = document.querySelector('[data-e2e="login"], .login-btn'); return !!el && el.offsetParent !== null; })()`,
   };
 

@@ -1,0 +1,133 @@
+<!-- 视频号助手 - 数据中心-视频数据页面 DOM -->
+<!-- URL: https://channels.weixin.qq.com/platform/data/video (推测) -->
+<!-- 抓取时间: 2026-06-10 (基于界面截图+平台模式推测) -->
+<!-- 监控用途: 补充获取视频播放量/完播率/观众来源等深度数据 -->
+
+<!-- ========== 页面标题 ========== -->
+<div class="page-header">
+  <h1 class="page-title">数据中心</h1>
+</div>
+
+<!-- ========== 数据中心Tab导航 ========== -->
+<div class="data-tabs">
+  <div class="data-tab" data-tab="follower">关注者数据</div>
+  <div class="data-tab data-tab-active" data-tab="video">视频数据</div>
+  <div class="data-tab" data-tab="image-text">图文数据</div>
+  <div class="data-tab" data-tab="live">直播数据</div>
+  <div class="data-tab" data-tab="eccommerce">带货数据</div>
+</div>
+
+<!-- ========== 筛选器区域 ========== -->
+<div class="data-filter-bar">
+  <div class="date-range-picker">
+    <span class="range-label">数据周期</span>
+    <input type="text" class="date-input" value="2026-05-11" readonly>
+    <span class="date-separator">~</span>
+    <input type="text" class="date-input" value="2026-06-10" readonly>
+  </div>
+  <div class="quick-date-btns">
+    <button class="quick-date-btn">近7天</button>
+    <button class="quick-date-btn quick-date-active">近30天</button>
+    <button class="quick-date-btn">近90天</button>
+  </div>
+  <button class="btn btn-outline export-btn">导出数据</button>
+</div>
+
+<!-- ========== 概览数据卡片 ========== -->
+<div class="overview-cards">
+  <div class="overview-card">
+    <div class="card-label">总播放量</div>
+    <div class="card-value">12.5万</div>
+    <div class="card-trend trend-up">+15.3%</div>
+  </div>
+  <div class="overview-card">
+    <div class="card-label">总点赞数</div>
+    <div class="card-value">3,280</div>
+    <div class="card-trend trend-up">+8.2%</div>
+  </div>
+  <div class="overview-card">
+    <div class="card-label">总评论数</div>
+    <div class="card-value">562</div>
+    <div class="card-trend trend-up">+22.1%</div>
+  </div>
+  <div class="overview-card">
+    <div class="card-label">总分享数</div>
+    <div class="card-value">1,024</div>
+    <div class="card-trend trend-down">-3.5%</div>
+  </div>
+  <div class="overview-card">
+    <div class="card-label">平均完播率</div>
+    <div class="card-value">28.6%</div>
+  </div>
+  <div class="overview-card">
+    <div class="card-label">新增关注者</div>
+    <div class="card-value">186</div>
+  </div>
+</div>
+
+<!-- ========== 趋势图表区 ========== -->
+<div class="chart-section">
+  <h2 class="section-title">播放量趋势</h2>
+  <div class="chart-type-switch">
+    <button class="switch-btn switch-btn-active">播放量</button>
+    <button class="switch-btn">点赞数</button>
+    <button class="switch-btn">评论数</button>
+    <button class="switch-btn">分享数</button>
+  </div>
+  <div class="chart-container">
+    <canvas class="chart-canvas"></canvas>
+  </div>
+</div>
+
+<!-- ========== 视频数据明细表 ========== -->
+<div class="video-data-section">
+  <h2 class="section-title">视频数据明细</h2>
+  <div class="sort-controls">
+    <div class="sort-select">
+      <span class="select-value">播放量从高到低</span>
+    </div>
+  </div>
+
+  <!-- 表头 -->
+  <div class="data-table-header">
+    <div class="table-col col-cover">封面</div>
+    <div class="table-col col-title">标题</div>
+    <div class="table-col col-date">发布时间</div>
+    <div class="table-col col-plays">播放量</div>
+    <div class="table-col col-likes">点赞数</div>
+    <div class="table-col col-comments">评论数</div>
+    <div class="table-col col-shares">分享数</div>
+    <div class="table-col col-completion">完播率</div>
+  </div>
+
+  <!-- 单条视频数据行 -->
+  <div class="data-table-row" data-post-id="export_xxx_001">
+    <div class="table-col col-cover">
+      <img src="..." class="row-cover-img">
+      <span class="duration-badge">01:23</span>
+    </div>
+    <div class="table-col col-title">德瓦达</div>
+    <div class="table-col col-date">2026-05-15</div>
+    <div class="table-col col-plays">682</div>
+    <div class="table-col col-likes">5</div>
+    <div class="table-col col-comments">1</div>
+    <div class="table-col col-shares">11</div>
+    <div class="table-col col-completion">32.5%</div>
+  </div>
+</div>
+
+<!--
+========== 数据中心说明 ==========
+
+数据延迟: 数据中心数据非实时, 通常有数小时到次日延迟。
+这与抖音(实时)不同, 监控增量检测需考虑此延迟。
+
+API端点(推测):
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/data/post_data
+  或:  POST /cgi-bin/mmfinderassistant-bin/statistics/get_video_stat
+
+与视频列表页的数据差异:
+  - 视频列表页: 基础指标(播放/点赞/评论/分享/推荐)
+  - 数据中心页: 深度指标(完播率/观众来源/趋势图/粉丝画像)
+  监控建议: Phase 1用视频列表API获取基础数据, 数据中心作为补充
+-->

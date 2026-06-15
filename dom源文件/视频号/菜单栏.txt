@@ -1,0 +1,225 @@
+<!-- 视频号助手 - 侧边栏菜单栏 DOM (真实浏览器抓取) -->
+<!-- URL: https://channels.weixin.qq.com/platform -->
+<!-- 抓取时间: 2026-06-10 -->
+<!-- 技术栈: Vue 3 + wujie微前端, 组件前缀: finder-ui-desktop-* -->
+<!-- Vue Scoped: data-v-2a16615a (侧边栏模块) -->
+
+<!-- ========== 侧边栏容器 ========== -->
+<div id="side-bar" data-v-2a16615a="">
+<div class="finder-ui-desktop-menu__wrp finder-ui-desktop-menu__unflod__wrp">
+<div class="finder-ui-desktop-menu__container">
+
+<!-- 品牌标识 -->
+<div class="finder-ui-desktop-menu__header">
+  <div class="side-bar-header">
+    <svg class="svg-icon logo"><use xlink:href="#icon-logo-medium"></use></svg>
+    <div class="brand-name">视频号 · 助手</div>
+  </div>
+</div>
+
+<!-- ========== 菜单列表 ========== -->
+<ul id="menuBar" class="finder-ui-desktop-menu finder-ui-desktop-menu_global">
+
+  <!-- 首页 (当前选中状态: finder-ui-desktop-menu__link_current) -->
+  <li class="finder-ui-desktop-sub-menu__item">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__has_icon finder-ui-desktop-menu__link_current">
+      <div class="finder-ui-desktop-menu__icon_logo">
+        <span class="menu-icon outlined weui-icon-outlined-home"></span>
+      </div>
+      <div class="finder-ui-desktop-menu__active_icon_logo">
+        <span class="menu-icon filled weui-icon-filled-home"></span>
+      </div>
+      <span class="finder-ui-desktop-menu__link__inner">
+        <span class="finder-ui-desktop-menu__name"><span>首页</span></span>
+      </span>
+    </a>
+  </li>
+
+  <!-- 内容管理 (可展开子菜单, 展开时class加: __sub-unfold __sub__active) -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link finder-ui-desktop-menu__sub-unfold">
+      <span class="finder-ui-desktop-menu__link__inner js_nav_item">
+        <div class="finder-ui-desktop-menu__icon_logo">
+          <svg class="svg-icon menu-icon outlined"><use xlink:href="#icon-content-manager-outlined"></use></svg>
+        </div>
+        <span class="finder-ui-desktop-menu__name"><span>内容管理</span></span>
+      </span>
+    </a>
+    <!-- 子菜单 (展开时: display:'' 隐藏时: display:none) -->
+    <ul class="finder-ui-desktop-sub-menu finder-ui-desktop-sub-menu__current">
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__link_current"><!-- 当前选中 -->
+          <span class="finder-ui-desktop-menu__name"><span>视频</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>图文</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>音乐</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>音频</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>草稿箱</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>主页</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>活动</span></span>
+        </a>
+      </li>
+    </ul>
+  </li>
+
+  <!-- 互动管理 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__link__inner js_nav_item">
+        <div class="finder-ui-desktop-menu__icon_logo">
+          <span class="menu-icon outlined weui-icon-outlined-comment"></span>
+        </div>
+        <span class="finder-ui-desktop-menu__name"><span>互动管理</span></span>
+      </span>
+    </a>
+    <ul class="finder-ui-desktop-sub-menu" style="display: none;">
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>评论</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>弹幕</span></span>
+        </a>
+      </li>
+      <li class="finder-ui-desktop-sub-menu__item" ml-key="assistant_tab_privateMsg">
+        <a class="finder-ui-desktop-menu__link">
+          <span class="finder-ui-desktop-menu__name"><span>私信</span></span>
+        </a>
+      </li>
+    </ul>
+  </li>
+
+  <!-- 直播 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__link__inner js_nav_item">
+        <span class="finder-ui-desktop-menu__name"><span>直播</span></span>
+      </span>
+    </a>
+    <ul class="finder-ui-desktop-sub-menu" style="display: none;">
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>直播管理</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>直播商品管理</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>直播预告</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>直播回放</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>个人创作礼物管理</span></span></a></li>
+    </ul>
+  </li>
+
+  <!-- 收入与服务 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__name"><span>收入与服务</span></span>
+    </a>
+    <ul class="finder-ui-desktop-sub-menu" style="display: none;">
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>收入权益</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>原创保护记录</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>加热工具</span></span></a></li>
+    </ul>
+  </li>
+
+  <!-- 带货中心 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__name"><span>带货中心</span></span>
+    </a>
+  </li>
+
+  <!-- 数据中心 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__name"><span>数据中心</span></span>
+    </a>
+    <ul class="finder-ui-desktop-sub-menu" style="display: none;">
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>关注者数据</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>视频数据</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>图文数据</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>直播数据</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>带货数据</span></span></a></li>
+    </ul>
+  </li>
+
+  <!-- 设置 -->
+  <li class="finder-ui-desktop-menu__item finder-ui-desktop-menu__sub__wrp">
+    <a class="finder-ui-desktop-menu__link finder-ui-desktop-menu__sub__link">
+      <span class="finder-ui-desktop-menu__name"><span>设置</span></span>
+    </a>
+    <ul class="finder-ui-desktop-sub-menu" style="display: none;">
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>人员设置</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>肖像授权管理</span></span></a></li>
+      <li><a class="finder-ui-desktop-menu__link"><span class="finder-ui-desktop-menu__name"><span>服务菜单</span></span></a></li>
+    </ul>
+  </li>
+
+</ul>
+</div><!-- /finder-ui-desktop-menu__container -->
+</div><!-- /finder-ui-desktop-menu__wrp -->
+
+<!-- 底部: 通知中心 + 用户信息 -->
+<div class="sidebar-footer">
+  <a class="notification-link"><span>通知中心</span></a>
+  <div class="user-info">
+    <img class="user-avatar" src="..." alt="头像">
+    <span class="user-name">io流</span>
+  </div>
+</div>
+</div><!-- /side-bar -->
+
+<!--
+========== 菜单路由映射表 (真实URL) ==========
+
+菜单项          对应URL路径                                  监控用途
+────────────────────────────────────────────────────────────────────
+首页            /platform                                   首页概览
+内容管理
+  视频          /platform/post/list                         ★ Phase1 视频列表
+  图文          /platform/image-text/list                   图文列表
+  音乐          /platform/music/list                        音乐管理
+  音频          /platform/audio/list                        音频管理
+  草稿箱        /platform/draft/list                        草稿
+  主页          /platform/homepage                          个人主页
+  活动          /platform/activity                          活动管理
+互动管理
+  评论          /platform/comment                           ★ Phase2/3 评论管理
+  弹幕          /platform/danmaku                           弹幕管理
+  私信          /platform/message                           私信管理
+直播
+  直播管理      /platform/live/room                         直播间
+  直播商品管理  /platform/live/product                      直播商品
+  直播预告      /platform/live/preview                      预告
+  直播回放      /platform/live/replay                       回放
+数据中心
+  关注者数据    /platform/data/follower                     粉丝数据
+  视频数据      /platform/data/video                        ★ 视频分析数据
+  图文数据      /platform/data/image-text                   图文分析
+  直播数据      /platform/data/live                         直播分析
+  带货数据      /platform/data/eccommerce                   带货分析
+设置
+  人员设置      /platform/settings/staff                    运营人员管理
+  肖像授权管理  /platform/settings/portrait                 肖像授权
+  服务菜单      /platform/settings/service                  服务配置
+-->

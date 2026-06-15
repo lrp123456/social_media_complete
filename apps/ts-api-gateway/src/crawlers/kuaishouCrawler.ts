@@ -70,7 +70,10 @@ const CREATOR_HOME = 'https://cp.kuaishou.com/article/publish/video';
 
 const VIDEO_LIST_PATTERN = '/rest/cp/works/v2/video/pc/photo/list';
 const PHOTO_ANALYSIS_PATTERN = '/rest/cp/creator/analysis/pc/photo/list';
-const COMMENT_LIST_PATTERN = '/rest/cp/comment/pc/list';
+const COMMENT_LIST_PATTERN = '/rest/cp/creator/comment/commentList';
+const COMMENT_REPLY_PATTERN = '/rest/cp/creator/comment/subCommentList';
+const COMMENT_HOME_PATTERN = '/rest/cp/creator/comment/home';
+const ALL_KUAISHOU_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_REPLY_PATTERN, COMMENT_HOME_PATTERN];
 
 const MAX_SCROLL_ATTEMPTS = 30;
 const MAX_SCROLL_NO_NEW_DATA = 10;
@@ -128,11 +131,186 @@ export type KuaishouQuerySource = 'work_list' | 'photo_analysis';
 export class KuaishouCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
+  private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'interact' | 'unknown' = 'unknown';
   private page?: Page;
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
+  }
+
+  // ════════════════════════════════════════
+  // 登录管理
+  // ════════════════════════════════════════
+
+  async checkLoginStatus(page: Page): Promise<boolean> {
+    try {
+      const url = page.url().toLowerCase();
+      if (url.includes('/login') || url.includes('/passport') || url.includes('/verify')) {
+        logger.info({ url }, '[Login] Detected login page redirect');
+        return false;
+      }
+
+      const bodyText = await HumanActions.cdpGetBodyText(page);
+      const loginKeywords = ['登录', '扫码', '二维码', '请使用快手', '账号登录'];
+      for (const keyword of loginKeywords) {
+        if (bodyText.includes(keyword)) {
+          const hasLoginForm = await HumanActions.cdpIsElementVisible(
+            page,
+            '.login-qrcode, .qrcode-img, [class*="login"], [class*="qrcode"], .app-download'
+          );
+          if (hasLoginForm) {
+            logger.info({ keyword }, '[Login] Detected login form on page');
+            return false;
+          }
+        }
+      }
+
+      if (url.includes('cp.kuaishou.com')) {
+        const hasSidebar = await HumanActions.cdpIsElementVisible(
+          page,
+          '.el-menu, .sidebar, [class*="sidebar"], [class*="menu"]'
+        );
+        if (hasSidebar) return true;
+      }
+
+      return true;
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[Login] Error checking login status');
+      return true;
+    }
+  }
+
+  async handleLogin(
+    page: Page,
+    userId: number,
+    onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void,
+  ): Promise<boolean> {
+    logger.info({ userId }, '[Login] Starting login handling');
+
+    const isLoggedIn = await this.checkLoginStatus(page);
+    if (isLoggedIn) {
+      logger.info('[Login] Already logged in');
+      return true;
+    }
+
+    logger.info('[Login] Login required, navigating to login page');
+    onProgress?.({ phase: '登录', step: '导航到登录页', percent: 6, detail: '正在打开快手登录页面' });
+
+    const KS_LOGIN_URL = 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api';
+    await page.goto(KS_LOGIN_URL, { waitUntil: 'domcontentloaded' });
+    await HumanActions.wait(page, 2000, 3000);
+
+    const switchBtn = page.locator('div.platform-switch');
+    if (await switchBtn.count() > 0) {
+      await switchBtn.click();
+      await HumanActions.wait(page, 2000, 3000);
+      logger.info('[Login] Clicked platform switch button');
+    }
+
+    const { botManager } = await import('../services/wechatBotService');
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+    if (!user?.wechatUserid) {
+      logger.error({ userId }, '[Login] No WeChat Work user ID found');
+      return false;
+    }
+
+    await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+    onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: '已发送二维码到企业微信，请扫码登录' });
+
+    const maxWait = 300_000;
+    const start = Date.now();
+    let qrRefreshCount = 0;
+    const maxQrRefreshes = 3;
+
+    while (Date.now() - start < maxWait) {
+      await HumanActions.wait(page, 3000, 4000);
+
+      const elapsed = Math.floor((Date.now() - start) / 1000);
+      const remaining = Math.floor((maxWait - (Date.now() - start)) / 1000);
+      onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: `已等待 ${elapsed}秒，剩余 ${remaining}秒` });
+
+      const currentUrl = page.url();
+      if (!currentUrl.startsWith('https://passport.kuaishou.com')) {
+        logger.info({ waitMs: Date.now() - start, url: currentUrl }, '[Login] Login successful');
+        onProgress?.({ phase: '登录', step: '登录成功', percent: 10, detail: '扫码登录成功' });
+        return true;
+      }
+
+      const bodyText = await HumanActions.cdpGetBodyText(page);
+      if ((bodyText.includes('已过期') || bodyText.includes('刷新')) && qrRefreshCount < maxQrRefreshes) {
+        logger.info('[Login] QR code expired, refreshing');
+        qrRefreshCount++;
+        const refreshBtn = page.locator('.refresh-btn, [class*="refresh"], button:has-text("刷新")');
+        if (await refreshBtn.count() > 0) {
+          await refreshBtn.first.click().catch(() => {});
+          await HumanActions.wait(page, 1000, 2000);
+        }
+        await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+        onProgress?.({ phase: '登录', step: '二维码已刷新', percent: 8, detail: `二维码已过期，已重新发送（${qrRefreshCount}/${maxQrRefreshes}）` });
+      }
+    }
+
+    logger.error({ waitMs: Date.now() - start }, '[Login] Login timeout');
+    onProgress?.({ phase: '登录', step: '登录超时', percent: 0, detail: '等待扫码超时（5分钟）' });
+    return false;
+  }
+
+  private async captureAndSendQR(
+    page: Page,
+    userId: number,
+    platform: string,
+    wechatUserid: string,
+    botManager: any,
+  ): Promise<void> {
+    try {
+      const selectors = [
+        'img[alt="qrcode"]',
+        'img[src*="data:image/"]',
+        'img[src*="qrcode"]',
+        'canvas',
+        '.login-qrcode img',
+        '[class*="qrcode"] img',
+      ];
+
+      let buf: Buffer | undefined;
+      const PADDING = 20;
+
+      for (const sel of selectors) {
+        try {
+          const el = await page.$(sel);
+          if (el) {
+            await el.waitForElementState('visible', { timeout: 5000 }).catch(() => {});
+            await page.waitForTimeout(500);
+            const box = await el.boundingBox();
+            if (box && box.width > 50 && box.height > 50) {
+              const clip = {
+                x: Math.max(0, box.x - PADDING),
+                y: Math.max(0, box.y - PADDING),
+                width: box.width + PADDING * 2,
+                height: box.height + PADDING * 2,
+              };
+              buf = await page.screenshot({ type: 'png', clip });
+              logger.info({ selector: sel, width: clip.width, height: clip.height }, '[Login] QR screenshot captured');
+              break;
+            }
+          }
+        } catch {}
+      }
+
+      if (!buf) {
+        buf = await page.screenshot({ type: 'png' });
+        logger.info('[Login] Fallback: full page screenshot');
+      }
+
+      await botManager.sendLoginAlert(wechatUserid, platform, userId, buf).catch((err: any) => {
+        logger.warn({ error: err.message }, '[Login] Failed to send QR via bot');
+        return botManager.sendTextMessage([wechatUserid], `⚠️ ${platform} 登录已失效，请扫码重新登录`);
+      });
+    } catch (err: any) {
+      logger.error({ error: err.message }, '[Login] Failed to capture and send QR');
+      await botManager.sendTextMessage([wechatUserid], `⚠️ ${platform} 登录已失效，请重新登录`).catch(() => {});
+    }
   }
 
   private async scrollElementToViewport(page: Page, selector: string): Promise<void> {
@@ -277,6 +455,26 @@ export class KuaishouCrawler {
       this.listenerPageId = null;
     }
     this.interceptor.clearAll();
+  }
+
+  /**
+   * 注册评论 API 拦截器（Phase2 调用，在导航到评论管理页面之前）
+   */
+  async registerCommentListener(page: Page): Promise<void> {
+    this.unregisterCommentListener();
+    for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
+      this.interceptor.clear(p);
+    }
+    this.commentListenerPageId = await this.interceptor.register(page, ALL_KUAISHOU_COMMENT_PATTERNS);
+    logger.info({ commentListenerPageId: this.commentListenerPageId }, 'Kuaishou comment API listener pre-registered (Phase2)');
+  }
+
+  unregisterCommentListener(): void {
+    if (this.commentListenerPageId) {
+      this.interceptor.unregister(this.commentListenerPageId);
+      this.commentListenerPageId = null;
+      logger.info('Kuaishou comment API listener unregistered');
+    }
   }
 
   async fetchVideoListFromSource(page: Page, source: KuaishouQuerySource): Promise<VideoInfo[]> {
@@ -1100,279 +1298,286 @@ export class KuaishouCrawler {
     logger.info({ queueLength: queue.length }, '[Phase3] Starting kuaishou comment queue processing');
 
     this.page = page;
-    this.interceptor.clear(COMMENT_LIST_PATTERN);
-    const commentListenerId = await this.interceptor.register(page, [COMMENT_LIST_PATTERN]);
-    logger.info({ commentListenerId }, '[Phase3] Kuaishou comment API listener registered for entire queue');
+
+    // 拦截器已在 monitorService Phase2 导航前注册，此处不重复注册
+    // 等待 comment/home 响应到达（页面加载后会自动调用）
+    let homeReady = false;
+    for (let w = 0; w < 10; w++) {
+      const hr = this.interceptor.getResponses(COMMENT_HOME_PATTERN);
+      if (hr.length > 0) {
+        homeReady = true;
+        logger.info({ waitRounds: w }, '[Phase3] comment/home response found');
+        break;
+      }
+      await HumanActions.wait(page, 500, 800);
+    }
+    if (!homeReady) {
+      logger.warn('[Phase3] comment/home response not received after waiting, will try drawer for first video');
+    }
 
     try {
       for (let i = 0; i < queue.length; i++) {
         const item = queue[i];
+        const videoT0 = Date.now();
         logger.info({ index: i + 1, total: queue.length, awemeId: item.awemeId }, '[Phase3] Processing kuaishou video in queue');
 
         const riskCheck = await this.detectRiskControlAsync(page);
         if (riskCheck.detected) {
-          logger.error({ awemeId: item.awemeId, riskType: riskCheck.type }, '[Phase3] Kuaishou risk control detected — aborting queue processing');
+          logger.error({ awemeId: item.awemeId, riskType: riskCheck.type }, '[Phase3] Kuaishou risk control detected — aborting');
           return { results, riskDetected: true, riskInfo: riskCheck };
         }
 
-        this.interceptor.clear(COMMENT_LIST_PATTERN);
+        // ── Pre-check：检查 comment/home 响应判断当前视频 ──
+        let needDrawer = true;
+        let existingCommentResp: any = null;
 
-        const drawerOpened = await this.openSelectVideoDrawer(page);
-        if (!drawerOpened) {
-          logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open kuaishou drawer — skipping video');
-          results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Failed to open drawer' });
-          continue;
-        }
+        const homeResp = this.interceptor.getResponses(COMMENT_HOME_PATTERN);
+        if (homeResp.length > 0) {
+          const latestHome = homeResp[homeResp.length - 1];
+          const currentPhotoId = latestHome.body?.data?.photo?.photoId || '';
+          const currentTitle = latestHome.body?.data?.photo?.title?.trim() || '';
 
-        const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
-        if (!clicked) {
-          logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in kuaishou drawer — manually closing and skipping');
-          await this.closeDrawer(page);
-          results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Video not found in drawer' });
-          continue;
-        }
-
-        const reactionDelay = 1200 + Math.random() * 1300;
-        logger.info({ awemeId: item.awemeId, reactionDelay: Math.round(reactionDelay) }, '[Phase3] Reaction pause — drawer auto-closes after video selection');
-        await HumanActions.wait(page, reactionDelay, reactionDelay + 100);
-
-        const response = await this.waitForCommentResponse(page);
-
-        if (!response) {
-          logger.warn({ awemeId: item.awemeId }, '[Phase3] No kuaishou comment API response received');
-          const drawerStillOpen = await this.isDrawerVisible(page);
-          if (drawerStillOpen) {
-            logger.info({ awemeId: item.awemeId }, '[Phase3] Drawer still open after no response — closing manually');
-            await this.closeDrawer(page);
+          if (currentPhotoId === item.awemeId) {
+            logger.info({ awemeId: item.awemeId, currentPhotoId }, '[Phase3] Pre-check: home API matches target video');
+            // 检查是否已有 commentList 响应
+            const listResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+            if (listResp.length > 0) {
+              existingCommentResp = listResp[listResp.length - 1];
+              logger.info({ awemeId: item.awemeId }, '[Phase3] Pre-check: commentList response already loaded');
+            }
+            needDrawer = false;
+          } else {
+            logger.info({ awemeId: item.awemeId, currentPhotoId, currentTitle }, '[Phase3] Pre-check: current video is different, need drawer');
           }
+        } else {
+          logger.info({ awemeId: item.awemeId }, '[Phase3] Pre-check: no home response yet, need drawer');
+        }
+
+        // ── 需要开抽屉选择视频 ──
+        if (needDrawer) {
+          // 清空旧的评论响应
+          for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
+            this.interceptor.clear(p);
+          }
+
+          const drawerOpened = await this.openSelectVideoDrawer(page);
+          if (!drawerOpened) {
+            logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open drawer — skipping');
+            results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Failed to open drawer' });
+            continue;
+          }
+
+          const clickT0 = Date.now();
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+          logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer click completed');
+          if (!clicked) {
+            logger.error({ awemeId: item.awemeId }, '[Phase3] Video not found in drawer — skipping');
+            await this.closeDrawer(page);
+            results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Video not found in drawer' });
+            continue;
+          }
+
+          // 等待抽屉关闭 + 评论 API 响应
+          await HumanActions.wait(page, 1500, 2500);
+          // 等待抽屉消失（最多 5 秒）
+          for (let w = 0; w < 5; w++) {
+            if (!(await this.isDrawerVisible(page))) break;
+            await HumanActions.wait(page, 800, 1200);
+          }
+
+          // 等待 commentList 响应
+          const respT0 = Date.now();
+          const listResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+          if (listResp.length > 0) {
+            existingCommentResp = listResp[listResp.length - 1];
+          } else {
+            // 等待一下让 API 返回
+            await HumanActions.wait(page, 2000, 3000);
+            const listResp2 = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+            if (listResp2.length > 0) {
+              existingCommentResp = listResp2[listResp2.length - 1];
+            }
+          }
+          logger.info({ awemeId: item.awemeId, waitMs: Date.now() - respT0, hasResp: !!existingCommentResp }, '[Phase3] Comment API wait completed');
+        }
+
+        if (!existingCommentResp) {
+          logger.warn({ awemeId: item.awemeId }, '[Phase3] No comment API response — skipping');
           results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'No API response' });
           continue;
         }
 
-        // 从响应中解析根评论快照
-        const currentSnapshots = this.parseRootCommentSnapshots(response.body);
+        // ── 从首轮 commentList 提取根评论 ──
+        const firstPageComments = existingCommentResp.body?.data?.list || [];
+        const rootComments = firstPageComments.filter((c: any) => c.replyTo === 0);
+        const subReplies = firstPageComments.filter((c: any) => c.replyTo !== 0);
 
-        // 加载上次快照
-        const lastSnapshots = await db.getRootCommentCounts(item.awemeId);
+        logger.info({
+          awemeId: item.awemeId,
+          totalInResponse: firstPageComments.length,
+          rootCount: rootComments.length,
+          subReplyCount: subReplies.length,
+        }, '[Phase3] First page comments parsed');
 
-        // 获取 lastCheckTime 用于过滤新增评论
-        const monitorStatus = await prisma.monitorStatus.findFirst({
-          where: { accountId: String(item._userId), platform: 'kuaishou' },
-          orderBy: { lastCheckTime: 'desc' },
-        });
-        const lastCheckTime = monitorStatus?.lastCheckTime?.getTime() || 0;
+        // ── 滚动 + 点击展开按钮收集子回复 ──
+        const allCollectedComments = [...firstPageComments];
+        const expandPattern = /展开(查看)?\d+条回复/;
 
-        const isFirstCrawl = item.isFirstCrawl || lastSnapshots.size === 0;
+        for (let scrollRound = 0; scrollRound < 30; scrollRound++) {
+          // 查找视口内的展开按钮
+          const expandButtons = await page.evaluate((pattern: string) => {
+            const regex = new RegExp(pattern);
+            const results: Array<{ x: number; y: number; text: string; rootCommentId: string }> = [];
+            const all = Array.from(document.querySelectorAll('*'));
+            for (const el of all) {
+              const t = (el.textContent || '').trim();
+              if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
+              const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
+              if (!isLeaf) continue;
+              const rect = el.getBoundingClientRect();
+              if (rect.top < 0 || rect.bottom > window.innerHeight || rect.width === 0 || rect.height === 0) continue;
 
-        if (isFirstCrawl) {
-          // ════════════════════════════════════════
-          // 首次采集：保存快照 + 全量解析评论 + isNew=0
-          // ════════════════════════════════════════
-
-          // 保存快照
-          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
-            cid: s.cid,
-            replyCount: s.replyCount,
-          })));
-
-          // 全量解析根评论（从 API 返回解析）
-          const allRootComments = this.parseCommentList(response.body);
-
-          // 转换为 upsertCommentTree 所需格式
-          const allFlat: Array<{
-            cid: string; text: string; user_nickname: string; user_uid: string;
-            digg_count: number; create_time: number; reply_id: string;
-            rootId?: string; parentId?: string; level: number; replyToName?: string;
-          }> = allRootComments.map(c => ({
-            cid: c.cid,
-            text: c.text,
-            user_nickname: c.user_nickname,
-            user_uid: c.user_uid,
-            digg_count: c.digg_count,
-            create_time: c.create_time,
-            reply_id: c.reply_id,
-            level: 1,
-          }));
-
-          // 对于有 subCommentCount > 0 的根评论，尝试从 API 中提取已包含的子回复
-          const allComments = response.body?.data?.commentList || response.body?.data?.rootComments || response.body?.data?.commentInfoList || response.body?.data?.list || response.body?.data?.comments || [];
-          if (Array.isArray(allComments)) {
-            for (const c of allComments) {
-              const replyTo = c.replyTo ?? 0;
-              if (replyTo !== 0) {
-                let rawTime = c.timestamp || c.createTime || c.created_at || 0;
-                if (rawTime > 1e12) rawTime = Math.floor(rawTime / 1000);
-                if (rawTime === 0) rawTime = Math.floor(Date.now() / 1000);
-                allFlat.push({
-                  cid: String(c.commentId || c.comment_id || c.id || c.cid || ''),
-                  text: c.content || c.text || c.message || '',
-                  user_nickname: c.userName || c.user_name || c.author?.name || c.user?.name || c.nickname || '',
-                  user_uid: String(c.userId || c.user_id || c.author?.id || c.user?.id || c.authorId || ''),
-                  digg_count: c.likeCount || c.like_count || c.likedCount || c.diggCount || c.likeNum || 0,
-                  create_time: rawTime,
-                  reply_id: String(replyTo),
-                  rootId: String(replyTo),
-                  parentId: String(replyTo),
-                  level: 2,
-                  replyToName: c.replyToName || '',
-                });
+              // 往上找根评论的 commentId
+              let rootCommentId = '';
+              const commentItem = el.closest('[class*="comment-item"], [class*="comment"]');
+              if (commentItem) {
+                const cidAttr = commentItem.getAttribute('data-comment-id') || commentItem.getAttribute('data-id') || '';
+                if (cidAttr) rootCommentId = cidAttr;
               }
+
+              results.push({
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                text: t,
+                rootCommentId,
+              });
             }
-          }
+            return results;
+          }, expandPattern.source);
 
-          // 入库（isNew=1 是 upsertCommentTree 默认值，需设为 0）
-          await db.upsertCommentTree(item.awemeId, allFlat);
-          await prisma.comment.updateMany({
-            where: { videoId: item.awemeId },
-            data: { isNew: 0 },
-          });
+          if (expandButtons.length > 0) {
+            // 点击每个展开按钮
+            for (const btn of expandButtons) {
+              logger.info({ awemeId: item.awemeId, text: btn.text, x: btn.x, y: btn.y }, '[Phase3] Clicking expand button');
 
-          await db.updateCommentCount(item.awemeId, item.newCount);
+              // 清空 subCommentList 响应
+              this.interceptor.clear(COMMENT_REPLY_PATTERN);
 
-          logger.info({
-            awemeId: item.awemeId,
-            totalComments: allFlat.length,
-            newComments: 0,
-            isFirstCrawl: true,
-          }, '[Phase3] First crawl complete — all comments saved as isNew=0');
+              // CDP 点击
+              await HumanActions.withCDPContext(page, async (ctx) => {
+                await ctx.mouse.moveTo({ x: btn.x, y: btn.y });
+                await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+                await ctx.mouse.clickAt(btn.x, btn.y);
+              });
 
-          results.push({
-            awemeId: item.awemeId,
-            success: true,
-            comments: [],
-          } as any);
-        } else {
-          // ════════════════════════════════════════
-          // 后续增量检测：对比快照 + 新增/变更加载
-          // ════════════════════════════════════════
-
-          const newCommentsToUpsert: Array<{
-            cid: string; text: string; user_nickname: string; user_uid: string;
-            digg_count: number; create_time: number; reply_id: string;
-            rootId?: string; parentId?: string; level: number; replyToName?: string;
-          }> = [];
-
-          const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
-          const dbRootCids = new Set(lastSnapshots.keys());
-
-          // 获取作者 ID 用于过滤（作者的评论不计为新增）
-          const currentUser = await db.getUserById(item._userId!);
-          const platformAuthorId = currentUser?.platformAuthorId;
-
-          // ── 3a. 新增根评论 ──
-          for (const snapshot of currentSnapshots) {
-            if (!dbRootCids.has(snapshot.cid)) {
-              if (snapshot.createTime * 1000 > lastCheckTime) {
-                const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
-                if (!isAuthor) {
-                  newCommentsToUpsert.push({
-                    cid: snapshot.cid,
-                    text: snapshot.text,
-                    user_nickname: snapshot.userNickname,
-                    user_uid: snapshot.userUid,
-                    digg_count: 0,
-                    create_time: snapshot.createTime,
-                    reply_id: '0',
-                    rootId: undefined,
-                    parentId: undefined,
-                    level: 1,
-                    replyToName: undefined,
-                  });
-                }
-              }
-            }
-          }
-
-          // ── 3b. 根评论 replyCount 增加 → 提取新增子回复 ──
-          for (const snapshot of currentSnapshots) {
-            const lastCount = lastSnapshots.get(snapshot.cid);
-            if (lastCount !== undefined && snapshot.replyCount > lastCount) {
-              // 从当前 API 响应中查找属于该根评论的子回复
-              const apiComments: any[] = response.body?.data?.commentList || response.body?.data?.rootComments || response.body?.data?.commentInfoList || response.body?.data?.list || response.body?.data?.comments || [];
-              const repliesForRoot = Array.isArray(apiComments)
-                ? apiComments.filter((c: any) => {
-                    const replyTo = c.replyTo ?? 0;
-                    return replyTo === Number(snapshot.cid) || String(replyTo) === snapshot.cid;
-                  })
-                : [];
-
-              for (const reply of repliesForRoot) {
-                let rawTime = reply.timestamp || reply.createTime || reply.created_at || 0;
-                if (rawTime > 1e12) rawTime = Math.floor(rawTime / 1000);
-                if (rawTime === 0) rawTime = Math.floor(Date.now() / 1000);
-
-                if (rawTime * 1000 > lastCheckTime) {
-                  const isAuthor = platformAuthorId
-                    ? String(reply.authorId || reply.userId || '') === platformAuthorId
-                    : false;
-                  if (!isAuthor) {
-                    newCommentsToUpsert.push({
-                      cid: String(reply.commentId || reply.comment_id || reply.id || reply.cid || ''),
-                      text: reply.content || reply.text || reply.message || '',
-                      user_nickname: reply.userName || reply.user_name || reply.author?.name || reply.user?.name || reply.nickname || '',
-                      user_uid: String(reply.userId || reply.user_id || reply.author?.id || reply.user?.id || reply.authorId || ''),
-                      digg_count: reply.likeCount || reply.like_count || reply.likedCount || reply.diggCount || reply.likeNum || 0,
-                      create_time: rawTime,
-                      reply_id: snapshot.cid,
-                      rootId: snapshot.cid,
-                      parentId: snapshot.cid,
-                      level: 2,
-                      replyToName: reply.replyToName || '',
-                    });
+              // 等待 subCommentList API 响应
+              await HumanActions.wait(page, 1500, 2500);
+              const subResp = this.interceptor.getResponses(COMMENT_REPLY_PATTERN);
+              if (subResp.length > 0) {
+                const latestSubResp = subResp[subResp.length - 1];
+                const subList = latestSubResp.body?.data?.list || [];
+                if (subList.length > 0) {
+                  // 从 POST 请求体中获取根评论 ID（最可靠的方式）
+                  const rootCommentId = String(latestSubResp.requestBody?.commentId || btn.rootCommentId || '');
+                  for (const sub of subList) {
+                    sub._rootCommentId = rootCommentId || String(sub.replyTo);
                   }
+                  allCollectedComments.push(...subList);
+                  logger.info({ awemeId: item.awemeId, subCount: subList.length, rootCommentId, text: btn.text }, '[Phase3] Sub-replies collected');
                 }
               }
             }
           }
 
-          // ── 3c. 清理已不存在的 rootCid ──
-          await db.deleteStaleRootCounts(item.awemeId, currentSnapshots.map(s => s.cid));
+          // 向下滚动查看更多
+          await this.scrollCommentAreaForKuaishou(page, 300);
+          await HumanActions.wait(page, 1500, 2500);
 
-          // ── 3d. 更新快照 ──
-          await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
-            cid: s.cid,
-            replyCount: s.replyCount,
-          })));
-
-          // ── 3e. 新评论入库（isNew=1 由 upsertCommentTree 自动设置）──
-          if (newCommentsToUpsert.length > 0) {
-            await db.upsertCommentTree(item.awemeId, newCommentsToUpsert);
+          // 检查滚动后是否有新的 commentList 分页响应（加载更多根评论）
+          const newCommentResps = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+          if (newCommentResps.length > 0) {
+            const latestResp = newCommentResps[newCommentResps.length - 1];
+            const newList = latestResp.body?.data?.list || [];
+            // 去重：只添加之前没见过的评论
+            const existingIds = new Set(allCollectedComments.map((c: any) => String(c.commentId)));
+            const fresh = newList.filter((c: any) => !existingIds.has(String(c.commentId)));
+            if (fresh.length > 0) {
+              allCollectedComments.push(...fresh);
+              logger.info({ awemeId: item.awemeId, freshCount: fresh.length, totalCollected: allCollectedComments.length }, '[Phase3] New root comments from pagination');
+            }
           }
 
-          // ── 3f. 更新 commentCount ──
-          await db.updateCommentCount(item.awemeId, item.newCount);
-
-          logger.info({
-            awemeId: item.awemeId,
-            totalSnapshots: currentSnapshots.length,
-            newComments: newCommentsToUpsert.length,
-            isFirstCrawl: false,
-          }, '[Phase3] Incremental detection complete');
-
-          results.push({
-            awemeId: item.awemeId,
-            success: true,
-            comments: newCommentsToUpsert as any,
-          } as any);
+          // 检查是否到底
+          const atBottom = await page.evaluate(() => {
+            const container = document.querySelector('.el-main') as HTMLElement;
+            if (!container) return true;
+            return container.scrollTop + container.clientHeight >= container.scrollHeight - 50;
+          });
+          if (atBottom) {
+            logger.info({ awemeId: item.awemeId, scrollRound }, '[Phase3] Reached bottom');
+            break;
+          }
         }
 
+        // ── 保存到数据库 ──
+        // 构建根评论 ID 集合，用于子评论挂载
+        const rootCommentIds = new Set(rootComments.map((c: any) => String(c.commentId)));
+        const commentIdToRoot = new Map<string, string>();
+        for (const rc of rootComments) {
+          commentIdToRoot.set(String(rc.commentId), String(rc.commentId));
+        }
+
+        const dbComments = allCollectedComments.map((c: any) => {
+          const cid = String(c.commentId || '');
+          const isRoot = c.replyTo === 0;
+          // 子评论的 rootId：优先用 _rootCommentId（展开按钮标记），否则用 replyTo 查找
+          const rootId = isRoot ? cid : (c._rootCommentId || commentIdToRoot.get(String(c.replyTo)) || String(c.replyTo || ''));
+          const parentId = isRoot ? cid : String(c.replyTo || '');
+          return {
+            comment_id: cid,
+            content: c.content || '',
+            nickname: c.authorName || '',
+            head_img_url: c.headurl || '',
+            create_time: Math.floor((c.timestamp || 0) / 1000),
+            like_count: c.likedCount || 0,
+            reply_count: c.subCommentCount || 0,
+            export_id: item.awemeId,
+            is_author: false,
+            level: isRoot ? 1 as const : 2 as const,
+            root_id: rootId,
+            parent_id: parentId,
+            reply_to_name: isRoot ? undefined : (c.replyToName || undefined),
+          };
+        });
+
+        await db.batchUpsertComments('kuaishou', dbComments, item._userId);
+        await db.updateCommentCount(item.awemeId, item.newCount);
+
+        // 保存根评论快照
+        const snapshots = rootComments.map((c: any) => ({
+          cid: String(c.commentId),
+          replyCount: c.subCommentCount || 0,
+        }));
+        await db.upsertRootCommentCounts(item.awemeId, snapshots);
+
+        logger.info({
+          awemeId: item.awemeId,
+          totalCollected: allCollectedComments.length,
+          roots: rootComments.length,
+          videoMs: Date.now() - videoT0,
+        }, '[Phase3] Video comment collection complete');
+
+        results.push({ awemeId: item.awemeId, success: true, comments: dbComments as any });
+
+        // 回到顶部准备下一个视频
         if (i < queue.length - 1) {
-          const transitionDelay = 1200 + Math.random() * 1300;
-          logger.info({ delayMs: Math.round(transitionDelay) }, '[Phase3] Transition pause before next video');
-          await HumanActions.wait(page, transitionDelay, transitionDelay + 100);
-        }
-
-        if ((i + 1) % HumanActions.randomDelay(3, 5) === 0 && i < queue.length - 1) {
-          const antiDetectDelay = HumanActions.randomDelay(10000, 20000);
-          logger.info({ delayMs: antiDetectDelay, processed: i + 1, remaining: queue.length - i - 1 }, '[Phase3] Anti-detection pause');
-          await HumanActions.wait(page, antiDetectDelay, antiDetectDelay + 100);
+          await this.scrollCommentAreaForKuaishou(page, 'top');
+          await HumanActions.wait(page, 500, 1000);
         }
       }
     } finally {
-      if (commentListenerId) {
-        this.interceptor.unregister(commentListenerId);
-        logger.info('[Phase3] Kuaishou comment API listener unregistered');
-      }
+      this.unregisterCommentListener();
+      logger.info('[Phase3] Kuaishou comment queue processing finished');
     }
 
     const elapsed = Date.now() - startTime;
@@ -1381,6 +1586,69 @@ export class KuaishouCrawler {
     logger.info({ elapsed, total: queue.length, success: successCount, failed: failCount }, '[Phase3] Kuaishou queue processing complete');
 
     return { results, riskDetected: false };
+  }
+
+  /**
+   * 滚动快手评论容器：hover 到 .el-main → 模拟鼠标滚轮
+   */
+  private async scrollCommentAreaForKuaishou(page: Page, direction: 'bottom' | 'top' | number): Promise<boolean> {
+    const t0 = Date.now();
+    const selectors = ['.el-main', 'main', '[class*="main-content"]'];
+
+    return await HumanActions.withCDPContext(page, async (ctx) => {
+      await ctx.dom.refreshDocument();
+
+      // 找到滚动容器
+      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
+      for (const sel of selectors) {
+        const nodeId = await ctx.cdp.querySelector(sel);
+        if (nodeId && nodeId > 0) {
+          const box = await ctx.cdp.getBoxModel(nodeId);
+          if (box && box.width > 0 && box.height > 0) {
+            containerRect = { x: box.content[0], y: box.content[1], width: box.width, height: box.height };
+            break;
+          }
+        }
+      }
+
+      if (!containerRect) {
+        logger.warn('[scrollKuaishou] Container not found');
+        return false;
+      }
+
+      // hover 到容器中心
+      const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
+      const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
+      await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+
+      // 滚动
+      if (direction === 'top') {
+        const scrollCount = 5 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < scrollCount; i++) {
+          await ctx.mouse.dispatchWheel(0, -(1000 + Math.random() * 1000));
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        }
+      } else if (direction === 'bottom') {
+        const scrollCount = 5 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < scrollCount; i++) {
+          await ctx.mouse.dispatchWheel(0, 1000 + Math.random() * 1000);
+          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
+        }
+      } else {
+        const dir = direction >= 0 ? 1 : -1;
+        let remaining = Math.abs(direction);
+        while (remaining > 0) {
+          const step = Math.min(200 + Math.random() * 200, remaining);
+          await ctx.mouse.dispatchWheel(0, step * dir);
+          remaining -= step;
+          await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
+        }
+      }
+
+      logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollKuaishou] Completed');
+      return true;
+    });
   }
 
   private async openSelectVideoDrawer(page: Page): Promise<boolean> {
@@ -1501,167 +1769,120 @@ export class KuaishouCrawler {
     description: string
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS_DRAWER = 20;
-    const descLower = description.toLowerCase();
-    const descPrefix = descLower.substring(0, Math.min(descLower.length, 25));
+    const descLower = description.toLowerCase().trim();
+    const descPrefix = descLower.substring(0, Math.min(descLower.length, 20));
 
     logger.info({ awemeId, descPrefix }, '[Drawer] Searching for target video in kuaishou drawer');
+
+    const SCROLL_CONTAINER = '.auto-load-list';
 
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      // 优先使用XPath精确定位（快手抽屉结构固定）
-      const videoItemCss = this.xpathToCss(DRAWER_VIDEO_ITEM_XPATH);
-      if (videoItemCss) {
-        const elements = await HumanActions.queryElementsWithInfo(page, videoItemCss);
-        if (elements && elements.length > 0) {
-          for (const el of elements) {
-            if (!el.visible) continue;
+      // 在视口中查找匹配的视频项并返回点击坐标
+      const matchResult = await page.evaluate((prefix: string) => {
+        const items = document.querySelectorAll('.video-item');
+        for (const item of items) {
+          const titleEl = item.querySelector('.video-info__content__title') as HTMLElement;
+          if (!titleEl) continue;
+          const titleText = (titleEl.textContent || '').toLowerCase().trim();
+          if (!titleText) continue;
+          // 匹配标题
+          if (titleText.includes(prefix) || prefix.includes(titleText)) {
+            // 检查是否在视口内
+            const itemRect = item.getBoundingClientRect();
+            if (itemRect.top < 0 || itemRect.bottom > window.innerHeight || itemRect.height === 0) continue;
 
-            // 尝试通过标题匹配
-            const titleCss = this.xpathToCss(DRAWER_VIDEO_TITLE_XPATH);
-            if (titleCss) {
-              const titleElements = await HumanActions.queryElementsWithInfo(page, titleCss);
-              if (titleElements && titleElements.length > 0) {
-                for (const titleEl of titleElements) {
-                  if (!titleEl.visible || !titleEl.text) continue;
-                  const titleText = titleEl.text.toLowerCase();
-                  const matchedExact = titleText.includes(descLower);
-                  const matchedPartial = titleText.includes(descPrefix);
-                  const matchedReverse = descLower.includes(titleText);
-
-                  if (matchedExact || matchedPartial || matchedReverse) {
-                    logger.info({ awemeId, titleText: titleEl.text, matchType: matchedExact ? 'exact' : matchedPartial ? 'partial' : 'reverse' }, '[Drawer] Found kuaishou video by title match (XPath)');
-
-                    let clickNodeId = el.nodeId;
-                    for (let level = 0; level < 2; level++) {
-                      const parentId = await HumanActions.getNodeParentId(page, clickNodeId);
-                      if (!parentId) break;
-                      clickNodeId = parentId;
-                    }
-
-                    const boxModel = await HumanActions.getElementBoxModel(page, clickNodeId);
-                    if (boxModel) {
-                      const quad = boxModel.content;
-                      const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-                      const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-                      await HumanActions.clickAtCoordinates(page, x, y);
-                      return true;
-                    }
-                  }
-                }
+            // 点击 .video-info__content__detail 区域（播放数+评论数，非标题非封面）
+            const detailEl = item.querySelector('.video-info__content__detail') as HTMLElement;
+            if (detailEl) {
+              const rect = detailEl.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                return {
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  title: titleText,
+                  method: 'detail',
+                };
               }
             }
-
-            // 通过元素文本匹配
-            if (el.text) {
-              const elText = el.text.toLowerCase();
-              const matchedExact = elText.includes(descLower);
-              const matchedPartial = elText.includes(descPrefix);
-
-              if (matchedExact || matchedPartial) {
-                logger.info({ awemeId, descPrefix, matchType: matchedExact ? 'exact' : 'partial' }, '[Drawer] Found kuaishou video by element text (XPath)');
-                const boxModel = await HumanActions.getElementBoxModel(page, el.nodeId);
-                if (boxModel) {
-                  const quad = boxModel.content;
-                  const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-                  const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-                  await HumanActions.clickAtCoordinates(page, x, y);
-                  return true;
-                }
+            // fallback: 点击 .video-info__content__date 区域
+            const dateEl = item.querySelector('.video-info__content__date') as HTMLElement;
+            if (dateEl) {
+              const rect = dateEl.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                return {
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  title: titleText,
+                  method: 'date',
+                };
+              }
+            }
+            // fallback: 点击 .video-info__content 中非标题区域
+            const contentEl = item.querySelector('.video-info__content') as HTMLElement;
+            if (contentEl) {
+              const rect = contentEl.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                return {
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height * 0.8),
+                  title: titleText,
+                  method: 'content-bottom',
+                };
               }
             }
           }
         }
+        return null;
+      }, descPrefix);
+
+      if (matchResult) {
+        logger.info({ awemeId, title: matchResult.title, method: matchResult.method, x: matchResult.x, y: matchResult.y }, '[Drawer] Found kuaishou video, clicking');
+        await HumanActions.withCDPContext(page, async (ctx) => {
+          await ctx.mouse.moveTo({ x: matchResult.x, y: matchResult.y });
+          await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
+          await ctx.mouse.clickAt(matchResult.x, matchResult.y);
+        });
+        return true;
       }
 
-      // 回退：使用CSS选择器
-      const videoItemDef = getSelector('drawer.video-item', PLATFORM);
-      const videoItemSelectors = [videoItemDef.css, '[class*="video-item"]', '[class*="work-item"]', '[class*="content-item"]', '[class*="photo-item"]'].filter(Boolean) as string[];
-
-      for (const itemSelector of videoItemSelectors) {
-        const elements = await HumanActions.queryElementsWithInfo(page, itemSelector);
-        if (!elements || elements.length === 0) continue;
-
-        for (const el of elements) {
-          if (!el.visible) continue;
-
-          if (el.text) {
-            const elText = el.text.toLowerCase();
-            const matchedExact = elText.includes(descLower);
-            const matchedPartial = elText.includes(descPrefix);
-
-            if (matchedExact || matchedPartial) {
-              logger.info({ awemeId, descPrefix, matchType: matchedExact ? 'exact' : 'partial' }, '[Drawer] Found kuaishou video by element text (CSS fallback)');
-              const boxModel = await HumanActions.getElementBoxModel(page, el.nodeId);
-              if (boxModel) {
-                const quad = boxModel.content;
-                const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-                const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-                await HumanActions.clickAtCoordinates(page, x, y);
-                return true;
-              }
-            }
-          }
-
-          const dataPhotoId = el.attrs['data-photo-id'] || el.attrs['data-id'] || el.attrs['data-work-id'] || '';
-          if (dataPhotoId && dataPhotoId === awemeId) {
-            logger.info({ awemeId, matchType: 'data-attribute' }, '[Drawer] Found kuaishou video by data attribute');
-            const boxModel = await HumanActions.getElementBoxModel(page, el.nodeId);
-            if (boxModel) {
-              const quad = boxModel.content;
-              const x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4;
-              const y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4;
-              await HumanActions.clickAtCoordinates(page, x, y);
-              return true;
-            }
-          }
-        }
-      }
-
+      // 没找到，hover 到抽屉容器后用 wheel 滚动
       if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-        logger.info({ scrollAttempt }, '[Drawer] Video not in current viewport, scrolling kuaishou drawer');
-
-        // 优先使用XPath定位滚动容器
-        const scrollContainerCss = this.xpathToCss(DRAWER_SCROLL_CONTAINER_XPATH);
-        const drawerScrollDef = getSelector('scroll.drawer', PLATFORM);
-        const drawerScrollSelectors = [
-          scrollContainerCss,
-          drawerScrollDef.css,
-          '[class*="sidesheet"] [class*="scroll"]',
-          '[class*="drawer"] [class*="scroll"]',
-        ].filter(Boolean) as string[];
-
-        const scrollContainer = await HumanActions.cdpFindScrollContainer(page, drawerScrollSelectors);
-        if (scrollContainer) {
-          await HumanActions.cdpSmartScroll(page, [scrollContainer.sel], 250, 'down');
-        } else {
-          await HumanActions.cdpSmartScroll(page, [], 250, 'down');
-        }
+        logger.info({ scrollAttempt }, '[Drawer] Video not in viewport, scrolling drawer');
+        // 抽屉的滚动容器优先级：.el-drawer__body > .drawer__content > .auto-load-list
+        const drawerScrollSelectors = ['.el-drawer__body', '.drawer__content', SCROLL_CONTAINER];
+        await HumanActions.withCDPContext(page, async (ctx) => {
+          await ctx.dom.refreshDocument();
+          let containerRect: { x: number; y: number; width: number; height: number } | null = null;
+          for (const sel of drawerScrollSelectors) {
+            const nodeId = await ctx.cdp.querySelector(sel);
+            if (nodeId && nodeId > 0) {
+              const box = await ctx.cdp.getBoxModel(nodeId);
+              if (box && box.width > 0 && box.height > 0) {
+                containerRect = { x: box.content[0], y: box.content[1], width: box.width, height: box.height };
+                break;
+              }
+            }
+          }
+          if (containerRect) {
+            const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
+            const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
+            await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+            await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+            // 小幅滚动，避免滚过目标
+            for (let i = 0; i < 2; i++) {
+              await ctx.mouse.dispatchWheel(0, 200 + Math.random() * 150);
+              await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
+            }
+          }
+        });
+        // 等待 infinite-scroll 加载新内容
+        await HumanActions.wait(page, 1500, 2500);
       }
     }
 
-    // 最终回退：使用文本搜索（不依赖XPath或CSS结构）
-    logger.info({ awemeId, descPrefix }, '[Drawer] XPath+CSS exhausted, trying text-based fallback');
-    // 尝试通过空间过滤文本搜索找到视频（Y范围：抽屉区域通常在中上部）
-    const textClicked = await HumanActions.cdpClickByTextFiltered(page, descPrefix.replace(/#/g, '').trim(), {
-      timeout: 6000,
-      yMin: 150,
-      yMax: 700,
-      minWidth: 50,
-      minHeight: 15,
-    });
-    if (textClicked) {
-      logger.info({ awemeId, descPrefix }, '[Drawer] Found and clicked video via text fallback');
-      return true;
-    }
-    // 终极回退：全页面无过滤文本搜索
-    const unfilteredClicked = await HumanActions.cdpClickByText(page, descPrefix.replace(/#/g, '').trim(), { timeout: 5000 });
-    if (unfilteredClicked) {
-      logger.info({ awemeId, descPrefix }, '[Drawer] Found and clicked video via unfiltered text');
-      return true;
-    }
-
-    logger.warn({ awemeId, descPrefix, maxScrolls: MAX_SCROLL_ATTEMPTS_DRAWER }, '[Drawer] Kuaishou video not found after exhaustive search');
+    logger.warn({ awemeId, descPrefix, maxScrolls: MAX_SCROLL_ATTEMPTS_DRAWER }, '[Drawer] Kuaishou video not found after scrolling');
     return false;
   }
 
@@ -1746,5 +1967,75 @@ export class KuaishouCrawler {
       })));
     }
     return snapshots;
+  }
+
+  // ════════════════════════════════════════
+  // 回复相关
+  // ════════════════════════════════════════
+
+  /**
+   * 直接导航到评论管理页面（用于回复流程）
+   */
+  async navigateToCommentPageDirect(page: Page): Promise<boolean> {
+    return this.navigateToCommentManage(page);
+  }
+
+  /**
+   * 回复评论
+   */
+  async replyToComment(page: Page, commentCid: string, replyText: string): Promise<boolean> {
+    logger.info({ commentCid, textLength: replyText.length }, '[Reply] Starting reply');
+
+    try {
+      await HumanActions.thinkingPause(page, 800, 2000);
+
+      // 点击回复按钮
+      const replyClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
+      if (!replyClicked) {
+        logger.error('[Reply] Reply button not found');
+        return false;
+      }
+
+      await HumanActions.wait(page, 800, 1500);
+
+      // 点击输入框
+      const inputSelectors = [
+        'div[contenteditable="true"]',
+        'textarea[placeholder*="回复"]',
+        '.reply-input-area textarea',
+        '[class*="reply"] textarea',
+      ];
+
+      let inputClicked = false;
+      for (const sel of inputSelectors) {
+        inputClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
+        if (inputClicked) break;
+      }
+
+      if (!inputClicked) {
+        logger.error('[Reply] Reply input not found');
+        return false;
+      }
+      await HumanActions.wait(page, 300, 600);
+
+      // 输入回复内容
+      await HumanActions.safeCDPType(page, replyText);
+      await HumanActions.wait(page, 500, 1200);
+
+      // 点击发送
+      const submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
+      if (!submitClicked) {
+        logger.warn('[Reply] Submit button not found');
+      }
+
+      await HumanActions.wait(page, 1500, 3000);
+      await HumanActions.betweenActionsPause(page);
+
+      logger.info({ commentCid, submitClicked }, '[Reply] Reply sent');
+      return true;
+    } catch (err: any) {
+      logger.error({ error: err.message, commentCid }, '[Reply] Reply failed');
+      return false;
+    }
   }
 }

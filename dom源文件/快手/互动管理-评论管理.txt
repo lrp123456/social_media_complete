@@ -1,0 +1,168 @@
+<!-- 快手创作者中心 - 互动管理-评论管理 -->
+<!-- URL: https://cp.kuaishou.com/article/comment -->
+<!-- 抓取时间: 2026-06-10 -->
+
+<div class="comment">
+
+  <!-- 页面头部 -->
+  <div data-v-306677a7="" class="comment__header">
+    评论管理
+    <button data-v-306677a7="" type="button" class="el-button comment__header__video-btn el-button--default el-button--medium">
+      <span>选择视频</span>
+    </button>
+  </div>
+
+  <!-- 内容区域 -->
+  <div class="comment__content">
+
+    <!-- 当前选中视频信息 -->
+    <div data-v-44d27b69="" class="comment-home-video">
+      <div data-v-26850d58="" class="video-info">
+        <div data-v-26850d58="" class="video-info__cover" style="cursor: pointer;">
+          <img src="..." alt="">
+          <div data-v-26850d58="" class="video-info__cover__duration"> 04:32 </div>
+        </div>
+        <div data-v-26850d58="" class="video-info__content">
+          <div data-v-26850d58="" class="video-info__content__title" style="cursor: pointer;"> #空气清新环境优美&nbsp; </div>
+          <div data-v-26850d58="" class="video-info__content__date"> 2026-05-28 09:03:19 </div>
+          <div data-v-26850d58="" class="video-info__content__detail">
+            <div><img src=".../icon_play.a20c8a9e.svg" alt="">2,940 </div>
+            <div><img src=".../icon_comment.b1226c28.svg" alt="">41 </div>
+          </div>
+        </div>
+        <!-- 评论权限对话框（隐藏） -->
+        <div class="el-dialog__wrapper" style="display: none;">
+          <div role="dialog" aria-label="评论权限" class="el-dialog">
+            <div class="el-dialog__header">
+              <span class="el-dialog__title">评论权限</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="comment__content__boundary"></div>
+
+    <!-- 评论列表区域 -->
+    <div class="comment-list">
+
+      <!-- 发表评论输入区 -->
+      <div class="author-comment-input">
+        发表评论 发送
+      </div>
+
+      <!-- 评论列表工具栏 -->
+      <div class="comment-list-tools">
+        全部评论
+        按评论时间排序
+        按点赞量排序
+      </div>
+
+      <!-- 评论条目列表 -->
+      <div class="el-checkbox-group">
+
+        <!-- 单条评论示例 -->
+        <div data-v-4cb28817="" class="comment-item">
+          <img class="comment-item__cover" src="...">
+          <div data-v-5b8d43d5="" class="comment-content">
+            <div data-v-5b8d43d5="" class="comment-content__username">
+              User_1508319381044
+              <span class="comment-content__username__author-tag">作者</span>
+            </div>
+            <div data-v-5b8d43d5="" class="comment-content__date"> 1天前 </div>
+            <div data-v-5b8d43d5="" class="comment-content__detail">
+              <span>12</span>
+            </div>
+            <div data-v-5b8d43d5="" class="comment-content__btns">
+              <div class="comment-content__btns__btn">
+                <div class="btn-icon icon-like"></div> 0
+              </div>
+              <div class="comment-content__btns__btn">
+                <div class="btn-icon icon-reply"></div> 回复
+              </div>
+              <div class="comment-content__btns__btn">
+                <div class="btn-icon icon-delete-comment"></div> 删除
+              </div>
+              <div class="comment-content__btns__btn">
+                <div class="btn-icon icon-report"></div> 举报
+              </div>
+              <div class="comment-content__btns__btn">
+                <div class="btn-icon icon-topping"></div> 置顶
+              </div>
+            </div>
+            <!-- 回复输入框（隐藏，点击回复后显示） -->
+            <div data-v-09f78cbe="" class="comment-input__wrapper" style="display: none;">
+              <div data-v-09f78cbe="" placeholder="回复 User_1508319381044：" contenteditable="true" class="comment-input"></div>
+              <div data-v-09f78cbe="" class="comment-input__wrapper__control">
+                <div class="emoji-selector">
+                  <div class="emoji-selector__btn"></div>
+                </div>
+                <div class="comment-input__wrapper__control__btns">
+                  <div>取消</div>
+                  <div>确认</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 更多评论... -->
+
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 选择视频侧面板（点击"选择视频"按钮后展开） -->
+  <div class="drawer video-list">
+    <div class="drawer__content">
+
+      <header data-v-7f573c86="" class="video-list__header">
+        作品列表 <span class="count-tips">共21个作品</span>
+      </header>
+
+      <div class="auto-load-list">
+
+        <!-- 视频列表条目示例（当前选中） -->
+        <div class="video-item is-active">
+          <div class="video-info">
+            <div class="video-info__cover">
+              <img src="..." alt="">
+              <div class="video-info__cover__duration"> 04:32 </div>
+            </div>
+            <div class="video-info__content">
+              <div class="video-info__content__title"> #空气清新环境优美 </div>
+              <div class="video-info__content__date"> 2026-05-28 09:03:19 </div>
+              <div class="video-info__content__detail">
+                <div><img src=".../icon_play.svg">2,940</div>
+                <div><img src=".../icon_comment.svg">41</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 视频列表条目示例（未选中） -->
+        <div class="video-item">
+          <div class="video-info">
+            <div class="video-info__cover">
+              <img src="..." alt="">
+              <div class="video-info__cover__duration"> 06:08 </div>
+            </div>
+            <div class="video-info__content">
+              <div class="video-info__content__title"> #梦想中的治愈小院 </div>
+              <div class="video-info__content__date"> 2026-05-28 09:03:05 </div>
+              <div class="video-info__content__detail">
+                <div>3,005</div>
+                <div>2</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 更多视频条目... -->
+
+      </div>
+    </div>
+  </div>
+
+</div>

@@ -50,11 +50,14 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/social_media"
+      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/litellm_db"
       LITELLM_MASTER_KEY: "your_litellm_master_key"
       STORE_MODEL_IN_DB: "true"
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      LITELLM_MIGRATION_DIR: "/tmp/litellm_migrations"
+      UI_USERNAME: "admin"
+      UI_PASSWORD: "your_litellm_master_key"
+      HTTP_PROXY: "http://localhost:7897"
+      HTTPS_PROXY: "http://localhost:7897"
       NO_PROXY: "localhost,127.0.0.1,open.bigmodel.cn"
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}

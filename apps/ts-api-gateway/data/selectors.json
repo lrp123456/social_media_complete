@@ -1,6 +1,6 @@
 {
-  "version": "2.1.0",
-  "updatedAt": "2026-06-06T08:12:00.000000Z",
+  "version": "2.2.0",
+  "updatedAt": "2026-06-09T12:00:00.000000Z",
   "platforms": {
     "douyin": {
       "flowRules": {
@@ -588,12 +588,13 @@
           ],
           "primary": "getByRole(\"button\", name=\"选择作品\")",
           "fallbacks": [
+            ".douyin-creator-interactive-button-primary:visible",
             ".douyin-creator-interactive-button:visible",
             "getByText(\"选择作品\", exact=True)",
             "xpath=//div/div[1]/div[2]/div/button"
           ],
           "selectorType": "role",
-          "description": "评论管理-选择作品按钮"
+          "description": "评论管理-选择作品按钮（interactive组件库主按钮）"
         },
         "btn_declare_confirm": {
           "purposes": [
@@ -783,13 +784,13 @@
           "purposes": [
             "monitor"
           ],
-          "primary": "[class*=\"semi-sidesheet\"][class*=\"right\"]",
+          "primary": "[class*=\"douyin-creator-interactive-sidesheet\"]",
           "fallbacks": [
-            ".semi-sidesheet-visible",
-            "[class*=\"sidesheet\"]"
+            "[class*=\"sidesheet\"]",
+            "[class*=\"semi-sidesheet\"]"
           ],
           "selectorType": "css",
-          "description": "抖音评论管理-抽屉侧面板"
+          "description": "抖音评论管理-抽屉侧面板（使用 interactive 组件库前缀）"
         },
         "region_drawer_mask": {
           "purposes": [
@@ -820,27 +821,28 @@
           "purposes": [
             "monitor"
           ],
-          "primary": ".container-Lkxos9",
+          "primary": "[class*=\"douyin-creator-interactive-list-items\"] > div",
           "fallbacks": [
-            ".content-UQiIKV",
+            "[class*=\"container-Lkxos9\"]",
             "[class*=\"video-item\"]",
             "[class*=\"work-item\"]",
             "[class*=\"content-item\"]"
           ],
           "selectorType": "css",
-          "description": "抖音评论管理-抽屉内视频条目容器"
+          "description": "抖音评论管理-抽屉内视频条目容器（使用 interactive 组件库前缀）"
         },
         "region_drawer_video_title": {
           "purposes": [
             "monitor"
           ],
-          "primary": ".title-LUOP3b",
+          "primary": "[class*=\"douyin-creator-interactive-list-items\"] [class*=\"title-\"]",
           "fallbacks": [
-            "[class*=\"title\"]",
+            "[class*=\"title-LUOP3b\"]",
+            "[class*=\"title-\"]",
             "[class*=\"desc\"]"
           ],
           "selectorType": "css",
-          "description": "抖音评论管理-抽屉内视频标题"
+          "description": "抖音评论管理-抽屉内视频标题（使用组件库前缀定位）"
         },
         "region_sidebar": {
           "purposes": [
@@ -869,10 +871,13 @@
           "purposes": [
             "monitor"
           ],
-          "primary": "[class*='container-sXKyMs']",
+          "primary": "[data-cid]",
+          "fallbacks": [
+            "[class*='container-'][data-cid]",
+            "[class*='container-sXKyMs']"
+          ],
           "selectorType": "css",
-          "description": "抖音评论区--评论容器",
-          "fallbacks": []
+          "description": "抖音评论区--评论容器（data-cid 属性最稳定）"
         },
         "region_reply_input": {
           "purposes": [
@@ -2343,6 +2348,259 @@
           "description": "小红书话题标签输入框"
         }
       }
+    },
+    "tencent": {
+      "flowRules": {
+        "scopeSelectors": [
+          "form"
+        ],
+        "disabledCheckMethods": [
+          "dom-property",
+          "attr-disabled",
+          "aria-disabled"
+        ],
+        "visibilityCheckMethods": [
+          "offset-size",
+          "rect",
+          "computed-style",
+          "viewport"
+        ],
+        "viewportInsetPx": 50,
+        "successUrlPatterns": [
+          "/post/list"
+        ],
+        "navRedirectUrlPatterns": [
+          "/user/self",
+          "/user/profile"
+        ],
+        "filterTag": "BUTTON",
+        "publishWaitMs": 20000,
+        "publishMaxRetries": 10,
+        "disabledRetryDelayMs": [
+          2000,
+          4000
+        ],
+        "notFoundBackoffMs": [
+          1500,
+          3000
+        ],
+        "scrollAmountPx": 600,
+        "postClickStabilizeMs": [
+          2000,
+          3000
+        ]
+      },
+      "menus": {
+        "menu_home": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText('span', '首页', {exact: true})",
+          "fallbacks": [
+            "#menuBar .finder-ui-desktop-menu__link_current:has(span:has-text('首页'))",
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('首页'))"
+          ],
+          "selectorType": "text",
+          "description": "首页菜单"
+        },
+        "menu_content": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText('span', '内容管理')",
+          "fallbacks": [
+            ".js_nav_item:has(span:has-text('内容管理'))",
+            ".finder-ui-desktop-menu__sub__wrp:has(span:has-text('内容管理'))"
+          ],
+          "selectorType": "text",
+          "description": "内容管理 (可展开)"
+        },
+        "menu_content_video": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText('span', '视频', {exact: true})",
+          "fallbacks": [
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('视频'))"
+          ],
+          "parent": "menu_content",
+          "selectorType": "text",
+          "description": "内容管理 > 视频"
+        },
+        "menu_interact": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText('span', '互动管理')",
+          "fallbacks": [
+            ".js_nav_item:has(span:has-text('互动管理'))"
+          ],
+          "selectorType": "text",
+          "description": "互动管理 (可展开)"
+        },
+        "menu_interact_comment": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText('span', '评论', {exact: true})",
+          "fallbacks": [
+            ".finder-ui-desktop-sub-menu__item:has(span:has-text('评论'))"
+          ],
+          "parent": "menu_interact",
+          "selectorType": "text",
+          "description": "互动管理 > 评论"
+        }
+      },
+      "buttons": {
+        "btn_switch_video": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".weui-desktop-form__dropdown__dt",
+          "fallbacks": [
+            ".weui-desktop-form__dropdown__inner-button",
+            ".weui-desktop-form__dropdown"
+          ],
+          "description": "视频筛选下拉按钮（点击后展开视频列表选择弹窗）",
+          "selectorType": "css"
+        },
+        "btn_comment_reply": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".action-item .weui-icon-outlined-comment",
+          "fallbacks": [
+            ".action-list .action-item:nth-child(2)",
+            ".comment-actions .action-item .weui-icon-outlined-comment"
+          ],
+          "description": "评论回复按钮（图标按钮，不是 <button>，tooltip 显示'回复'）",
+          "selectorType": "css"
+        },
+        "btn_reply_submit": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".create-ft .tag-wrap.primary .tag-inner",
+          "fallbacks": [
+            ".create-ft .tag-wrap.primary",
+            ".comment-create-wrap .tag-wrap.primary .tag-inner"
+          ],
+          "description": "回复发送按钮（文字'评论'，是 div.tag-wrap 不是 <button>，输入前为 disabled 状态）",
+          "selectorType": "css"
+        },
+        "btn_publish_submit": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "button:has-text(\"发表\"):not(:has-text(\"发表视频\")):not(:has-text(\"发表动态\"))",
+          "fallbacks": [
+            "text=发表"
+          ],
+          "filterTag": "BUTTON",
+          "description": "发布表单底部的「发表」提交按钮（排除面包屑和发表视频按钮）",
+          "selectorType": "css"
+        },
+        "btn_publish_video": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "text=发表视频",
+          "fallbacks": [
+            "button:has-text('发表视频')",
+            "a:has-text('发表视频')"
+          ],
+          "description": "视频列表页右上角的「发表视频」橙色按钮，点击进入发布表单",
+          "selectorType": "css"
+        }
+      },
+      "regions": {
+        "region_sidebar": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "#side-bar",
+          "fallbacks": [
+            ".finder-ui-desktop-menu__wrp"
+          ],
+          "description": "侧边栏容器",
+          "selectorType": "css"
+        },
+        "region_comment_container": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".feed-comment__wrp",
+          "fallbacks": [
+            ".feed-detail .feed-comment__wrp",
+            ".comment-view .feed-comment__wrp"
+          ],
+          "description": "评论列表容器（在 wujie shadow DOM 内，无 iframe）",
+          "selectorType": "css"
+        },
+        "region_reply_input": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "textarea.create-input",
+          "fallbacks": [
+            ".input-area textarea",
+            ".comment-create-wrap textarea"
+          ],
+          "description": "回复输入框（点击回复图标后出现的 textarea，在 wujie shadow DOM 内）",
+          "selectorType": "css"
+        },
+        "region_video_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".feeds-container",
+          "fallbacks": [
+            ".scroll-list__wrp.feeds-container",
+            ".feeds .scroll-list__wrp"
+          ],
+          "description": "视频列表滚动区域（wujie shadow DOM 内 .feeds 下的滚动容器）",
+          "selectorType": "css"
+        },
+        "region_comment_list_scroll": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".feed-comment__wrp .scroll-list",
+          "fallbacks": [
+            ".feed-comment__wrp .scroll-list__wrp",
+            ".feed-comment__wrp .scroll-list-wrap"
+          ],
+          "description": "评论列表滚动区域（wujie shadow DOM 内评论容器）",
+          "selectorType": "css"
+        },
+        "region_publish_area": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "form",
+          "fallbacks": [
+            "[class*=\"publish\"]",
+            "[class*=\"create\"]",
+            "body"
+          ],
+          "description": "发布表单区域",
+          "selectorType": "css"
+        },
+        "region_success_toast": {
+          "purposes": [
+            "publish"
+          ],
+          "primary": "text=发布成功",
+          "fallbacks": [
+            "text=已发布",
+            "[class*=\"success\"]",
+            "[class*=\"toast\"]"
+          ],
+          "description": "发布成功提示",
+          "selectorType": "css"
+        }
+      },
+      "textboxes": {}
     }
   }
 }

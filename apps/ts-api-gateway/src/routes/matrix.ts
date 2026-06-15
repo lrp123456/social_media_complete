@@ -8,7 +8,8 @@ import { createLogger } from '../lib/logger';
 import { submitPublishTask, publishQueue } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
-import { monitorQueue, getSchedulerStatus } from '../services/monitorService';
+import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, markJobCancelled, cancelledJobIds } from '../services/monitorService';
+import { enqueueReply } from '../services/unifiedQueue';
 
 const router = Router();
 const logger = createLogger('routes:matrix');
@@ -255,12 +256,25 @@ router.get('/publish/tasks/batch-status', async (req: Request, res: Response) =>
 
           const details = log ? (() => { try { return JSON.parse(log.details); } catch { return {}; } })() : {};
 
+          // 获取 BullMQ job 进度数据（由 worker 的 job.updateProgress() 设置）
+          let progress: { phase: string; step: string; percent: number; detail?: string } | null = null;
+          if (job) {
+            try {
+              const p = await job.progress;
+              if (p && typeof p === 'object' && 'phase' in p) {
+                progress = p as any;
+              }
+            } catch {}
+          }
+
           return {
             taskId,
             status,
             platform: (details.platform as string) ?? (job?.data as any)?.platform ?? 'unknown',
-            userName: log?.userName ?? ((job?.data as any)?.credentials?.username as string) ?? '',
+            userId: (job?.data as any)?.userId ?? 0,
             error,
+            details,
+            progress,
           };
         } catch {
           return { taskId, status: 'failed' as const, platform: 'unknown' as const, userName: '', error: '查询失败' };
@@ -356,6 +370,17 @@ router.get('/monitor/tasks/batch-status', async (req: Request, res: Response) =>
 
           const details = log ? (() => { try { return JSON.parse(log.details); } catch { return {}; } })() : {};
 
+          // 获取任务进度（通过 job.updateProgress 设置）
+          let progress: any = undefined;
+          if (job && status === 'running') {
+            try {
+              const p = await job.progress;
+              if (p && typeof p === 'object' && 'phase' in p) {
+                progress = p;
+              }
+            } catch {}
+          }
+
           return {
             taskId,
             status,
@@ -363,6 +388,7 @@ router.get('/monitor/tasks/batch-status', async (req: Request, res: Response) =>
             userId: (job?.data as any)?.userId ?? 0,
             error,
             details,
+            progress,
           };
         } catch {
           return { taskId, status: 'failed' as const, platform: 'unknown' as const, userId: 0, error: '查询失败', details: {} };
@@ -373,6 +399,261 @@ router.get('/monitor/tasks/batch-status', async (req: Request, res: Response) =>
     res.json({ success: true, data: results });
   } catch (err) {
     handleError(res, logger, err, '批量查询监控任务状态失败');
+  }
+});
+
+// ============================================================
+// 3. Monitor — Active Tasks (live queue)
+// ============================================================
+
+/** GET /api/v1/matrix/monitor/active-tasks — 获取所有活跃/排队中的监控任务 */
+router.get('/monitor/active-tasks', async (_req: Request, res: Response) => {
+  try {
+    const [active, waiting, delayed] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+      monitorQueue.getJobs(['delayed']),
+    ]);
+
+    const allJobs = [...active, ...waiting, ...delayed];
+    const seen = new Set<string>();
+    const tasks: any[] = [];
+
+    for (const job of allJobs) {
+      const bullJobId = job.id;
+      const data = job.data as any;
+      const taskId = data.taskId || bullJobId || '';
+
+      // 跳过已取消的任务
+      if (cancelledJobIds.has(bullJobId)) {
+        continue;
+      }
+
+      if (seen.has(taskId)) continue;
+      seen.add(taskId);
+
+      let progress: any = null;
+      try { const p = await job.progress; if (p && typeof p === 'object' && 'phase' in p) progress = p; } catch {}
+
+      tasks.push({
+        taskId,
+        platform: data.platform || 'unknown',
+        userId: data.userId,
+        windowId: data.windowId || data.fingerprintWindowId || 'unknown',
+        status: await job.isActive() ? 'running' : 'queued',
+        progress,
+      });
+    }
+
+    // 按窗口分组
+    const byWindow = new Map<string, any[]>();
+    for (const t of tasks) {
+      const k = t.windowId;
+      if (!byWindow.has(k)) byWindow.set(k, []);
+      byWindow.get(k)!.push(t);
+    }
+
+    const running = tasks.filter(t => t.status === 'running').length;
+    res.json({
+      success: true,
+      data: {
+        total: tasks.length, running, queued: tasks.length - running,
+        windows: Array.from(byWindow.entries()).map(([windowId, windowTasks]) => ({ windowId, tasks: windowTasks })),
+      },
+    });
+  } catch (err) {
+    handleError(res, logger, err, '获取活跃任务失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/tasks/:taskId/cancel — 强制取消任务 */
+router.post('/monitor/tasks/:taskId/cancel', async (req: Request, res: Response) => {
+  try {
+    const paramsSchema = z.object({ taskId: z.string().min(1) });
+    const { taskId } = paramsSchema.parse(req.params);
+
+    // 查找任务 — 通过 data.taskId 查找
+    const [active, waiting, delayed] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+      monitorQueue.getJobs(['delayed']),
+    ]);
+
+    const allJobs = [...active, ...waiting, ...delayed];
+    const job = allJobs.find(j => (j.data as any)?.taskId === taskId);
+
+    if (!job) {
+      return res.status(404).json({ success: false, error: '任务不存在' });
+    }
+
+    const bullJobId = job.id;
+    const isActive = await job.isActive();
+
+    logger.info({ taskId, bullJobId, isActive }, '开始强制取消任务');
+
+    // Step 1: 通知 worker 停止执行（最重要！）
+    markJobCancelled(bullJobId);
+
+    // Step 2: 标记任务为丢弃（不再重试）
+    try {
+      await job.discard();
+    } catch {}
+
+    // Step 2: 从 Redis 强制删除任务及其锁
+    try {
+      const redis = monitorQueue.client;
+      const queueName = 'monitor';
+
+      // 删除任务相关的所有 Redis key
+      const keysToDelete = [
+        `bull:${queueName}:${bullJobId}`,
+        `bull:${queueName}:${bullJobId}:logs`,
+        `bull:${queueName}:${bullJobId}:lock`,
+        `bull:${queueName}:lock:${bullJobId}`,
+      ];
+
+      // 从各种状态集合中移除
+      const setsToRemove = [
+        `bull:${queueName}:active`,
+        `bull:${queueName}:wait`,
+        `bull:${queueName}:waiting`,
+        `bull:${queueName}:delayed`,
+        `bull:${queueName}:completed`,
+        `bull:${queueName}:failed`,
+      ];
+
+      // 批量删除 key
+      if (keysToDelete.length > 0) {
+        await redis.del(...keysToDelete);
+      }
+
+      // 从集合中移除
+      for (const setName of setsToRemove) {
+        await redis.srem(setName, bullJobId).catch(() => {});
+        await redis.zrem(setName, bullJobId).catch(() => {});
+      }
+
+      // 清理可能的锁
+      const lockKeys = await redis.keys(`bull:${queueName}:*:${bullJobId}:lock`);
+      if (lockKeys.length > 0) {
+        await redis.del(...lockKeys);
+      }
+
+      logger.info({ taskId, bullJobId, deletedKeys: keysToDelete }, '已从 Redis 强制删除任务');
+    } catch (redisErr: any) {
+      logger.warn({ taskId, bullJobId, error: redisErr.message }, 'Redis 清理部分失败');
+    }
+
+    // Step 3: 尝试标准移除（兜底）
+    try {
+      await job.remove();
+    } catch {}
+
+    res.json({
+      success: true,
+      message: `任务已强制取消${isActive ? '（运行中任务已中断）' : ''}`,
+    });
+  } catch (err) {
+    handleError(res, logger, err, '强制取消任务失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/active-tasks/cancel-all — 强制取消所有任务 */
+router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Response) => {
+  try {
+    const [active, waiting, delayed] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+      monitorQueue.getJobs(['delayed']),
+    ]);
+
+    const allJobs = [...active, ...waiting, ...delayed];
+    const redis = monitorQueue.client;
+    const queueName = 'monitor';
+    let cancelled = 0;
+
+    for (const job of allJobs) {
+      try {
+        const bullJobId = job.id;
+
+        // Step 1: 通知 worker 停止执行（最重要！）
+        markJobCancelled(bullJobId);
+
+        // Step 2: 标记为丢弃
+        await job.discard().catch(() => {});
+
+        // Step 3: 从 Redis 强制删除
+        const keysToDelete = [
+          `bull:${queueName}:${bullJobId}`,
+          `bull:${queueName}:${bullJobId}:logs`,
+          `bull:${queueName}:${bullJobId}:lock`,
+          `bull:${queueName}:lock:${bullJobId}`,
+        ];
+
+        await redis.del(...keysToDelete).catch(() => {});
+
+        // Step 4: 从集合中移除
+        for (const setName of [
+          `bull:${queueName}:active`,
+          `bull:${queueName}:wait`,
+          `bull:${queueName}:waiting`,
+          `bull:${queueName}:delayed`,
+        ]) {
+          await redis.srem(setName, bullJobId).catch(() => {});
+          await redis.zrem(setName, bullJobId).catch(() => {});
+        }
+
+        // Step 5: 清理锁
+        const lockKeys = await redis.keys(`bull:${queueName}:*:${bullJobId}:lock`);
+        if (lockKeys.length > 0) {
+          await redis.del(...lockKeys).catch(() => {});
+        }
+
+        // Step 6: 标准移除
+        await job.remove().catch(() => {});
+
+        cancelled++;
+      } catch {}
+    }
+
+    logger.info({ cancelled, total: allJobs.length }, '已强制取消所有任务');
+
+    res.json({
+      success: true,
+      message: `已强制取消 ${cancelled} 个任务`,
+    });
+  } catch (err) {
+    handleError(res, logger, err, '强制取消所有任务失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/active-tasks/cancel-all — 取消所有活跃任务 */
+router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Response) => {
+  try {
+    const [active, waiting, delayed] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+      monitorQueue.getJobs(['delayed']),
+    ]);
+
+    const allJobs = [...active, ...waiting, ...delayed];
+    let cancelled = 0;
+
+    for (const job of allJobs) {
+      try {
+        await job.remove();
+        cancelled++;
+      } catch {}
+    }
+
+    logger.info({ cancelled, total: allJobs.length }, '已取消所有任务');
+
+    res.json({
+      success: true,
+      message: `已取消 ${cancelled} 个任务`,
+    });
+  } catch (err) {
+    handleError(res, logger, err, '取消所有任务失败');
   }
 });
 
@@ -393,6 +674,16 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
       },
     });
 
+    // 批量查询操作员信息（用于获取用户名称）
+    const windowIds = [...new Set(users.map((u) => u.fingerprintWindowId))];
+    const windows = await prisma.browserWindow.findMany({
+      where: { externalId: { in: windowIds } },
+      include: {
+        operator: { select: { id: true, displayName: true, wechatUserId: true } },
+      },
+    });
+    const windowMap = new Map(windows.map((w) => [w.externalId, w]));
+
     // For each user, get total comment count (sum of video.commentCount) and new comment count
     const enriched = await Promise.all(
       users.map(async (user) => {
@@ -407,11 +698,18 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
           }),
         ]);
 
+        const window = windowMap.get(user.fingerprintWindowId);
+        const operator = window?.operator;
+
         return {
           id: user.id,
           platform: user.platform,
           platformName: PLATFORM_DISPLAY_NAMES[user.platform] || user.platform,
           fingerprintWindowId: user.fingerprintWindowId,
+          windowName: window?.windowName || '',
+          operatorId: operator?.id || null,
+          operatorName: operator?.displayName || '',
+          wechatUserId: operator?.wechatUserId || user.wechatUserid,
           status: user.status,
           monitoringEnabled: user.monitoringEnabled,
           videoCount: user._count.videos,
@@ -570,6 +868,11 @@ router.get('/monitor/videos/:id/comments', async (req: Request, res: Response) =
         diggCount: r.diggCount,
         replyToName: r.replyToName,
         isNew: r.isNew === 1,
+        suggestedReply: r.suggestedReply,
+        suggestionStatus: r.suggestionStatus,
+        suggestionModel: r.suggestionModel,
+        suggestionLatencyMs: r.suggestionLatencyMs,
+        replyStatus: r.replyStatus,
       });
     }
 
@@ -579,6 +882,11 @@ router.get('/monitor/videos/:id/comments', async (req: Request, res: Response) =
       createTime: Number(root.createTime),
       diggCount: root.diggCount,
       isNew: root.isNew === 1,
+      suggestedReply: root.suggestedReply,
+      suggestionStatus: root.suggestionStatus,
+      suggestionModel: root.suggestionModel,
+      suggestionLatencyMs: root.suggestionLatencyMs,
+      replyStatus: root.replyStatus,
       replies: replyMap.get(root.cid) || [],
     }));
 
@@ -682,7 +990,7 @@ router.post('/monitor/comments/read-all', async (req: Request, res: Response) =>
   }
 });
 
-/** POST /api/v1/matrix/monitor/comments/:id/reply — 回复评论（模拟） */
+/** POST /api/v1/matrix/monitor/comments/:id/reply — 回复评论（入队 BullMQ 执行） */
 router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) => {
   try {
     const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -692,33 +1000,106 @@ router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) =
       text: z.string().min(1).max(500),
       viaWechatWork: z.boolean().default(false),
     });
-    const { text, viaWechatWork } = bodySchema.parse(req.body);
+    const { text } = bodySchema.parse(req.body);
 
-    const comment = await prisma.comment.findUnique({ where: { id } });
+    const comment = await prisma.comment.findUnique({
+      where: { id },
+      include: {
+        video: { select: { userId: true } },
+      },
+    });
     if (!comment) {
       return res.status(404).json({ success: false, error: `评论不存在: ${id}` });
     }
 
-    const channel = viaWechatWork ? 'wechat_work' : 'direct';
-    const repliedAt = new Date().toISOString();
+    const user = await prisma.user.findUnique({
+      where: { id: comment.video.userId },
+      select: { id: true, platform: true, fingerprintWindowId: true },
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, error: '未找到关联用户' });
+    }
 
-    // 模拟回复（不对接真实 API）
-    logger.info({ commentId: id, text, channel }, `模拟回复评论 (${channel})`);
-
-    await prisma.operationLog.create({
-      data: {
-        action: 'comment_reply',
-        details: JSON.stringify({ commentId: id, text, channel, videoId: comment.videoId }),
-        userId: 'system',
-        userName: 'Matrix API',
-        result: 'success',
-        level: 'info',
+    // 入队 BullMQ 回复任务（通过统一队列 helper，确保 taskType='reply'）
+    const job = await enqueueReply({
+      taskId: `reply_${Date.now()}_${comment.cid}`,
+      userId: user.id,
+      platform: user.platform as any,
+      windowId: user.fingerprintWindowId,
+      fingerprintWindowId: user.fingerprintWindowId,
+      replyData: {
+        videoId: comment.videoId,
+        commentCid: comment.cid,
+        text,
       },
     });
 
-    res.json({ success: true, commentId: id, channel, repliedAt });
+    // 更新回复状态
+    await prisma.comment.update({
+      where: { id },
+      data: { replyStatus: 'pending' },
+    });
+
+    logger.info({ commentId: id, jobId: job.id, text }, '回复已入队 BullMQ');
+    res.json({ success: true, commentId: id, jobId: job.id, replyStatus: 'pending' });
   } catch (err) {
     handleError(res, logger, err, '回复评论失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/comments/:id/accept-reply — 采纳 AI 建议并执行回复 */
+router.post('/monitor/comments/:id/accept-reply', async (req: Request, res: Response) => {
+  try {
+    const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
+    const { id } = paramsSchema.parse(req.params);
+
+    const bodySchema = z.object({
+      text: z.string().min(1).max(500),
+    });
+    const { text } = bodySchema.parse(req.body);
+
+    const comment = await prisma.comment.findUnique({
+      where: { id },
+      include: {
+        video: { select: { userId: true } },
+      },
+    });
+    if (!comment) {
+      return res.status(404).json({ success: false, error: `评论不存在: ${id}` });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: comment.video.userId },
+      select: { id: true, platform: true, fingerprintWindowId: true },
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, error: '未找到关联用户' });
+    }
+
+    // 更新建议状态为 accepted
+    await prisma.comment.update({
+      where: { id },
+      data: { suggestionStatus: 'accepted', replyStatus: 'pending' },
+    });
+
+    // 入队 BullMQ 回复任务（通过统一队列 helper，确保 taskType='reply'）
+    const job = await enqueueReply({
+      taskId: `reply_${Date.now()}_${comment.cid}`,
+      userId: user.id,
+      platform: user.platform as any,
+      windowId: user.fingerprintWindowId,
+      fingerprintWindowId: user.fingerprintWindowId,
+      replyData: {
+        videoId: comment.videoId,
+        commentCid: comment.cid,
+        text,
+      },
+    });
+
+    logger.info({ commentId: id, jobId: job.id, text }, '采纳 AI 回复已入队');
+    res.json({ success: true, commentId: id, jobId: job.id, replyStatus: 'pending' });
+  } catch (err) {
+    handleError(res, logger, err, '采纳 AI 回复失败');
   }
 });
 
@@ -816,6 +1197,9 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
       fingerprintWindowId: user.fingerprintWindowId,
     });
 
+    // 重置该 (窗口, 平台) 的调度器倒计时
+    resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+
     await prisma.operationLog.create({
       data: {
         action: 'monitor_manual_trigger',
@@ -833,11 +1217,11 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
   }
 });
 
-/** GET /api/v1/matrix/monitor/scheduler-status — 获取调度器状态（下次检查倒计时） */
+/** GET /api/v1/matrix/monitor/scheduler-status — 获取每 (窗口, 平台) 调度器状态 */
 router.get('/monitor/scheduler-status', (_req: Request, res: Response) => {
   try {
-    const status = getSchedulerStatus();
-    res.json({ success: true, data: status });
+    const statuses = getAllSchedulerStatuses();
+    res.json({ success: true, data: { statuses } });
   } catch (err) {
     handleError(res, logger, err, '获取调度器状态失败');
   }
@@ -895,6 +1279,16 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
       },
     });
 
+    // 为每个唯一的 (窗口, 平台) 重置调度器
+    const resetPairs = new Set<string>();
+    for (const u of users) {
+      const pairKey = `${u.fingerprintWindowId}_${u.platform}`;
+      if (!resetPairs.has(pairKey)) {
+        resetPairs.add(pairKey);
+        resetSchedulerTimer(u.fingerprintWindowId, u.platform);
+      }
+    }
+
     res.json({
       success: true,
       message: `已为 ${users.length} 个用户创建监控任务（${byWindow.size} 个窗口）`,
@@ -904,6 +1298,70 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     });
   } catch (err) {
     handleError(res, logger, err, '统一触发监控失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/videos/clear — 清空视频及评论数据（测试用） */
+router.post('/monitor/videos/clear', async (_req: Request, res: Response) => {
+  try {
+    await prisma.videoRootCommentCount.deleteMany();
+    await prisma.videoCommentRecord.deleteMany();
+    await prisma.videoCommentCount.deleteMany();
+    await prisma.comment.deleteMany();
+    await prisma.video.deleteMany();
+    await prisma.monitorStatus.deleteMany();
+    // 重置用户状态
+    await prisma.user.updateMany({
+      data: { consecutiveNoUpdate: 0, cooldownUntil: 0, status: 'init', platformAuthorId: null, platformAuthorName: null },
+    });
+    res.json({ success: true, message: '视频数据库已清空' });
+  } catch (err) {
+    handleError(res, logger, err, '清空视频数据库失败');
+  }
+});
+
+/** POST /api/v1/matrix/monitor/accounts/:userId/clear — 清空指定用户的视频及评论数据 */
+router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Response) => {
+  try {
+    const paramsSchema = z.object({ userId: z.coerce.number().int().positive() });
+    const { userId } = paramsSchema.parse(req.params);
+
+    // 检查用户是否存在
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      return res.status(404).json({ success: false, error: '用户不存在' });
+    }
+
+    // 获取该用户的所有视频 ID
+    const videos = await prisma.video.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    const videoIds = videos.map(v => v.id);
+
+    // 按顺序删除关联数据
+    if (videoIds.length > 0) {
+      await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+      await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: videoIds } } });
+      await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+      await prisma.comment.deleteMany({ where: { videoId: { in: videoIds } } });
+    }
+    await prisma.video.deleteMany({ where: { userId } });
+    await prisma.monitorStatus.deleteMany({ where: { accountId: String(userId) } });
+
+    // 重置用户状态
+    await prisma.user.update({
+      where: { id: userId },
+      data: { consecutiveNoUpdate: 0, cooldownUntil: 0, status: 'init', platformAuthorId: null, platformAuthorName: null },
+    });
+
+    logger.info({ userId, platform: user.platform, videoCount: videoIds.length }, '已清空用户数据');
+    res.json({
+      success: true,
+      message: `已清空用户 ${user.platform} 的 ${videoIds.length} 个视频及相关评论数据`,
+    });
+  } catch (err) {
+    handleError(res, logger, err, '清空用户数据失败');
   }
 });
 
@@ -991,7 +1449,7 @@ router.get('/monitor/crawl-settings', async (_req: Request, res: Response) => {
     });
 
     // Return all monitor platforms with their settings (default to deep if not in DB)
-    const monitorPlatforms = ['douyin', 'kuaishou', 'xiaohongshu'];
+    const monitorPlatforms = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'];
     const result = monitorPlatforms.map((platform) => {
       const setting = settings.find((s) => s.platform === platform);
       return {
@@ -1112,9 +1570,9 @@ router.get('/platforms/capabilities', async (_req: Request, res: Response) => {
         platform: 'tencent',
         platformName: '腾讯视频号',
         canPublish: true,
-        canMonitor: false,
-        canDeepCrawl: false,
-        canLightNotify: false,
+        canMonitor: true,
+        canDeepCrawl: true,
+        canLightNotify: true,
       },
       {
         platform: 'tiktok',

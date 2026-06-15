@@ -22,7 +22,8 @@ export function getVideosByUserId(userId: number) {
 }
 
 /**
- * 批量 upsert 视频
+ * 批量 upsert 视频（仅更新基础信息，不更新 commentCount）
+ * commentCount 仅在 Phase3 成功采集评论后才更新
  */
 export async function upsertVideosBatch(
   userId: number,
@@ -42,7 +43,7 @@ export async function upsertVideosBatch(
         where: { id: v.aweme_id },
         update: {
           description: v.description,
-          commentCount: v.comment_count,
+          // 不更新 commentCount — 仅在 Phase3 成功后更新
           metrics: JSON.stringify(v.metrics || {}),
         },
         create: {
@@ -50,7 +51,8 @@ export async function upsertVideosBatch(
           userId,
           description: v.description,
           createTime: BigInt(v.create_time),
-          commentCount: v.comment_count,
+          // 首次创建时记录初始 count（后续由 Phase3 更新）
+          commentCount: 0,
           metrics: JSON.stringify(v.metrics || {}),
         },
       }),
@@ -58,6 +60,21 @@ export async function upsertVideosBatch(
   );
 
   logger.debug(`批量 upsert 视频完成: userId=${userId}, count=${videos.length}`);
+}
+
+/**
+ * Phase3 成功后更新指定视频的 commentCount（带 userId 过滤）
+ */
+export async function updateVideoCommentCount(
+  userId: number,
+  exportId: string,
+  commentCount: number,
+): Promise<void> {
+  await prisma.video.updateMany({
+    where: { id: exportId, userId },
+    data: { commentCount },
+  });
+  logger.debug({ userId, exportId, commentCount }, '视频 commentCount 已更新');
 }
 
 // ============================================================
@@ -474,6 +491,9 @@ export async function batchUpsertComments(
     export_id: string;
     is_author: boolean;
     level: 1 | 2;
+    root_id?: string;
+    parent_id?: string;
+    reply_to_name?: string;
   }>,
   userId: number,
 ): Promise<void> {
@@ -487,6 +507,9 @@ export async function batchUpsertComments(
           text: c.content,
           diggCount: c.like_count,
           level: c.level,
+          rootId: c.root_id || null,
+          parentId: c.parent_id || null,
+          replyToName: c.reply_to_name || null,
         },
         create: {
           videoId: c.export_id,
@@ -496,8 +519,11 @@ export async function batchUpsertComments(
           userUid: c.head_img_url,
           diggCount: c.like_count,
           createTime: BigInt(c.create_time),
-          replyId: '0',
+          replyId: c.parent_id || '0',
+          rootId: c.root_id || null,
+          parentId: c.parent_id || null,
           level: c.level,
+          replyToName: c.reply_to_name || null,
           isNew: 1,
         },
       });
@@ -591,4 +617,102 @@ export async function getExistingCids(videoId: string): Promise<Set<string>> {
     select: { cid: true },
   });
   return new Set(rows.map((r) => r.cid));
+}
+
+// ============================================================
+// AI 客服建议
+// ============================================================
+
+/**
+ * 查询需要 AI 生成回复建议的评论
+ * 条件：isNew=1, suggestionStatus='none', 非作者本人, 非轻量模式占位
+ */
+export async function getCommentsNeedingSuggestion(
+  userId: number,
+  limit = 50,
+): Promise<Array<{
+  id: number;
+  cid: string;
+  text: string;
+  userNickname: string;
+  videoId: string;
+  level: number;
+  rootId: string | null;
+  parentId: string | null;
+}>> {
+  return prisma.comment.findMany({
+    where: {
+      video: { userId },
+      isNew: 1,
+      suggestionStatus: 'none',
+      userUid: { not: '' },  // 非空 uid
+      cid: { not: { startsWith: 'light_' } },  // 排除轻量模式占位
+    },
+    select: {
+      id: true,
+      cid: true,
+      text: true,
+      userNickname: true,
+      videoId: true,
+      level: true,
+      rootId: true,
+      parentId: true,
+    },
+    take: limit,
+    orderBy: { createTime: 'desc' },
+  });
+}
+
+/**
+ * 更新评论的 AI 建议状态
+ */
+export async function updateCommentSuggestion(
+  commentId: number,
+  data: {
+    suggestedReply: string;
+    suggestionStatus: string;
+    suggestionModel?: string;
+    suggestionLatencyMs?: number;
+  },
+): Promise<void> {
+  await prisma.comment.update({
+    where: { id: commentId },
+    data: {
+      suggestedReply: data.suggestedReply,
+      suggestionStatus: data.suggestionStatus,
+      suggestionModel: data.suggestionModel || null,
+      suggestionLatencyMs: data.suggestionLatencyMs || null,
+      suggestionAt: new Date(),
+    },
+  });
+}
+
+/**
+ * 标记 AI 建议生成失败
+ */
+export async function markSuggestionError(commentId: number, error: string): Promise<void> {
+  await prisma.comment.update({
+    where: { id: commentId },
+    data: {
+      suggestionStatus: 'error',
+      suggestedReply: `[生成失败] ${error.slice(0, 100)}`,
+      suggestionAt: new Date(),
+    },
+  });
+}
+
+/**
+ * 更新评论的实际回复状态
+ */
+export async function updateReplyStatus(
+  commentId: number,
+  status: 'pending' | 'sent' | 'failed',
+): Promise<void> {
+  await prisma.comment.update({
+    where: { id: commentId },
+    data: {
+      replyStatus: status,
+      ...(status === 'sent' ? { repliedAt: new Date() } : {}),
+    },
+  });
 }

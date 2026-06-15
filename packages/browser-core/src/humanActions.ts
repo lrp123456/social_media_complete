@@ -200,6 +200,13 @@ export class HumanActions {
     try {
       return await HumanActions.withCDPContext(page, async (ctx) => {
         await ctx.dom.refreshDocument();
+        // 先将元素滚动到视口内（与 cdpClickNode 行为一致）
+        // CDP 原生 Input.dispatchMouseEvent 不会自动滚动，元素不在视口内会点空
+        const nodeId = await ctx.cdp.querySelector(selector);
+        if (nodeId && nodeId > 0) {
+          await ctx.cdp.scrollIntoViewIfNeeded(nodeId);
+          await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+        }
         return await ctx.mouse.click(selector, { timeout: options?.timeout });
       });
     } catch (error: any) {
@@ -321,6 +328,25 @@ export class HumanActions {
       return await HumanActions.withCDPContext(page, async (ctx) => {
         await ctx.dom.refreshDocument();
         return await ctx.dom.isElementVisible(selector);
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 通过 CDP 检查元素是否包含指定 class（无 JS 注入）
+   */
+  static async cdpHasClass(page: Page, selector: string, className: string): Promise<boolean> {
+    try {
+      return await HumanActions.withCDPContext(page, async (ctx) => {
+        await ctx.dom.refreshDocument();
+        const nodeId = await ctx.cdp.querySelector(selector);
+        if (!nodeId || nodeId <= 0) return false;
+        const attrs = await ctx.cdp.getAttributes(nodeId);
+        if (!attrs) return false;
+        const classValue = attrs['class'] || '';
+        return classValue.split(/\s+/).includes(className);
       });
     } catch {
       return false;
@@ -913,13 +939,22 @@ export class HumanActions {
           );
           await ctx.cdp.discardSearchResults(searchResult.searchId);
 
+          // 获取视口尺寸，用于判断元素是否已在视口内
+          const viewport = await ctx.cdp.getLayoutViewport();
+          const vpW = viewport.clientWidth;
+          const vpH = viewport.clientHeight;
+
+          // 第一轮：优先点击已在视口内的元素（避免不必要的滚动）
           for (const nodeId of nodeIds) {
             const boxModel = await ctx.cdp.getBoxModel(nodeId);
             if (boxModel && boxModel.width > 0 && boxModel.height > 0) {
               const cx = boxModel.content[0] + boxModel.width / 2;
               const cy = boxModel.content[1] + boxModel.height / 2;
-              await ctx.mouse.clickAt(Math.round(cx), Math.round(cy));
-              return true;
+              // 检查是否在视口内
+              if (cx >= 0 && cx <= vpW && cy >= 0 && cy <= vpH) {
+                await ctx.mouse.clickAt(Math.round(cx), Math.round(cy));
+                return true;
+              }
             }
 
             const desc = await ctx.cdp.describeNode(nodeId, 0);
@@ -929,9 +964,25 @@ export class HumanActions {
               if (parentBox && parentBox.width > 0 && parentBox.height > 0) {
                 const cx = parentBox.content[0] + parentBox.width / 2;
                 const cy = parentBox.content[1] + parentBox.height / 2;
-                await ctx.mouse.clickAt(Math.round(cx), Math.round(cy));
-                return true;
+                if (cx >= 0 && cx <= vpW && cy >= 0 && cy <= vpH) {
+                  await ctx.mouse.clickAt(Math.round(cx), Math.round(cy));
+                  return true;
+                }
               }
+            }
+          }
+
+          // 第二轮：视口内没有匹配元素，滚动到第一个元素再点击
+          for (const nodeId of nodeIds) {
+            await ctx.cdp.scrollIntoViewIfNeeded(nodeId);
+            await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+
+            const boxModel = await ctx.cdp.getBoxModel(nodeId);
+            if (boxModel && boxModel.width > 0 && boxModel.height > 0) {
+              const cx = boxModel.content[0] + boxModel.width / 2;
+              const cy = boxModel.content[1] + boxModel.height / 2;
+              await ctx.mouse.clickAt(Math.round(cx), Math.round(cy));
+              return true;
             }
           }
 
@@ -1020,23 +1071,72 @@ export class HumanActions {
   }
 
   // ============================================================
-  // 多级回退元素查找 — 防风控 / 反蜜罐
-  // 回退链: role → text → placeholder/label → CSS:visible → 坐标
-  // 严格遵循 Patchwright 无痕规范
+  // iframe 文本搜索 + 点击 — 用于 wujie 等微前端的 iframe 内交互
   // ============================================================
 
   /**
-   * 多级回退查找 + 无痕交互
+   * 在指定 iframe 内查找文本并点击（通过 frame.evaluate 查找，无 JS 注入风险）
+   * 用于 wujie 微前端的 iframe 内按钮点击（如「展开更多回复」）
    *
-   * 查找顺序（按风控安全等级递减）：
-   *   1. getByRole     — 无障碍树，最接近人类感知
-   *   2. getByText     — 文本匹配，自动过滤 display:none 蜜罐
-   *   3. getByPlaceholder / getByLabel — 原生属性定位
-   *   4. CSS :visible  — CSS 选择器 + 过滤隐藏元素
-   *   5. 容器坐标      — 基于容器的比例偏移，完全脱离 DOM
+   * 策略:
+   *   1. 按 frame.name 精确匹配
+   *   2. 回退: 按 frame.url 包含 /{frameName}/ 匹配（wujie 预加载 frame）
+   *   3. 通过 TreeWalker 遍历文本节点，找到后调用 element.click()
    *
-   * 找到元素后自动 hover + 停顿（模拟人类"先看后点"）
+   * @param page      - 当前 page
+   * @param frameName - iframe 的 name 属性（如 'interaction'）
+   * @param text      - 要点击的文本（精确 trim 匹配）
+   * @param options   - timeout (默认 5000ms)
+   * @returns         是否点击成功
    */
+  static async cdpClickByTextInFrame(
+    page: Page,
+    frameName: string,
+    text: string,
+    options?: { timeout?: number },
+  ): Promise<boolean> {
+    const startTime = Date.now();
+    const timeout = options?.timeout ?? 5000;
+
+    while (Date.now() - startTime < timeout) {
+      try {
+        // Strategy 1: 按 frame.name 精确匹配
+        let frame = page.frames().find(f => f.name() === frameName);
+
+        // Strategy 2: 回退 — URL 包含 /{frameName}/
+        if (!frame) {
+          frame = page.frames().find(f => f.url().includes(`/${frameName}/`));
+        }
+
+        if (!frame) {
+          await new Promise(r => setTimeout(r, 200));
+          continue;
+        }
+
+        const clicked = await frame.evaluate((searchText: string) => {
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let node: Text | null;
+          while ((node = walker.nextNode() as Text | null)) {
+            if (node.textContent?.trim() === searchText) {
+              const el = node.parentElement;
+              if (el) {
+                el.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        }, text);
+
+        if (clicked) return true;
+      } catch {}
+
+      await new Promise(r => setTimeout(r, 400 + Math.random() * 200));
+    }
+
+    return false;
+  }
+
   static async findElementMultiLevel(
     page: Page,
     config: FallbackConfig,
@@ -1289,5 +1389,327 @@ export class HumanActions {
     }
 
     return false;
+  }
+
+  // ============================================================
+  // 跨 iframe 操作 — 用于 wujie 等微前端架构
+  // 优先通过 patchright 的 Frame API (无需 JS 注入)，
+  // 回退到 contentDocument evaluate (兼容动态 iframe)
+  // ============================================================
+
+  /**
+   * 通过 frame name 在同源 iframe 内查找元素并点击。
+   *
+   * 策略：
+   * 1. page.frame(name) → frame.$$() + frame.click() (无 JS 注入)
+   * 2. 回退: page.evaluate 穿透 iframe contentDocument (兼容动态创建/替换的 iframe)
+   *
+   * @param page       - Patchright Page
+   * @param frameName  - iframe 的 name 属性 (如 'interaction')
+   * @param selector   - CSS 选择器 (如 '.comment-feed-wrap')
+   * @param options.text - 可选，匹配元素的文本内容 (精确匹配)
+   * @param options.exact - 精确匹配文本 (默认 true)
+   * @returns          - true 如果成功点击
+   */
+  static async cdpClickInFrame(
+    page: Page,
+    frameName: string,
+    selector: string,
+    options?: { text?: string; exact?: boolean },
+  ): Promise<boolean> {
+    try {
+      const exact = options?.exact ?? true;
+
+      // ── 策略1: patchright Frame API (无 JS 注入) ──
+      // 先按 name 查找，回退到 URL 路径匹配（wujie iframe name 可能为空）
+      let frame = page.frames().find(f => f.name() === frameName);
+      if (!frame) {
+        // URL fallback: 用 frameName 作为 URL 路径段匹配（如 'interaction' → '/interaction/'）
+        frame = page.frames().find(f => f.url().includes(`/${frameName}/`));
+      }
+      if (frame) {
+        if (options?.text) {
+          const elements = await frame.$$(selector);
+          for (const el of elements) {
+            const text = await el.evaluate((node: Element) => node.textContent?.trim() || '');
+            if (exact && text === options.text) {
+              // 先 hover 再点击（部分页面依赖 mouseenter 事件）
+              const box = await el.boundingBox();
+              if (box) {
+                await HumanActions.cdpIdleMove(page, box.x + box.width / 2, box.y + box.height / 2);
+                await HumanActions.wait(page, 150, 300);
+              }
+              await el.click();
+              return true;
+            }
+            if (!exact && text.includes(options.text.slice(0, 10))) {
+              const box = await el.boundingBox();
+              if (box) {
+                await HumanActions.cdpIdleMove(page, box.x + box.width / 2, box.y + box.height / 2);
+                await HumanActions.wait(page, 150, 300);
+              }
+              await el.click();
+              return true;
+            }
+          }
+        } else {
+          const el = await frame.$(selector);
+          if (el) {
+            const box = await el.boundingBox();
+            if (box) {
+              await HumanActions.cdpIdleMove(page, box.x + box.width / 2, box.y + box.height / 2);
+              await HumanActions.wait(page, 150, 300);
+            }
+            await el.click();
+            return true;
+          }
+        }
+      }
+
+      // ── 策略2: contentDocument 回退 (动态 iframe, 含 shadow DOM) ──
+      const result = await page.evaluate(
+        ({ frameName, selector, text, exact }) => {
+          /**
+           * 深度 querySelectorAll — 穿透 wujie-app 等 custom element 的 shadowRoot
+           */
+          function deepQueryIframes(root: Document | ShadowRoot): HTMLIFrameElement[] {
+            const directIframes = Array.from(root.querySelectorAll('iframe'));
+            const shadowIframes: HTMLIFrameElement[] = [];
+            // 遍历所有元素，检查是否有 shadowRoot
+            for (const el of Array.from(root.querySelectorAll('*'))) {
+              const sr = (el as HTMLElement).shadowRoot;
+              if (sr) {
+                shadowIframes.push(...Array.from(sr.querySelectorAll('iframe')));
+              }
+            }
+            return [...directIframes, ...shadowIframes];
+          }
+
+          function queryInDoc(doc: Document): Element[] {
+            return Array.from(doc.querySelectorAll(selector));
+          }
+
+          const allIframes = deepQueryIframes(document);
+          for (const iframe of allIframes) {
+            if (iframe.name !== frameName && !iframe.hasAttribute('data-wujie-flag')) continue;
+            try {
+              const doc = (iframe as HTMLIFrameElement).contentDocument
+                || (iframe as HTMLIFrameElement).contentWindow?.document;
+              if (!doc) continue;
+              const matches = queryInDoc(doc);
+              if (text) {
+                const target = exact
+                  ? matches.find(m => m.textContent?.trim() === text)
+                  : matches.find(m => m.textContent?.trim().includes(text.slice(0, 10)));
+                if (target) {
+                  // 先 dispatch mouseenter/mousemove，再 click
+                  target.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                  target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+                  (target as HTMLElement).click();
+                  return true;
+                }
+              } else if (matches[0]) {
+                matches[0].dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                matches[0].dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+                (matches[0] as HTMLElement).click();
+                return true;
+              }
+            } catch { /* cross-origin */ }
+          }
+          return false;
+        },
+        { frameName, selector, text: options?.text, exact }
+      );
+
+      if (result) return true;
+    } catch (err: any) {
+      logger.warn({ frameName, selector, error: err.message }, 'cdpClickInFrame failed');
+    }
+    return false;
+  }
+
+  /**
+   * 检查同源 iframe 内是否包含匹配的元素（含文本过滤）。
+   */
+  static async cdpIsElementInFrame(
+    page: Page,
+    frameName: string,
+    selector: string,
+    options?: { text?: string; exact?: boolean },
+  ): Promise<boolean> {
+    try {
+      const exact = options?.exact ?? true;
+
+      // ── 策略1: patchright Frame API (无 JS 注入) ──
+      // 先按 name 查找，回退到 URL 路径匹配（wujie iframe name 可能为空）
+      let frame = page.frames().find(f => f.name() === frameName);
+      if (!frame) {
+        frame = page.frames().find(f => f.url().includes(`/${frameName}/`));
+      }
+      if (frame) {
+        if (options?.text) {
+          const elements = await frame.$$(selector);
+          for (const el of elements) {
+            const text = await el.evaluate((node: Element) => node.textContent?.trim() || '');
+            if (exact && text === options.text) return true;
+            if (!exact && text.includes(options.text.slice(0, 10))) return true;
+          }
+          return false;
+        }
+        const el = await frame.$(selector);
+        return el !== null;
+      }
+
+      // ── 策略2: contentDocument 回退 (含 shadow DOM) ──
+      const found = await page.evaluate(
+        ({ frameName, selector, text, exact }: { frameName: string; selector: string; text?: string; exact: boolean }) => {
+          function deepQueryIframes(root: Document | ShadowRoot): HTMLIFrameElement[] {
+            const directIframes = Array.from(root.querySelectorAll('iframe'));
+            const shadowIframes: HTMLIFrameElement[] = [];
+            for (const el of Array.from(root.querySelectorAll('*'))) {
+              const sr = (el as HTMLElement).shadowRoot;
+              if (sr) {
+                shadowIframes.push(...Array.from(sr.querySelectorAll('iframe')));
+              }
+            }
+            return [...directIframes, ...shadowIframes];
+          }
+
+          const allIframes = deepQueryIframes(document);
+          for (const iframe of allIframes) {
+            if (iframe.name !== frameName && !iframe.hasAttribute('data-wujie-flag')) continue;
+            try {
+              const doc = (iframe as HTMLIFrameElement).contentDocument
+                || (iframe as HTMLIFrameElement).contentWindow?.document;
+              if (!doc) continue;
+              const matches = Array.from(doc.querySelectorAll(selector));
+              if (!text) return matches.length > 0;
+              if (exact) return matches.some(m => m.textContent?.trim() === text);
+              return matches.some(m => m.textContent?.trim().includes(text.slice(0, 10)));
+            } catch { /* cross-origin */ }
+          }
+          return false;
+        },
+        { frameName, selector, text: options?.text, exact }
+      );
+
+      return found;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 在同源 iframe 内滚动容器。
+   * 用于 wujie 瀑布流等场景，需要在 iframe 内滚动容器而不是 viewport。
+   *
+   * 策略：
+   * 1. 获取容器在视口中的位置
+   * 2. 将鼠标移到容器上（hover，触发 mouseenter 事件）
+   * 3. 使用 CDP 鼠标滚轮事件模拟滚动
+   *    （某些页面要求先 hover 才能激活滚轮监听，如 vue-infinite-scroll）
+   */
+  static async cdpScrollContainerInFrame(
+    page: Page,
+    frameName: string,
+    containerSelector: string,
+    distance: number,
+  ): Promise<boolean> {
+    try {
+      // ── 步骤1: 获取容器在视口中的位置（从 iframe contentDocument 或 shadow DOM）──
+      const rect = await page.evaluate(
+        ({ frameName, containerSelector }: { frameName: string; containerSelector: string }) => {
+          function deepQueryIframes(root: Document | ShadowRoot): HTMLIFrameElement[] {
+            const directIframes = Array.from(root.querySelectorAll('iframe'));
+            const shadowIframes: HTMLIFrameElement[] = [];
+            for (const el of Array.from(root.querySelectorAll('*'))) {
+              const sr = (el as HTMLElement).shadowRoot;
+              if (sr) {
+                shadowIframes.push(...Array.from(sr.querySelectorAll('iframe')));
+              }
+            }
+            return [...directIframes, ...shadowIframes];
+          }
+
+          function findContainer(doc: Document | ShadowRoot): Element | null {
+            return doc.querySelector(containerSelector)
+              || doc.querySelector('.scroll-list__wrp')
+              || doc.querySelector('.feeds-container')
+              || doc.querySelector('.scroll-list');
+          }
+
+          // 尝试从 iframe 中获取（穿透 shadow DOM 查找）
+          const allIframes = deepQueryIframes(document);
+          for (const iframe of allIframes) {
+            // 只处理匹配的 frameName 或 data-wujie-flag iframe
+            if (iframe.name !== frameName && !iframe.hasAttribute('data-wujie-flag')) continue;
+            try {
+              const doc = (iframe as HTMLIFrameElement).contentDocument
+                || (iframe as HTMLIFrameElement).contentWindow?.document;
+              if (doc) {
+                const container = findContainer(doc);
+                if (container) {
+                  const r = container.getBoundingClientRect();
+                  return { top: r.top, left: r.left, width: r.width, height: r.height };
+                }
+              }
+            } catch { /* cross-origin */ }
+          }
+
+          // 尝试从 wujie-app shadow DOM 获取
+          const wujieApps = document.querySelectorAll('wujie-app');
+          for (const app of Array.from(wujieApps)) {
+            const sr = (app as HTMLElement).shadowRoot;
+            if (!sr) continue;
+            const container = findContainer(sr);
+            if (container) {
+              const r = container.getBoundingClientRect();
+              return { top: r.top, left: r.left, width: r.width, height: r.height };
+            }
+          }
+
+          // 主文档
+          const container = findContainer(document);
+          if (container) {
+            const r = container.getBoundingClientRect();
+            return { top: r.top, left: r.left, width: r.width, height: r.height };
+          }
+          return null;
+        },
+        { frameName, containerSelector }
+      );
+
+      if (!rect) {
+        logger.warn({ frameName, containerSelector }, 'cdpScrollContainerInFrame: container not found');
+        return false;
+      }
+
+      // ── 步骤2: 将鼠标移到容器中央（hover，触发 mouseenter/over）──
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      await HumanActions.cdpIdleMove(page, centerX, centerY);
+      await HumanActions.wait(page, 200, 400);
+
+      // ── 步骤3: 使用鼠标滚轮滚动（模拟真实用户滚动）──
+      // CDP Input.dispatchMouseEvent 的 mouseWheel 类型会滚动鼠标悬停的元素
+      // 调用 cdpIdleWheel 多次，模拟分段滚动
+      const segments = Math.max(2, Math.ceil(Math.abs(distance) / 150));
+      const segmentSize = Math.floor(distance / segments);
+      for (let i = 0; i < segments; i++) {
+        // 每次滚轮前微移鼠标（模拟真实手部抖动）
+        if (i % 3 === 2) {
+          const jitterX = centerX + (Math.random() - 0.5) * 4;
+          const jitterY = centerY + (Math.random() - 0.5) * 4;
+          await HumanActions.cdpIdleMove(page, jitterX, jitterY);
+        }
+        await HumanActions.cdpIdleWheel(page, segmentSize);
+        await HumanActions.wait(page, 100, 300);
+      }
+
+      return true;
+    } catch (err: any) {
+      logger.warn({ frameName, containerSelector, error: err.message }, 'cdpScrollContainerInFrame failed');
+      return false;
+    }
   }
 }

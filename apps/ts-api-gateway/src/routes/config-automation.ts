@@ -327,4 +327,36 @@ router.delete('/selectors/:platform/:categoryKey', (req: Request, res: Response)
   }
 });
 
+// ============================================================
+// 选择器有效性追踪
+// ============================================================
+
+/** GET /api/v1/config-automation/selectors/full — 获取完整嵌套配置 */
+router.get('/selectors/full', (_req: Request, res: Response) => {
+  try {
+    const reader = getSelectorReader();
+    res.json({ success: true, data: reader.getConfig() });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** GET /api/v1/config-automation/selectors/effectiveness — 查询选择器有效性统计 */
+router.get('/selectors/effectiveness', async (req: Request, res: Response) => {
+  try {
+    const { getSelectorEffectiveness, getFailedSelectors } = await import(
+      '../services/selectorEffectivenessService'
+    );
+    const platform = req.query.platform ? String(req.query.platform) : undefined;
+    const stats = await getSelectorEffectiveness(platform);
+    const failed = await getFailedSelectors(0.3, 3);
+    res.json({
+      success: true,
+      data: { stats, failed },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 export default router;

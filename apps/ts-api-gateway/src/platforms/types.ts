@@ -59,6 +59,7 @@ export interface LoginContext {
   page: Page;
   credentials: AccountCredentials;
   windowId: string;
+  accountId?: string; // 用户 ID，用于查询企微推送目标
 }
 
 /** 平台上传上下文 */

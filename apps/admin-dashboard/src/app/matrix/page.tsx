@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useMemo, useCallback, useEffect, type KeyboardEvent } from 'react';
+import api from '@/lib/api';
 import {
   useHostedAccounts,
   useUploadVideo,
@@ -20,24 +21,33 @@ import {
   useMonitorAccountDetail,
   useTriggerMonitor,
   useToggleMonitor,
+  useClearUserData,
   useNewCommentsOverview,
   useMonitorTaskStatuses,
   useSchedulerStatus,
   useTriggerAllMonitor,
+  useActiveMonitorTasks,
+  useCancelMonitorTask,
+  useCancelAllMonitorTasks,
   type MonitorAccount,
   type MonitorAccountDetail,
   type NewCommentVideo,
   type MonitorTaskStatus,
+  type ActiveTasksData,
   usePinterestScrape,
   usePinterestStatus,
   useOperators,
   type Operator,
+  useGenerateAiReply,
+  useRegenerateAiReply,
+  useAcceptAiReply,
 } from '@/hooks/useApi';
 import { MaterialIcon, PlatformIcon, Avatar } from '@/components/ui/MaterialIcon';
 import { BentoCard } from '@/components/ui/Bento';
 import { StatusPill, ToggleSwitch } from '@/components/ui/StatusPill';
 import { cn } from '@/lib/utils';
 import OperatorManagement from '@/components/matrix/OperatorManagement';
+import AiReplyCard from '@/components/matrix/AiReplyCard';
 
 // ─────────────────────────────────────────────
 //  Publish Tab Helpers & Types
@@ -108,6 +118,11 @@ type Comment = {
   isNew?: boolean;
   ipLocation?: string;
   replies?: Comment[];
+  suggestedReply?: string | null;
+  suggestionStatus?: string;
+  suggestionModel?: string | null;
+  suggestionLatencyMs?: number | null;
+  replyStatus?: string;
 };
 
 // ─────────────────────────────────────────────
@@ -771,6 +786,7 @@ function MonitorTab() {
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
   const [monitorTaskIds, setMonitorTaskIds] = useState<string[]>([]);
   const [showQueue, setShowQueue] = useState(false);
+  const [platformFilter, setPlatformFilter] = useState<string>('all');
   const { toasts, addToast, dismiss } = useMonitorToast();
 
   const { data: accountsData, isLoading: accountsLoading, refetch: refetchAccounts } = useMonitorAccounts();
@@ -780,17 +796,52 @@ function MonitorTab() {
   );
   const { data: taskStatusesData } = useMonitorTaskStatuses(monitorTaskIds);
   const { data: schedulerData } = useSchedulerStatus();
+  const { data: activeTasksData } = useActiveMonitorTasks();
 
   const triggerMonitor = useTriggerMonitor();
   const { data: videoCommentsData } = useVideoComments(selectedVideoId || '');
   const markAllRead = useMarkAllCommentsRead();
   const triggerAllMonitor = useTriggerAllMonitor();
   const toggleMonitor = useToggleMonitor();
+  const clearUserData = useClearUserData();
+  const cancelTask = useCancelMonitorTask();
+  const cancelAllTasks = useCancelAllMonitorTasks();
 
   const accounts: MonitorAccount[] = useMemo(() => {
     if (Array.isArray(accountsData)) return accountsData;
     return [];
   }, [accountsData]);
+
+  // 可用平台列表（去重）
+  const availablePlatforms = useMemo(() => {
+    const platforms = new Set(accounts.map((a) => a.platform));
+    return Array.from(platforms).sort();
+  }, [accounts]);
+
+  // 按平台筛选后的账号列表
+  const filteredAccounts = useMemo(() => {
+    if (platformFilter === 'all') return accounts;
+    return accounts.filter((a) => a.platform === platformFilter);
+  }, [accounts, platformFilter]);
+
+  // 按用户分组（按 operatorId 或 fingerprintWindowId）
+  const groupedByUser = useMemo(() => {
+    const groups = new Map<string, { operatorName: string; windowId: string; windowName: string; wechatUserId: string; accounts: MonitorAccount[] }>();
+    for (const account of filteredAccounts) {
+      const groupKey = account.operatorId ? `op_${account.operatorId}` : `win_${account.fingerprintWindowId}`;
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, {
+          operatorName: account.operatorName || '未知用户',
+          windowId: account.fingerprintWindowId,
+          windowName: account.windowName || account.fingerprintWindowId,
+          wechatUserId: account.wechatUserId,
+          accounts: [],
+        });
+      }
+      groups.get(groupKey)!.accounts.push(account);
+    }
+    return Array.from(groups.values());
+  }, [filteredAccounts]);
 
   const newCommentVideos: NewCommentVideo[] = useMemo(() => {
     if (Array.isArray(newCommentsData)) return newCommentsData;
@@ -803,47 +854,61 @@ function MonitorTab() {
 
   const stats = useMemo(() => {
     const total = accounts.length;
-    const active = accounts.filter((a) => a.monitoringEnabled && a.status !== 'blocked').length;
+    const active = accounts.filter((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required').length;
     const newCmts = accounts.reduce((s, a) => s + a.newComments, 0);
     const totalVideos = accounts.reduce((s, a) => s + a.videoCount, 0);
     return { total, active, newCmts, totalVideos };
   }, [accounts]);
 
-  // 倒计时状态 — 后端驱动，前端本地插值
-  const [countdown, setCountdown] = useState('');
-  const [nextRunAt, setNextRunAt] = useState(0);
-  const [intervalMin, setIntervalMin] = useState(0);
+  // 判断某个 (windowId, platform) 是否已全部暂停
+  const pausedPairs = useMemo(() => {
+    const map = new Map<string, boolean>(); // key = "windowId_platform" → isPaused
+    if (!accounts.length) return map;
+    // 按 (windowId, platform) 分组
+    const groups = new Map<string, MonitorAccount[]>();
+    for (const a of accounts) {
+      const k = `${a.fingerprintWindowId}_${a.platform}`;
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k)!.push(a);
+    }
+    for (const [k, accs] of groups) {
+      map.set(k, accs.every((a) => !a.monitoringEnabled || a.status === 'blocked' || a.status === 'login_required'));
+    }
+    return map;
+  }, [accounts]);
 
-  // 从后端同步下次执行时间
+  // 每 (窗口, 平台) 独立倒计时
+  const [countdowns, setCountdowns] = useState<Map<string, string>>(new Map());
   useEffect(() => {
-    if (!schedulerData) return;
-    setNextRunAt(schedulerData.nextRunAt);
-    setIntervalMin(Math.round(schedulerData.intervalMs / 60000));
-  }, [schedulerData]);
+    const statuses = schedulerData?.statuses || [];
+    if (statuses.length === 0) return;
 
-  // 本地倒计时插值（每秒更新）
-  useEffect(() => {
-    if (nextRunAt <= 0) return;
-
-    const updateCountdown = () => {
-      const remaining = Math.max(0, nextRunAt - Date.now());
-      if (remaining <= 0) {
-        setCountdown('即将执行');
-        return;
-      }
-      const mins = Math.floor(remaining / 60000);
-      const secs = Math.floor((remaining % 60000) / 1000);
-      if (mins > 0) {
-        setCountdown(`${mins}分${secs.toString().padStart(2, '0')}秒`);
-      } else {
-        setCountdown(`${secs}秒`);
-      }
+    const formatRemaining = (ms: number) => {
+      if (ms <= 0) return '即将执行';
+      const mins = Math.floor(ms / 60000);
+      const secs = Math.floor((ms % 60000) / 1000);
+      if (mins > 0) return `${mins}分${secs}秒`;
+      return `${secs}秒`;
     };
 
-    updateCountdown();
-    const timer = setInterval(updateCountdown, 1000);
+    const update = () => {
+      const now = Date.now();
+      const map = new Map<string, string>();
+      for (const s of statuses) {
+        const key = `${s.windowId}_${s.platform}`;
+        // 已暂停 → 停止倒计时
+        if (pausedPairs.get(key)) {
+          map.set(key, '已暂停');
+        } else {
+          map.set(key, formatRemaining(s.nextRunAt - now));
+        }
+      }
+      setCountdowns(map);
+    };
+    update();
+    const timer = setInterval(update, 1000);
     return () => clearInterval(timer);
-  }, [nextRunAt]);
+  }, [schedulerData?.statuses, pausedPairs]);
 
   const handleEnterDetail = (accountId: number) => {
     setSelectedAccountId(accountId);
@@ -951,47 +1016,128 @@ function MonitorTab() {
               ))}
             </div>
 
-            {/* Countdown + Unified Trigger */}
-            <div className="flex items-center gap-3">
-              {/* 下次检查倒计时 */}
-              <div className="flex-1 bg-surface border border-outline-variant rounded-xl px-4 py-3 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-surface-container text-indigo-500">
-                  <MaterialIcon icon="schedule" size="md" />
-                </div>
-                  <div className="flex-1">
-                    <p className="text-label-sm text-on-surface-variant">下次自动检查</p>
-                    <p className="text-headline-sm text-on-surface font-bold tabular-nums">
-                      {(() => {
-                        // 检查是否有任务正在执行
-                        const statusData = (taskStatusesData ?? []) as MonitorTaskStatus[];
-                        const hasRunningTasks = statusData.some((s) => s.status === 'running' || s.status === 'queued');
-                        if (hasRunningTasks) {
-                          return '执行中…';
-                        }
-                        return nextRunAt > 0 ? (countdown || '即将执行') : '等待调度器…';
-                      })()}
-                    </p>
-                  </div>
-                  {nextRunAt > 0 && (
-                    <div className="text-right">
-                      <p className="text-[10px] text-on-surface-variant">
-                        间隔 {intervalMin} 分钟
-                      </p>
-                      {schedulerData && schedulerData.lastRunAt > 0 && (
-                        <p className="text-[10px] text-outline">
-                          上次 {formatRelativeTime(new Date(schedulerData.lastRunAt).toISOString())}
-                        </p>
-                      )}
+            {/* Per-window Countdown Groups + Unified Trigger */}
+            <div className="flex items-start gap-3 flex-wrap">
+              {/* 按窗口分组倒计时 */}
+              {groupedByUser.map((group) => {
+                const windowStatuses = (schedulerData?.statuses || []).filter(
+                  (s) => s.windowId === group.windowId,
+                );
+                if (windowStatuses.length === 0) return null;
+                return (
+                  <div
+                    key={group.windowId}
+                    className="flex-1 min-w-[260px] bg-surface border border-outline-variant rounded-2xl overflow-hidden"
+                  >
+                    {/* 窗口头部 */}
+                    <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-container-high/60 border-b border-outline-variant/40">
+                      <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                        <span className="text-[10px] font-bold text-primary tabular-nums">W</span>
+                      </div>
+                      <span className="text-label-sm text-on-surface font-medium truncate">
+                        {group.operatorName}
+                      </span>
+                      <span className="text-[10px] text-outline ml-auto flex-shrink-0">
+                        {group.windowName.length > 12 ? group.windowName.slice(0, 12) + '…' : group.windowName}
+                      </span>
                     </div>
-                  )}
-              </div>
+                    {/* 平台倒计时行 */}
+                    <div className="divide-y divide-outline-variant/30">
+                      {windowStatuses.map((s) => {
+                        const pairKey = `${s.windowId}_${s.platform}`;
+                        const cd = countdowns.get(pairKey) || '--';
+                        const isIdle = s.mode === 'idle';
+                        const isPaused = pausedPairs.get(pairKey);
+                        const platformLabel =
+                          s.platform === 'douyin' ? '抖音' :
+                          s.platform === 'kuaishou' ? '快手' :
+                          s.platform === 'tencent' ? '视频号' : s.platform;
+                        const platformInitial =
+                          s.platform === 'douyin' ? '抖' :
+                          s.platform === 'kuaishou' ? '快' :
+                          s.platform === 'tencent' ? '视' : s.platform.slice(0, 2);
+                        return (
+                          <div
+                            key={pairKey}
+                            className={cn(
+                              'flex items-center gap-3 px-4 py-2.5 transition-colors',
+                              isPaused ? 'bg-surface-container-low/30' : 'hover:bg-surface-container-low/40',
+                            )}
+                          >
+                            {/* 平台图标 */}
+                            <div
+                              className={cn(
+                                'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 transition-colors',
+                                isPaused
+                                  ? 'bg-gray-100 text-gray-400'
+                                  : isIdle
+                                    ? 'bg-amber-100 text-amber-600'
+                                    : 'bg-indigo-50 text-indigo-500',
+                              )}
+                            >
+                              {platformInitial}
+                            </div>
+                            {/* 倒计时 */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={cn(
+                                    'text-label-xs font-medium',
+                                    isPaused ? 'text-outline' : 'text-on-surface',
+                                  )}
+                                >
+                                  {platformLabel}
+                                </span>
+                                {isPaused && (
+                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-gray-200 text-gray-500 font-medium">
+                                    暂停
+                                  </span>
+                                )}
+                                {!isPaused && isIdle && (
+                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-amber-100 text-amber-600 font-medium">
+                                    空闲
+                                  </span>
+                                )}
+                                {!isPaused && !isIdle && (
+                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-indigo-50 text-indigo-500 font-medium">
+                                    活跃
+                                  </span>
+                                )}
+                              </div>
+                              <p
+                                className={cn(
+                                  'text-body-sm font-bold tabular-nums',
+                                  isPaused ? 'text-outline' : 'text-on-surface',
+                                )}
+                              >
+                                {cd}
+                              </p>
+                            </div>
+                            {/* 间隔 + 上次执行 */}
+                            <div className="text-right flex-shrink-0">
+                              <p className={cn('text-[10px]', isPaused ? 'text-outline/60' : 'text-on-surface-variant')}>
+                                {Math.round(s.intervalMs / 1000)}s
+                              </p>
+                              {s.lastRunAt > 0 && (
+                                <p className={cn('text-[10px]', isPaused ? 'text-outline/40' : 'text-outline')}>
+                                  上次 {new Date(s.lastRunAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
 
               {/* 统一立即更新按钮 */}
               <button
                 onClick={handleTriggerAll}
                 disabled={triggerAllMonitor.isPending || stats.active === 0}
                 className={cn(
-                  'flex items-center gap-2 px-5 py-3 rounded-xl text-label-lg font-medium shadow-sm transition-all',
+                  'flex items-center gap-2 px-5 py-3 rounded-xl text-label-lg font-medium shadow-sm transition-all flex-shrink-0',
                   'bg-primary text-on-primary hover:shadow-md active:scale-[0.98]',
                   'disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100',
                 )}
@@ -1003,8 +1149,136 @@ function MonitorTab() {
                 />
                 {triggerAllMonitor.isPending ? '创建任务中…' : '立即更新全部'}
               </button>
+
+              {/* 清空数据库按钮 */}
+              <button
+                onClick={async () => {
+                  if (!confirm('确定清空所有视频、评论、快照数据？')) return;
+                  try {
+                    const res = await api.post('/matrix/monitor/videos/clear');
+                    addToast((res.data as any)?.message || '已清空', 'success');
+                  } catch (e: any) {
+                    addToast(e?.response?.data?.error || e?.message || '清空失败', 'error');
+                  }
+                }}
+                className="flex items-center gap-2 px-4 py-3 rounded-xl text-label-md font-medium shadow-sm transition-all bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 active:scale-[0.98] flex-shrink-0"
+              >
+                <MaterialIcon icon="delete" size="sm" />
+                清空数据
+              </button>
             </div>
           </div>
+
+          {/* ── Active Queue (常驻) ── */}
+          {(() => {
+            const ad = activeTasksData;
+            const hasTasks = ad && ad.total > 0;
+            if (!hasTasks) return null;
+
+            return (
+              <div className="mb-6 bg-surface border border-outline-variant rounded-xl overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-outline-variant bg-surface-container">
+                  <MaterialIcon icon="play_circle" size="sm" className="text-primary" />
+                  <h3 className="text-label-lg text-on-surface font-semibold">执行队列</h3>
+                  <span className="text-label-sm text-on-surface-variant">({ad.running} 运行 / {ad.queued} 等待)</span>
+                  <span className="flex items-center gap-1 ml-auto">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+                    </span>
+                    <span className="text-[10px] text-primary font-medium">实时</span>
+                  </span>
+                  <button
+                    onClick={async () => {
+                      if (!confirm('确定取消所有执行中的任务？')) return;
+                      try {
+                        const res = await cancelAllTasks.mutateAsync();
+                        addToast((res as any)?.message || '已取消所有任务', 'success');
+                      } catch (e: any) {
+                        addToast(e?.response?.data?.error || e?.message || '取消失败', 'error');
+                      }
+                    }}
+                    disabled={cancelAllTasks.isPending}
+                    className="ml-2 flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+                  >
+                    <MaterialIcon icon="stop" size="xs" />
+                    {cancelAllTasks.isPending ? '取消中...' : '取消全部'}
+                  </button>
+                </div>
+
+                <div className="p-3 space-y-3">
+                  {ad.windows.map((win) => (
+                    <div key={win.windowId} className="border border-outline-variant/50 rounded-lg overflow-hidden">
+                      <div className="px-3 py-2 bg-surface-container-low border-b border-outline-variant/30 flex items-center gap-2">
+                        <MaterialIcon icon="open_in_new" size="sm" className="text-on-surface-variant" />
+                        <span className="text-label-sm text-on-surface-variant font-mono">
+                          窗口 {win.windowId.slice(0, 12)}
+                        </span>
+                        <span className="text-[10px] text-outline ml-auto">
+                          {win.tasks.length} 任务 · {win.tasks.filter(t => t.status === 'running').length} 执行中
+                        </span>
+                      </div>
+                      <div className="divide-y divide-outline-variant/30">
+                        {win.tasks.map((task) => {
+                          const platformConfig = MONITOR_PLATFORM_CONFIG[task.platform] || MONITOR_PLATFORM_FALLBACK;
+                          const progress = task.progress;
+                          return (
+                            <div key={task.taskId} className="px-3 py-2.5">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <div className={cn('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold', platformConfig.bg, platformConfig.text)}>
+                                    {(task.platform).charAt(0)}
+                                  </div>
+                                  <span className="text-label-sm text-on-surface font-medium">{task.platform}</span>
+                                  {task.status === 'running' && (
+                                    <span className="text-[10px] text-primary font-medium animate-pulse">运行中</span>
+                                  )}
+                                  {task.status === 'queued' && (
+                                    <span className="text-[10px] text-on-surface-variant">等待中</span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    if (!confirm(`确定取消此${task.status === 'running' ? '运行中' : '等待中'}的任务？`)) return;
+                                    try {
+                                      const res = await cancelTask.mutateAsync(task.taskId);
+                                      addToast((res as any)?.message || '任务已取消', 'success');
+                                    } catch (e: any) {
+                                      addToast(e?.response?.data?.error || e?.message || '取消失败', 'error');
+                                    }
+                                  }}
+                                  disabled={cancelTask.isPending}
+                                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+                                  title="取消此任务"
+                                >
+                                  <MaterialIcon icon="close" size="xs" />
+                                  取消
+                                </button>
+                              </div>
+                              {task.status === 'running' && progress && (
+                                <div className="mt-1.5 ml-8">
+                                  <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1 py-0.5 rounded">{progress.phase}</span>
+                                    <span className="text-[10px] text-on-surface-variant">{progress.step}</span>
+                                  </div>
+                                  {progress.detail && (
+                                    <p className="text-[9px] text-on-surface-variant/70 mb-1">{progress.detail}</p>
+                                  )}
+                                  <div className="w-full bg-outline-variant/30 rounded-full h-1">
+                                    <div className="h-full bg-primary rounded-full transition-all duration-500 ease-out" style={{ width: `${progress.percent}%` }} />
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── Update Queue ── */}
           {showQueue && monitorTaskIds.length > 0 && (() => {
@@ -1079,35 +1353,57 @@ function MonitorTab() {
                       return (
                         <div
                           key={task.taskId}
-                          className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-container-lowest border border-outline-variant/50"
+                          className="px-3 py-2 rounded-lg bg-surface-container-lowest border border-outline-variant/50"
                         >
-                          <div className="flex items-center gap-2.5">
-                            <div className={cn('w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold', platformConfig.bg, platformConfig.text)}>
-                              {(account?.platformName || task.platform).charAt(0)}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className={cn('w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold', platformConfig.bg, platformConfig.text)}>
+                                {(account?.platformName || task.platform).charAt(0)}
+                              </div>
+                              <div>
+                                <p className="text-label-md text-on-surface font-medium">
+                                  {account?.platformName || task.platform}
+                                </p>
+                                <p className="text-[10px] text-on-surface-variant font-mono">
+                                  {task.taskId.slice(0, 20)}…
+                                </p>
+                              </div>
                             </div>
                             <div>
-                              <p className="text-label-md text-on-surface font-medium">
-                                {account?.platformName || task.platform}
-                              </p>
-                              <p className="text-[10px] text-on-surface-variant font-mono">
-                                {task.taskId.slice(0, 20)}…
-                              </p>
+                              {task.status === 'completed' && (
+                                <StatusPill tone="success" icon="check_circle">完成</StatusPill>
+                              )}
+                              {task.status === 'running' && (
+                                <StatusPill tone="warning" icon="sync" className="animate-pulse">执行中…</StatusPill>
+                              )}
+                              {task.status === 'queued' && (
+                                <StatusPill tone="pending" icon="schedule">排队中</StatusPill>
+                              )}
+                              {task.status === 'failed' && (
+                                <StatusPill tone="error" icon="error">{task.error?.slice(0, 20) || '失败'}</StatusPill>
+                              )}
                             </div>
                           </div>
-                          <div>
-                            {task.status === 'completed' && (
-                              <StatusPill tone="success" icon="check_circle">完成</StatusPill>
-                            )}
-                            {task.status === 'running' && (
-                              <StatusPill tone="warning" icon="sync" className="animate-pulse">执行中…</StatusPill>
-                            )}
-                            {task.status === 'queued' && (
-                              <StatusPill tone="pending" icon="schedule">排队中</StatusPill>
-                            )}
-                            {task.status === 'failed' && (
-                              <StatusPill tone="error" icon="error">{task.error?.slice(0, 20) || '失败'}</StatusPill>
-                            )}
-                          </div>
+
+                          {/* 进度详情 — 仅运行中且有进度数据时显示 */}
+                          {task.status === 'running' && task.progress && (
+                            <div className="mt-2 pl-9">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[11px] font-semibold text-primary">{task.progress.phase}</span>
+                                <span className="text-[11px] text-on-surface-variant">{task.progress.step}</span>
+                              </div>
+                              {task.progress.detail && (
+                                <p className="text-[10px] text-on-surface-variant mb-1.5">{task.progress.detail}</p>
+                              )}
+                              <div className="w-full h-1.5 rounded-full bg-surface-container-high overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+                                  style={{ width: `${task.progress.percent}%` }}
+                                />
+                              </div>
+                              <p className="text-[10px] text-on-surface-variant mt-0.5 text-right">{task.progress.percent}%</p>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1123,133 +1419,274 @@ function MonitorTab() {
               <h2 className="text-title-lg text-on-surface font-bold flex items-center gap-2">
                 <MaterialIcon icon="people" size="md" className="text-primary" />
                 监控用户
+                {platformFilter !== 'all' && (
+                  <span className="text-label-sm text-on-surface-variant font-normal ml-1">
+                    ({filteredAccounts.length}/{accounts.length})
+                  </span>
+                )}
               </h2>
-              <button
-                onClick={() => { refetchAccounts(); refetchNewComments(); }}
-                className="text-label-md text-primary flex items-center gap-1 hover:underline"
-              >
-                <MaterialIcon icon="refresh" size="xs" />
-                刷新
-              </button>
+              <div className="flex items-center gap-3">
+                {/* 平台筛选器 */}
+                {availablePlatforms.length > 1 && (
+                  <div className="flex items-center gap-1.5 bg-surface-container rounded-lg p-1">
+                    <button
+                      onClick={() => setPlatformFilter('all')}
+                      className={cn(
+                        'px-3 py-1.5 rounded-md text-label-sm font-medium transition-all',
+                        platformFilter === 'all'
+                          ? 'bg-primary text-on-primary shadow-sm'
+                          : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high',
+                      )}
+                    >
+                      全部
+                    </button>
+                    {availablePlatforms.map((p) => {
+                      const pc = MONITOR_PLATFORM_CONFIG[p] || MONITOR_PLATFORM_FALLBACK;
+                      return (
+                        <button
+                          key={p}
+                          onClick={() => setPlatformFilter(p)}
+                          className={cn(
+                            'px-3 py-1.5 rounded-md text-label-sm font-medium transition-all flex items-center gap-1',
+                            platformFilter === p
+                              ? `${pc.bg} ${pc.text} shadow-sm`
+                              : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high',
+                          )}
+                        >
+                          <PlatformIcon platform={p as any} size={14} />
+                          {PLATFORM_LABELS[p] || p}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <button
+                  onClick={() => { refetchAccounts(); refetchNewComments(); }}
+                  className="text-label-md text-primary flex items-center gap-1 hover:underline"
+                >
+                  <MaterialIcon icon="refresh" size="xs" />
+                  刷新
+                </button>
+              </div>
             </div>
 
             {accountsLoading ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {Array.from({ length: 6 }).map((_, i) => (
-                  <div key={i} className="h-40 rounded-xl border border-outline-variant animate-pulse bg-surface-container" />
+              <div className="space-y-6">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <div key={i} className="h-48 rounded-2xl border border-outline-variant animate-pulse bg-surface-container" />
                 ))}
               </div>
-            ) : accounts.length === 0 ? (
+            ) : groupedByUser.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-on-surface-variant">
                 <MaterialIcon icon="person" size="3xl" className="text-outline mb-4 opacity-30" />
-                <p className="text-title-md font-medium mb-1">暂无监控用户</p>
-                <p className="text-body-sm">请先在「用户管理」中添加监控对象</p>
+                <p className="text-title-md font-medium mb-1">
+                  {accounts.length === 0 ? '暂无监控用户' : '当前筛选条件下无用户'}
+                </p>
+                <p className="text-body-sm">
+                  {accounts.length === 0 ? '请先在「用户管理」中添加监控对象' : '请尝试选择其他平台'}
+                </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {accounts.map((account) => {
-                  const pc = MONITOR_PLATFORM_CONFIG[account.platform] || MONITOR_PLATFORM_FALLBACK;
-                  const isBlocked = account.status === 'blocked';
-                  const isCooldown = account.cooldownUntil > Date.now();
-                  const isActive = account.monitoringEnabled && !isBlocked;
+              <div className="space-y-6">
+                {groupedByUser.map((group, groupIdx) => {
+                  const totalVideos = group.accounts.reduce((s, a) => s + a.videoCount, 0);
+                  const totalComments = group.accounts.reduce((s, a) => s + a.totalComments, 0);
+                  const totalNewComments = group.accounts.reduce((s, a) => s + a.newComments, 0);
+                  const hasActive = group.accounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required');
+                  const hasBlocked = group.accounts.some((a) => a.status === 'blocked');
+                  const hasLoginRequired = group.accounts.some((a) => a.status === 'login_required');
 
                   return (
                     <div
-                      key={account.id}
-                      className={cn(
-                        'group relative bg-surface border border-outline-variant rounded-xl overflow-hidden cursor-pointer',
-                        'hover:border-primary/40 hover:shadow-lg transition-all duration-200',
-                        `border-l-3 ${pc.border}`,
-                      )}
-                      onClick={() => handleEnterDetail(account.id)}
+                      key={group.windowId}
+                      className="relative bg-surface border border-outline-variant rounded-2xl overflow-hidden"
+                      style={{ animationDelay: `${groupIdx * 80}ms` }}
                     >
-                      {/* Platform gradient accent */}
-                      <div className={cn('absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none', pc.gradient)} />
-
-                      <div className="relative p-4">
-                        {/* Header: platform + status */}
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center gap-3">
-                            <div className={cn('w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm', pc.bg, pc.text)}>
-                              {account.platformName.charAt(0)}
-                            </div>
-                            <div>
-                              <h3 className="text-label-lg text-on-surface font-semibold">{account.platformName}</h3>
-                              <p className="text-label-sm text-on-surface-variant font-mono text-[11px]">
-                                {account.fingerprintWindowId}
-                              </p>
-                            </div>
+                      {/* 用户头部信息 */}
+                      <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-surface-container-high/80 to-surface-container/40 border-b border-outline-variant/50">
+                        <div className="flex items-center gap-4">
+                          {/* 用户头像 */}
+                          <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
+                            <MaterialIcon icon="person" size="lg" className="text-primary" />
                           </div>
-                          <div className="flex items-center gap-2">
-                            {isActive && (
-                              <span className="flex items-center gap-1.5">
-                                <span className="relative flex h-2 w-2">
-                                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h3 className="text-title-md text-on-surface font-bold">
+                                {group.operatorName}
+                              </h3>
+                              {hasActive && (
+                                <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10">
+                                  <span className="relative flex h-1.5 w-1.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                    <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+                                  </span>
+                                  <span className="text-[10px] text-emerald-600 font-medium">运行中</span>
                                 </span>
-                                <span className="text-[10px] text-emerald-500 font-medium">运行中</span>
+                              )}
+                              {hasLoginRequired && (
+                                <span className="text-[10px] text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded-full font-medium">
+                                  需重新登录
+                                </span>
+                              )}
+                              {hasBlocked && (
+                                <span className="text-[10px] text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full font-medium">
+                                  部分封禁
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className="text-label-sm text-on-surface-variant font-mono">
+                                {group.windowName}
                               </span>
-                            )}
-                            {isBlocked && (
-                              <span className="text-[10px] text-red-400 bg-red-500/10 px-2 py-0.5 rounded-full font-medium">已封禁</span>
-                            )}
-                            {isCooldown && !isBlocked && (
-                              <span className="text-[10px] text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full font-medium">冷却中</span>
-                            )}
-                            {!account.monitoringEnabled && (
-                              <span className="text-[10px] text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full font-medium">已暂停</span>
-                            )}
+                              <span className="text-outline">·</span>
+                              <span className="text-label-sm text-on-surface-variant">
+                                {group.accounts.length} 个平台
+                              </span>
+                            </div>
                           </div>
                         </div>
 
-                        {/* Stats row */}
-                        <div className="flex items-center gap-5 mb-3">
-                          <div>
-                            <p className="text-headline-sm text-on-surface font-bold tabular-nums">{account.videoCount}</p>
-                            <p className="text-[10px] text-on-surface-variant">视频</p>
+                        {/* 用户汇总统计 */}
+                        <div className="flex items-center gap-6">
+                          <div className="text-right">
+                            <p className="text-headline-sm text-on-surface font-bold tabular-nums">{totalVideos}</p>
+                            <p className="text-[10px] text-on-surface-variant">总视频</p>
                           </div>
-                          <div>
-                            <p className="text-headline-sm text-on-surface font-bold tabular-nums">{account.totalComments}</p>
+                          <div className="text-right">
+                            <p className="text-headline-sm text-on-surface font-bold tabular-nums">{totalComments}</p>
                             <p className="text-[10px] text-on-surface-variant">总评论</p>
                           </div>
-                          <div>
-                            <p className={cn('text-headline-sm font-bold tabular-nums', account.newComments > 0 ? 'text-amber-500' : 'text-on-surface-variant')}>
-                              {account.newComments}
+                          <div className="text-right">
+                            <p className={cn(
+                              'text-headline-sm font-bold tabular-nums',
+                              totalNewComments > 0 ? 'text-amber-500' : 'text-on-surface-variant',
+                            )}>
+                              {totalNewComments}
                             </p>
                             <p className="text-[10px] text-on-surface-variant">新评论</p>
                           </div>
-                          <div className="ml-auto text-right">
-                            <p className="text-[11px] text-on-surface-variant">
-                              {account.lastCheckTime ? formatRelativeTime(account.lastCheckTime) : '未检测'}
-                            </p>
-                            <p className="text-[10px] text-outline">上次检查</p>
-                          </div>
                         </div>
+                      </div>
 
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                          <button
-                            onClick={() => handleTrigger(account.id)}
-                            disabled={triggerMonitor.isPending || !account.monitoringEnabled || isBlocked}
-                            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-label-md font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                          >
-                            <MaterialIcon icon="sync" size="xs" />
-                            立即更新
-                          </button>
-                          <button
-                            onClick={() => handleToggle(account.id, account.monitoringEnabled)}
-                            disabled={toggleMonitor.isPending}
-                            className={cn(
-                              'flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-label-md font-medium transition-colors disabled:opacity-30',
-                              account.monitoringEnabled
-                                ? 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
-                                : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20',
-                            )}
-                          >
-                            <MaterialIcon icon={account.monitoringEnabled ? 'pause' : 'play_arrow'} size="xs" />
-                            {account.monitoringEnabled ? '暂停' : '恢复'}
-                          </button>
-                        </div>
+                      {/* 平台卡片网格 */}
+                      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {group.accounts.map((account) => {
+                          const pc = MONITOR_PLATFORM_CONFIG[account.platform] || MONITOR_PLATFORM_FALLBACK;
+                           const isBlocked = account.status === 'blocked';
+                           const isLoginRequired = account.status === 'login_required';
+                           const isCooldown = account.cooldownUntil > Date.now();
+                           const isActive = account.monitoringEnabled && !isBlocked && !isLoginRequired;
+
+                          return (
+                            <div
+                              key={account.id}
+                              className={cn(
+                                'group relative bg-surface-container-low border border-outline-variant/50 rounded-xl overflow-hidden cursor-pointer',
+                                'hover:border-primary/40 hover:shadow-md transition-all duration-200',
+                                `border-l-3 ${pc.border}`,
+                              )}
+                              onClick={() => handleEnterDetail(account.id)}
+                            >
+                              <div className={cn('absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none', pc.gradient)} />
+
+                              <div className="relative p-3.5">
+                                {/* 平台头部 */}
+                                <div className="flex items-center justify-between mb-2.5">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs', pc.bg, pc.text)}>
+                                      {account.platformName.charAt(0)}
+                                    </div>
+                                    <div>
+                                      <h4 className="text-label-md text-on-surface font-semibold">{account.platformName}</h4>
+                                      <p className="text-[10px] text-on-surface-variant">
+                                        {account.lastCheckTime ? formatRelativeTime(account.lastCheckTime) : '未检测'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                     {isActive && (
+                                       <span className="w-2 h-2 rounded-full bg-emerald-500" title="运行中" />
+                                     )}
+                                     {isLoginRequired && (
+                                       <span className="w-2 h-2 rounded-full bg-orange-500" title="需重新登录" />
+                                     )}
+                                     {isBlocked && (
+                                       <span className="w-2 h-2 rounded-full bg-red-500" title="已封禁" />
+                                     )}
+                                    {isCooldown && !isBlocked && (
+                                      <span className="w-2 h-2 rounded-full bg-amber-500" title="冷却中" />
+                                    )}
+                                    {!account.monitoringEnabled && (
+                                      <span className="w-2 h-2 rounded-full bg-gray-400" title="已暂停" />
+                                    )}
+                                  </div>
+                                </div>
+
+                                {/* 统计行 */}
+                                <div className="flex items-center gap-4 mb-2.5">
+                                  <div>
+                                    <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.videoCount}</p>
+                                    <p className="text-[9px] text-on-surface-variant">视频</p>
+                                  </div>
+                                  <div>
+                                    <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.totalComments}</p>
+                                    <p className="text-[9px] text-on-surface-variant">评论</p>
+                                  </div>
+                                  <div>
+                                    <p className={cn(
+                                      'text-label-lg font-bold tabular-nums',
+                                      account.newComments > 0 ? 'text-amber-500' : 'text-on-surface-variant',
+                                    )}>
+                                      {account.newComments}
+                                    </p>
+                                    <p className="text-[9px] text-on-surface-variant">新增</p>
+                                  </div>
+                                </div>
+
+                                {/* 操作按钮 */}
+                                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                  <button
+                                    onClick={() => handleTrigger(account.id)}
+                                    disabled={triggerMonitor.isPending || !account.monitoringEnabled || isBlocked}
+                                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                  >
+                                    <MaterialIcon icon="sync" size="xs" />
+                                    更新
+                                  </button>
+                                  <button
+                                    onClick={() => handleToggle(account.id, account.monitoringEnabled)}
+                                    disabled={toggleMonitor.isPending}
+                                    className={cn(
+                                      'flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-30',
+                                      account.monitoringEnabled
+                                        ? 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                                        : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20',
+                                    )}
+                                  >
+                                    <MaterialIcon icon={account.monitoringEnabled ? 'pause' : 'play_arrow'} size="xs" />
+                                    {account.monitoringEnabled ? '暂停' : '恢复'}
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`确定清空 ${account.platformName} 的所有视频和评论数据？`)) return;
+                                      try {
+                                        const res = await clearUserData.mutateAsync(account.id);
+                                        addToast((res as any)?.message || '已清空', 'success');
+                                      } catch (e: any) {
+                                        addToast(e?.response?.data?.error || e?.message || '清空失败', 'error');
+                                      }
+                                    }}
+                                    disabled={clearUserData.isPending}
+                                    className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+                                    title="清空该用户数据"
+                                  >
+                                    <MaterialIcon icon="delete" size="xs" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   );
@@ -1321,12 +1758,12 @@ function MonitorTab() {
                       </div>
                       {selectedVideoId === video.id && (
                         <div className="ml-2 border-l-2 border-primary/20 pl-3 pb-1">
-                          {videoCommentsData?.data ? (
-                            videoCommentsData.data.length === 0 ? (
+                          {videoCommentsData ? (
+                            videoCommentsData.length === 0 ? (
                               <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
                             ) : (
                               <div className="flex flex-col gap-2 pt-2">
-                                {videoCommentsData.data.map((root: any) => (
+                                {videoCommentsData.map((root: any) => (
                                   <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
                                     <div className="flex items-start gap-1.5">
                                       <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
@@ -1336,6 +1773,15 @@ function MonitorTab() {
                                     </div>
                                     <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
                                     <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
+                                    <AiReplyCard
+                                      commentId={typeof root.id === 'number' ? root.id : parseInt(root.id)}
+                                      suggestionStatus={root.suggestionStatus || 'none'}
+                                      suggestedReply={root.suggestedReply}
+                                      suggestionModel={root.suggestionModel}
+                                      suggestionLatencyMs={root.suggestionLatencyMs}
+                                      replyStatus={root.replyStatus || 'none'}
+                                      isNew={root.isNew}
+                                    />
                                     {root.replies?.length > 0 && (
                                       <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
                                         {root.replies.map((sub: any) => (
@@ -1348,6 +1794,16 @@ function MonitorTab() {
                                               {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                             </div>
                                             <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                            <AiReplyCard
+                                              commentId={typeof sub.id === 'number' ? sub.id : parseInt(sub.id)}
+                                              suggestionStatus={sub.suggestionStatus || 'none'}
+                                              suggestedReply={sub.suggestedReply}
+                                              suggestionModel={sub.suggestionModel}
+                                              suggestionLatencyMs={sub.suggestionLatencyMs}
+                                              replyStatus={sub.replyStatus || 'none'}
+                                              isNew={sub.isNew}
+                                              isSub
+                                            />
                                           </div>
                                         ))}
                                       </div>
@@ -1393,6 +1849,7 @@ function MonitorTab() {
               {(() => {
                 const pc = MONITOR_PLATFORM_CONFIG[detail.platform] || MONITOR_PLATFORM_FALLBACK;
                 const isBlocked = detail.status === 'blocked';
+                const isLoginRequired = detail.status === 'login_required';
                 const isActive = detail.monitoringEnabled && !isBlocked;
 
                 return (
@@ -1422,6 +1879,9 @@ function MonitorTab() {
                               {isBlocked && (
                                 <span className="text-[11px] text-red-400 bg-red-500/10 px-2 py-0.5 rounded-full">已封禁</span>
                               )}
+                              {isLoginRequired && (
+                                <span className="text-[11px] text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-full">需重新登录</span>
+                              )}
                               {!detail.monitoringEnabled && (
                                 <span className="text-[11px] text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">已暂停</span>
                               )}
@@ -1450,6 +1910,23 @@ function MonitorTab() {
                           >
                             <MaterialIcon icon={detail.monitoringEnabled ? 'pause' : 'play_arrow'} size="sm" />
                             {detail.monitoringEnabled ? '暂停监控' : '恢复监控'}
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`确定清空 ${detail.platformName} 的所有视频和评论数据？`)) return;
+                              try {
+                                const res = await clearUserData.mutateAsync(detail.id);
+                                addToast((res as any)?.message || '已清空', 'success');
+                                handleBack(); // 清空后返回列表
+                              } catch (e: any) {
+                                addToast(e?.response?.data?.error || e?.message || '清空失败', 'error');
+                              }
+                            }}
+                            disabled={clearUserData.isPending}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg text-label-md font-medium border border-red-500/30 text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-30"
+                          >
+                            <MaterialIcon icon="delete" size="sm" />
+                            清空数据
                           </button>
                         </div>
                       </div>
@@ -1550,16 +2027,32 @@ function MonitorTab() {
                                       +{video.newCommentCount} 条新评论
                                     </span>
                                   )}
-                                  {video.metrics?.viewCount != null && (
+                                  {/* 播放量 - 视频号使用 readCount */}
+                                  {video.metrics && (video.metrics.viewCount ?? video.metrics.readCount) != null && (
                                     <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
                                       <MaterialIcon icon="visibility" size="xs" />
-                                      {formatNumber(video.metrics.viewCount)} 播放
+                                      {formatNumber(video.metrics.viewCount ?? video.metrics.readCount)} 播放
                                     </span>
                                   )}
-                                  {video.metrics?.likeCount != null && (
+                                  {/* 点赞数 */}
+                                  {video.metrics?.likeCount != null && video.metrics.likeCount > 0 && (
                                     <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
                                       <MaterialIcon icon="thumb_up" size="xs" />
                                       {formatNumber(video.metrics.likeCount)} 点赞
+                                    </span>
+                                  )}
+                                  {/* 收藏/推荐数 - 视频号特有 */}
+                                  {video.metrics?.favCount != null && video.metrics.favCount > 0 && (
+                                    <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
+                                      <MaterialIcon icon="bookmark" size="xs" />
+                                      {formatNumber(video.metrics.favCount)} 推荐
+                                    </span>
+                                  )}
+                                  {/* 分享数 */}
+                                  {video.metrics?.forwardCount != null && video.metrics.forwardCount > 0 && (
+                                    <span className="flex items-center gap-1 text-label-sm text-on-surface-variant">
+                                      <MaterialIcon icon="send" size="xs" />
+                                      {formatNumber(video.metrics.forwardCount)} 分享
                                     </span>
                                   )}
                                   <span className="text-[11px] text-outline">
@@ -1570,7 +2063,7 @@ function MonitorTab() {
 
                               <button
                                 onClick={() => handleTrigger(detail.id)}
-                                disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked'}
+                                disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked' || detail.status === 'login_required'}
                                 className="shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-label-md text-primary bg-primary/10 hover:bg-primary/20 transition-colors disabled:opacity-30"
                                 title="更新此用户的评论"
                               >
@@ -1581,12 +2074,12 @@ function MonitorTab() {
                           </div>
                           {selectedVideoId === video.id && (
                             <div className="ml-4 border-l-2 border-primary/30 pl-3 pb-2 mt-2">
-                              {videoCommentsData?.data ? (
-                                videoCommentsData.data.length === 0 ? (
+                              {videoCommentsData ? (
+                                videoCommentsData.length === 0 ? (
                                   <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
                                 ) : (
                                   <div className="flex flex-col gap-2 pt-1">
-                                    {videoCommentsData.data.map((root: any) => (
+                                    {videoCommentsData.map((root: any) => (
                                       <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
                                         <div className="flex items-start gap-1.5">
                                           <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
@@ -1595,6 +2088,15 @@ function MonitorTab() {
                                           )}
                                         </div>
                                         <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
+                                        <AiReplyCard
+                                          commentId={typeof root.id === 'number' ? root.id : parseInt(root.id)}
+                                          suggestionStatus={root.suggestionStatus || 'none'}
+                                          suggestedReply={root.suggestedReply}
+                                          suggestionModel={root.suggestionModel}
+                                          suggestionLatencyMs={root.suggestionLatencyMs}
+                                          replyStatus={root.replyStatus || 'none'}
+                                          isNew={root.isNew}
+                                        />
                                         {root.replies?.length > 0 && (
                                           <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
                                             {root.replies.map((sub: any) => (
@@ -1607,6 +2109,16 @@ function MonitorTab() {
                                                   {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                                 </div>
                                                 <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                                <AiReplyCard
+                                                  commentId={typeof sub.id === 'number' ? sub.id : parseInt(sub.id)}
+                                                  suggestionStatus={sub.suggestionStatus || 'none'}
+                                                  suggestedReply={sub.suggestedReply}
+                                                  suggestionModel={sub.suggestionModel}
+                                                  suggestionLatencyMs={sub.suggestionLatencyMs}
+                                                  replyStatus={sub.replyStatus || 'none'}
+                                                  isNew={sub.isNew}
+                                                  isSub
+                                                />
                                               </div>
                                             ))}
                                           </div>

@@ -255,6 +255,9 @@ export class BrowserManager {
       if (platform === 'xiaohongshu') {
         return url.includes('xiaohongshu.com') || url.includes('creator.xiaohongshu.com');
       }
+      if (platform === 'tencent') {
+        return url.includes('channels.weixin.qq.com');
+      }
       return url.includes('douyin.com') || url.includes('creator.douyin.com');
     });
   }

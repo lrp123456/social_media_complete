@@ -1,0 +1,175 @@
+<!-- 视频号助手 - 互动管理-评论页面 DOM -->
+<!-- URL: https://channels.weixin.qq.com/platform/comment -->
+<!-- 抓取时间: 2026-06-10 (基于界面截图+平台模式推测, 需登录后Network面板验证) -->
+<!-- 微前端: wujie (无界), data-wujie-id="content" -->
+<!-- 监控用途: Phase 2/3 评论采集和回复 -->
+
+<!-- ========== 页面标题 ========== -->
+<div class="page-header">
+  <h1 class="page-title">评论</h1>
+</div>
+
+<!-- ========== 视频选择区域 ========== -->
+<div class="video-selector">
+  <div class="selected-video">
+    <span class="video-label">当前查看:</span>
+    <span class="video-name">全部视频</span>
+  </div>
+  <button class="btn btn-outline switch-video-btn">切换视频</button>
+</div>
+
+<!-- ========== 筛选和搜索区域 ========== -->
+<div class="comment-filter-bar">
+  <div class="filter-select-group">
+    <!-- 评论类型: 全部类型/视频评论/直播弹幕 -->
+    <div class="filter-select">
+      <span class="select-label">全部类型</span>
+    </div>
+    <!-- 排序: 最新优先/最早优先 -->
+    <div class="filter-select">
+      <span class="select-label">最新优先</span>
+    </div>
+    <!-- 状态: 全部状态/未回复/已回复 -->
+    <div class="filter-select">
+      <span class="select-label">全部状态</span>
+    </div>
+  </div>
+  <div class="search-box">
+    <input type="text" class="search-input" placeholder="搜索评论" value="">
+  </div>
+</div>
+
+<!-- ========== 评论列表区域 ========== -->
+<div class="comment-list-container">
+
+  <!-- 单条一级评论 -->
+  <div class="comment-item" data-comment-id="comment_xxx_001">
+    <div class="comment-avatar">
+      <img src="..." class="avatar-img" alt="用户头像">
+    </div>
+    <div class="comment-body">
+      <div class="comment-header">
+        <span class="comment-username">用户昵称A</span>
+        <span class="author-badge" style="display:none">作者</span>
+        <span class="comment-time">2026-06-08 15:30</span>
+      </div>
+      <div class="comment-text">这是一条测试评论</div>
+      <div class="comment-source">
+        <span class="source-label">来自:</span>
+        <span class="source-video-title">德瓦达</span>
+      </div>
+      <div class="comment-actions">
+        <button class="action-btn like-btn">
+          <svg class="action-icon"><!-- icon-like --></svg>
+          <span class="action-count">12</span>
+        </button>
+        <button class="action-btn reply-btn">回复</button>
+        <button class="action-btn feature-btn">精选</button>
+        <button class="action-btn delete-btn">删除</button>
+        <button class="action-btn more-btn">
+          <!-- 更多: 拉黑用户等 -->
+        </button>
+      </div>
+
+      <!-- 子回复区域 -->
+      <div class="reply-list">
+        <div class="reply-item reply-item-author" data-comment-id="reply_xxx_001">
+          <div class="reply-avatar">
+            <img src="..." class="avatar-img avatar-small">
+          </div>
+          <div class="reply-body">
+            <div class="reply-header">
+              <span class="reply-username">视频号作者</span>
+              <span class="author-badge">作者</span>
+              <span class="reply-to">回复 @用户昵称A</span>
+              <span class="reply-time">2026-06-08 16:00</span>
+            </div>
+            <div class="reply-text">感谢支持！</div>
+          </div>
+        </div>
+        <!-- 查看更多回复 -->
+        <div class="load-more-replies">
+          <span class="load-more-text">查看更多回复</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ... 更多评论 ... -->
+</div>
+
+<!-- ========== 回复输入框 (点击"回复"后出现) ========== -->
+<div class="reply-input-area" style="display:none">
+  <div class="reply-target-info">
+    <span>回复 </span>
+    <span class="reply-target-name">@用户昵称A</span>
+  </div>
+  <textarea class="reply-textarea" placeholder="输入回复内容..." rows="3"></textarea>
+  <div class="reply-input-footer">
+    <span class="char-count">0/200</span>
+    <button class="btn btn-default cancel-reply-btn">取消</button>
+    <button class="btn btn-primary submit-reply-btn" disabled>发送</button>
+  </div>
+</div>
+
+<!-- ========== 切换视频弹窗 ========== -->
+<div class="modal-overlay" style="display:none">
+  <div class="modal video-switcher-modal">
+    <div class="modal-header">
+      <h3>选择视频</h3>
+    </div>
+    <div class="modal-body">
+      <input type="text" class="search-input" placeholder="搜索视频">
+      <div class="video-option-list">
+        <div class="video-option video-option-active">
+          <span class="option-text">全部视频</span>
+        </div>
+        <div class="video-option">
+          <img src="..." class="option-cover">
+          <div class="option-info">
+            <div class="option-title">德瓦达</div>
+            <div class="option-meta">2026-05-15 | 1条评论</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!--
+========== 推测的API端点 (需Network面板验证) ==========
+
+★ 评论列表API:
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/comment/get_comment_list
+  或:  POST /cgi-bin/mmfinderassistant-bin/comment/comment_list
+  参数: export_id(视频ID), offset, limit, sort_type, status
+  响应: list[].comment_id, content, nickname, create_time, like_count, reply_count, export_id
+
+★ 发送回复API:
+  URL: POST /micro/content/cgi-bin/mmfinderassistant-bin/comment/publish_comment
+  或:  POST /cgi-bin/mmfinderassistant-bin/comment/add_comment
+  参数: export_id, comment_id, content, reply_to_nickname
+
+★ 评论精选/删除:
+  URL: POST /cgi-bin/mmfinderassistant-bin/comment/set_featured
+  URL: POST /cgi-bin/mmfinderassistant-bin/comment/delete_comment
+
+注意: API前缀为 /cgi-bin/mmfinderassistant-bin/ 或 /micro/content/cgi-bin/mmfinderassistant-bin/
+实际路径需要通过浏览器 DevTools Network 面板确认。
+
+========== 拟人化回复流程 ==========
+
+1. 点击评论的"回复"按钮 → .reply-btn 或文本匹配"回复"
+2. 等待回复输入框出现 → .reply-textarea 或 textarea[placeholder*="回复"]
+3. 使用 HumanActions.safeCDPType() 逐字输入 (50-150ms/字)
+4. 等待发送按钮可用 (非disabled状态)
+5. 点击发送按钮 → .submit-reply-btn 或文本匹配"发送"
+6. 等待发送成功反馈
+7. 冷却 6-12 秒
+
+防封控:
+  - 所有操作通过 HumanActions (CDP底层)
+  - 逐字输入 + 随机延迟
+  - 评论间隔: 6-12秒
+  - 异常检测: 验证码/登录跳转/限流
+-->

@@ -9,6 +9,7 @@ export interface InterceptedResponse {
   timestamp: number;
   hasMore?: boolean;
   cursor?: string;
+  requestBody?: any;
 }
 
 export interface ValidationRejection {
@@ -37,6 +38,14 @@ function extractHasMore(body: any): boolean | undefined {
     if (body.data.page === -1) return false;
     if (body.data.page > 0) return true;
   }
+  // 腾讯视频号: downContinueFlag (1=有更多, 0=已加载全部)
+  if (body.data && typeof body.data.downContinueFlag === 'number') {
+    return body.data.downContinueFlag === 1;
+  }
+  // 腾讯视频号: continueFlag (布尔值)
+  if (body.data && typeof body.data.continueFlag === 'boolean') {
+    return body.data.continueFlag;
+  }
   return undefined;
 }
 
@@ -49,6 +58,8 @@ function extractCursor(body: any): string | undefined {
   }
   if (body.data?.cursor !== undefined) return String(body.data.cursor);
   if (body.pagination?.cursor !== undefined) return String(body.pagination.cursor);
+  // 腾讯视频号: lastBuff (分页游标)
+  if (body.data?.lastBuff !== undefined) return String(body.data.lastBuff);
   return undefined;
 }
 
@@ -73,17 +84,26 @@ function extractItems(body: any): any[] {
   if (Array.isArray(analysisList)) return analysisList;
   const worksList = body.data?.worksList;
   if (Array.isArray(worksList)) return worksList;
+  // 小红书笔记列表 API
   const dataNotes = body.data?.notes;
   if (Array.isArray(dataNotes)) return dataNotes;
   const noteInfos = body.data?.note_infos;
   if (Array.isArray(noteInfos)) return noteInfos;
+  // 小红书可能的其他嵌套路径
+  const xhsNotes = body.data?.note_list;
+  if (Array.isArray(xhsNotes)) return xhsNotes;
+  const xhsItems = body.data?.data?.items;
+  if (Array.isArray(xhsItems)) return xhsItems;
+  // 腾讯视频号评论列表 API: data.comment
+  const tencentComments = body.data?.comment;
+  if (Array.isArray(tencentComments)) return tencentComments;
   return [];
 }
 
 export function parseVideoItem(item: any): { aweme_id: string; description: string; create_time: number; comment_count: number; metrics: Record<string, any> } | null {
   if (!item || typeof item !== 'object') return null;
 
-  const awemeId = item.aweme_id || item.id || item.item_id || item.video_id || item.workId || item.photoId || '';
+  const awemeId = item.aweme_id || item.id || item.item_id || item.video_id || item.workId || item.photoId || item.note_id || item.noteId || '';
   if (!awemeId) return null;
 
   const desc = item.description || item.display_title || item.title || item.desc || item.caption || '';
@@ -101,18 +121,21 @@ export function parseVideoItem(item: any): { aweme_id: string; description: stri
   if (isNaN(createTime)) createTime = 0;
 
   // 合并 metrics/stat/stats/interactInfo 对象，兼容各平台 API 响应
-  const metrics = item.metrics || item.stat || item.stats || item.interactInfo || {};
+  // 小红书使用 interact_info（蛇形），其他平台使用 interactInfo（驼峰）
+  const metrics = item.metrics || item.stat || item.stats || item.interactInfo || item.interact_info || {};
   const rawCommentCount = item.comment_count
     || item.comments_count
     || item.commentCount
     || metrics?.comment_count
     || metrics?.commentCount
-    || item.stat?.commentCount
     || item.stat?.comment_count
-    || item.stats?.commentCount
+    || item.stat?.commentCount
     || item.stats?.comment_count
-    || item.interactInfo?.commentCount
+    || item.stats?.commentCount
     || item.interactInfo?.comment_count
+    || item.interactInfo?.commentCount
+    || item.interact_info?.comment_count
+    || item.interact_info?.commentCount
     || 0;
   const commentCount = typeof rawCommentCount === 'string'
     ? parseInt(rawCommentCount, 10) || 0
@@ -134,6 +157,8 @@ export function parseVideoItem(item: any): { aweme_id: string; description: stri
       'stats.commentCount': item.stats?.commentCount,
       'interactInfo.comment_count': item.interactInfo?.comment_count,
       'interactInfo.commentCount': item.interactInfo?.commentCount,
+      'interact_info.comment_count': item.interact_info?.comment_count,
+      'interact_info.commentCount': item.interact_info?.commentCount,
     };
     logger.warn({ awemeId, itemKeys, nestedKeys, commentFields },
       'parseVideoItem: comment_count=0 — item field scan for debugging');
@@ -225,6 +250,8 @@ export class RequestInterceptor {
       const matchedPattern = urlPatterns.find(pattern => requestUrl.includes(pattern));
       if (!matchedPattern) return;
 
+      logger.info(`[CDP] Matched: url=${requestUrl.substring(0, 150)} pattern=${matchedPattern} status=${status}`);
+
       const validationConfig = this.validationConfigs.get(matchedPattern);
 
       if (validationConfig?.requiredUrlParams) {
@@ -239,6 +266,13 @@ export class RequestInterceptor {
 
       const requestId = params.requestId;
 
+      // 获取 POST 请求体（用于关联子评论到根评论）
+      const getRequestBody = cdp.send('Network.getRequestPostData', { requestId }).then((postData: any) => {
+        if (postData?.postData) return JSON.parse(postData.postData);
+        return undefined;
+      }).catch(() => undefined);
+
+      getRequestBody.then((requestBody: any) => {
       cdp.send('Network.getResponseBody', { requestId }).then(async (bodyResult: any) => {
         const bodyStr = bodyResult?.body || '';
         let body: any = null;
@@ -277,15 +311,22 @@ export class RequestInterceptor {
           }, 'Response passed validation');
         }
 
-        this.storeResponse(matchedPattern, requestUrl, status, body);
+        this.storeResponse(matchedPattern, requestUrl, status, body, requestBody);
       }).catch((err: any) => {
         logger.debug({ pattern: matchedPattern, requestId, err: String(err)?.substring(0, 100) }, 'CDP getResponseBody failed');
       });
+      }); // close getRequestBody.then
     };
 
     const pageHandler = async (response: any) => {
       const requestUrl: string = response.url();
       const status: number = response.status();
+
+      // 诊断日志：捕获所有评论相关的 API 请求（用于调试拦截器模式匹配）
+      if (requestUrl.includes('comment') || requestUrl.includes('Comment')) {
+        const matched = urlPatterns.filter(p => requestUrl.includes(p));
+        logger.info(`[Interceptor] Comment API: url=${requestUrl.substring(0, 150)} status=${status} matched=${matched.join(',')} patterns=${urlPatterns.join(',')}`);
+      }
 
       const matchedPattern = urlPatterns.find(pattern => requestUrl.includes(pattern));
       if (!matchedPattern) return;
@@ -337,7 +378,17 @@ export class RequestInterceptor {
         }, 'Response passed validation');
       }
 
-      this.storeResponse(matchedPattern, requestUrl, status, body);
+      // 获取 POST 请求体
+      let requestBody: any = undefined;
+      try {
+        const req = response.request();
+        const postData = req.postData();
+        if (postData) {
+          requestBody = JSON.parse(postData);
+        }
+      } catch {}
+
+      this.storeResponse(matchedPattern, requestUrl, status, body, requestBody);
     };
 
     cdp.on('Network.responseReceived', cdpHandler);
@@ -350,14 +401,31 @@ export class RequestInterceptor {
     return pageId;
   }
 
-  private storeResponse(pattern: string, url: string, status: number, body: any): void {
+  private storeResponse(pattern: string, url: string, status: number, body: any, requestBody?: any): void {
     let urlSet = this.capturedUrls.get(pattern);
     if (!urlSet) {
       urlSet = new Set();
       this.capturedUrls.set(pattern, urlSet);
     }
-    if (urlSet.has(url)) return;
-    urlSet.add(url);
+
+    // 去重键：对于 POST 请求（有 requestBody），使用 URL + 请求体摘要
+    // 这样同一 URL 但不同分页参数的 POST 请求不会被去重跳过
+    let dedupKey = url;
+    if (requestBody && typeof requestBody === 'object') {
+      // 提取关键分页字段作为去重标识
+      const pageKey = requestBody.lastBuff || requestBody.lastBuffer || requestBody.pcursor || requestBody.cursor || '';
+      const commentId = requestBody.commentId || '';
+      if (pageKey || commentId) {
+        dedupKey = `${url}::__page__${pageKey}__comment__${commentId}`;
+      }
+    }
+
+    if (urlSet.has(dedupKey)) {
+      logger.info(`[Interceptor] storeResponse SKIP (already captured): pattern=${pattern} dedupKey=${dedupKey.substring(0, 150)}`);
+      return;
+    }
+    urlSet.add(dedupKey);
+    logger.info(`[Interceptor] storeResponse STORE: pattern=${pattern} url=${url.substring(0, 100)} status=${status}`);
 
     const intercepted: InterceptedResponse = {
       url,
@@ -366,6 +434,7 @@ export class RequestInterceptor {
       timestamp: Date.now(),
       hasMore: extractHasMore(body),
       cursor: extractCursor(body),
+      requestBody,
     };
 
     const existing = this.interceptedData.get(pattern) || [];

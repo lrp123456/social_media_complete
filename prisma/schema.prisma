@@ -68,11 +68,21 @@ model Comment {
   replyToName  String?  @map("reply_to_name")
   createdAt    DateTime @default(now()) @map("created_at")
 
+  // AI 客服建议字段
+  suggestedReply      String?    @map("suggested_reply") @db.Text
+  suggestionStatus    String     @default("none") @map("suggestion_status") @db.VarChar(16)
+  suggestionModel     String?    @map("suggestion_model") @db.VarChar(64)
+  suggestionLatencyMs Int?       @map("suggestion_latency_ms")
+  suggestionAt        DateTime?  @map("suggestion_at")
+  replyStatus         String     @default("none") @map("reply_status") @db.VarChar(16)
+  repliedAt           DateTime?  @map("replied_at")
+
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([videoId], name: "idx_comments_video_id")
   @@index([cid], name: "idx_comments_cid")
   @@index([videoId, rootId], name: "idx_comments_video_root")
+  @@index([suggestionStatus], name: "idx_comments_suggestion_status")
   @@map("comments")
 }
 
