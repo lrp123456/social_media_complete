@@ -22,6 +22,8 @@ import {
   useTriggerMonitor,
   useToggleMonitor,
   useClearUserData,
+  useDebugMode,
+  useUpdateDebugMode,
   useNewCommentsOverview,
   useMonitorTaskStatuses,
   useSchedulerStatus,
@@ -804,6 +806,9 @@ function MonitorTab() {
   const triggerAllMonitor = useTriggerAllMonitor();
   const toggleMonitor = useToggleMonitor();
   const clearUserData = useClearUserData();
+  const { data: debugModeData } = useDebugMode();
+  const updateDebugMode = useUpdateDebugMode();
+  const isDebugMode = debugModeData?.enabled ?? false;
   const cancelTask = useCancelMonitorTask();
   const cancelAllTasks = useCancelAllMonitorTasks();
 
@@ -877,38 +882,35 @@ function MonitorTab() {
     return map;
   }, [accounts]);
 
-  // 每 (窗口, 平台) 独立倒计时
-  const [countdowns, setCountdowns] = useState<Map<string, string>>(new Map());
+  // 倒计时 — tick 驱动每秒重渲染，渲染时直接从 schedulerData 实时计算
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const statuses = schedulerData?.statuses || [];
-    if (statuses.length === 0) return;
-
-    const formatRemaining = (ms: number) => {
-      if (ms <= 0) return '即将执行';
-      const mins = Math.floor(ms / 60000);
-      const secs = Math.floor((ms % 60000) / 1000);
-      if (mins > 0) return `${mins}分${secs}秒`;
-      return `${secs}秒`;
-    };
-
-    const update = () => {
-      const now = Date.now();
-      const map = new Map<string, string>();
-      for (const s of statuses) {
-        const key = `${s.windowId}_${s.platform}`;
-        // 已暂停 → 停止倒计时
-        if (pausedPairs.get(key)) {
-          map.set(key, '已暂停');
-        } else {
-          map.set(key, formatRemaining(s.nextRunAt - now));
-        }
-      }
-      setCountdowns(map);
-    };
-    update();
-    const timer = setInterval(update, 1000);
+    const timer = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(timer);
-  }, [schedulerData?.statuses, pausedPairs]);
+  }, []);
+
+  // 渲染时计算倒计时，直接从最新 schedulerData 读取，不依赖闭包
+  const countdownMap = useMemo(() => {
+    const map = new Map<string, string>();
+    const statuses = schedulerData?.statuses || [];
+    const now = Date.now();
+    for (const s of statuses) {
+      const key = `${s.windowId}_${s.platform}`;
+      if (pausedPairs.get(key)) {
+        map.set(key, '已暂停');
+        continue;
+      }
+      const remaining = s.nextRunAt - now;
+      if (remaining <= 0) {
+        map.set(key, '即将执行');
+      } else {
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        map.set(key, mins > 0 ? `${mins}分${secs}秒` : `${secs}秒`);
+      }
+    }
+    return map;
+  }, [schedulerData, tick, pausedPairs]);
 
   const handleEnterDetail = (accountId: number) => {
     setSelectedAccountId(accountId);
@@ -1050,7 +1052,18 @@ function MonitorTab() {
                 <MaterialIcon icon="delete" size="sm" />
                 清空数据
               </button>
-            </div>
+
+              {/* 回复调试开关 */}
+              <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-surface border border-outline-variant flex-shrink-0">
+                <MaterialIcon icon="bug_report" size="sm" className="text-amber-500" />
+                <span className="text-label-md text-on-surface-variant">回复调试</span>
+                <ToggleSwitch
+                  id="debug-mode-toggle"
+                  checked={isDebugMode}
+                  onChange={(v) => updateDebugMode.mutate(v)}
+                  disabled={updateDebugMode.isPending}
+                />
+              </div>
           </div>
 
           {/* ── Active Queue (常驻) ── */}
@@ -1532,7 +1545,7 @@ function MonitorTab() {
                                   <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
                                     <span className="text-[10px] text-indigo-400">⏱</span>
                                     <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
-                                      {countdowns.get(`${account.fingerprintWindowId}_${account.platform}`) || '--'}
+                                      {countdownMap.get(`${account.fingerprintWindowId}_${account.platform}`) || '--'}
                                     </span>
                                   </div>
                                 )}
