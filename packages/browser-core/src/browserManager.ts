@@ -119,6 +119,49 @@ export class BrowserManager {
             logger.warn({ windowId, platform, error: bringError.message }, 'Failed to bring reused tab to front');
           }
 
+          // 检测复用页面是否卡在加载状态
+          const PAGE_LOADING_TIMEOUT_MS = 30_000; // 30秒加载超时
+          try {
+            const loadState = await Promise.race([
+              platformPage.evaluate(() => document.readyState),
+              new Promise<string>((_, reject) =>
+                setTimeout(() => reject(new Error('Page readyState check timeout')), 5000)
+              ),
+            ]);
+
+            if (loadState === 'loading') {
+              logger.warn({ windowId, platform, url: platformPage.url() }, 'Reused page stuck in loading state, waiting for load completion');
+
+              await Promise.race([
+                platformPage.waitForLoadState('domcontentloaded', { timeout: PAGE_LOADING_TIMEOUT_MS }),
+                new Promise<void>((_, reject) =>
+                  setTimeout(() => reject(new Error(`Page loading timeout (${PAGE_LOADING_TIMEOUT_MS / 1000}s)`)), PAGE_LOADING_TIMEOUT_MS)
+                ),
+              ]);
+
+              logger.info({ windowId, platform }, 'Reused page loading completed after wait');
+            }
+          } catch (loadErr: any) {
+            logger.warn({ windowId, platform, error: loadErr.message }, 'Reused page loading failed, closing and recreating tab');
+
+            // 关闭卡死的页面并创建新标签页
+            try {
+              await platformPage.close();
+            } catch (closeErr: any) {
+              logger.warn({ windowId, error: closeErr.message }, 'Failed to close stuck reused page');
+            }
+
+            const defaultContext = existingSession.browser.contexts()[0];
+            const newPage = await defaultContext.newPage();
+            existingSession.page = newPage;
+            existingSession.reuseCount = 0;
+            existingSession.maxReuse = randomMaxReuse();
+            existingSession.lastActiveAt = Date.now();
+
+            logger.info({ windowId, platform }, 'Created new tab after reused page loading failure');
+            return { browser: existingSession.browser, page: newPage };
+          }
+
           logger.info({ windowId, sessionKey, reuseCount: existingSession.reuseCount, maxReuse: existingSession.maxReuse }, 'Reusing existing platform tab (Keep-Alive)');
 
           if (existingSession.reuseCount >= existingSession.maxReuse) {
@@ -199,6 +242,43 @@ export class BrowserManager {
         if (platformPage) {
           page = platformPage;
           logger.info({ windowId, url: page.url(), platform }, 'Found existing platform tab');
+
+          // 检测页面是否卡在加载状态
+          const PAGE_LOADING_TIMEOUT_MS = 30_000; // 30秒加载超时
+          try {
+            const loadState = await Promise.race([
+              page.evaluate(() => document.readyState),
+              new Promise<string>((_, reject) =>
+                setTimeout(() => reject(new Error('Page readyState check timeout')), 5000)
+              ),
+            ]);
+
+            if (loadState === 'loading') {
+              logger.warn({ windowId, platform, url: page.url() }, 'Page stuck in loading state, waiting for load completion');
+
+              // 等待页面加载完成
+              await Promise.race([
+                page.waitForLoadState('domcontentloaded', { timeout: PAGE_LOADING_TIMEOUT_MS }),
+                new Promise<void>((_, reject) =>
+                  setTimeout(() => reject(new Error(`Page loading timeout (${PAGE_LOADING_TIMEOUT_MS / 1000}s)`)), PAGE_LOADING_TIMEOUT_MS)
+                ),
+              ]);
+
+              logger.info({ windowId, platform }, 'Page loading completed after wait');
+            }
+          } catch (loadErr: any) {
+            logger.warn({ windowId, platform, error: loadErr.message }, 'Page loading failed, closing and recreating tab');
+
+            // 关闭卡死的页面并创建新标签页
+            try {
+              await page.close();
+            } catch (closeErr: any) {
+              logger.warn({ windowId, error: closeErr.message }, 'Failed to close stuck page');
+            }
+
+            page = await defaultContext.newPage();
+            logger.info({ windowId, platform }, 'Created new tab after page loading failure');
+          }
         } else {
           page = await defaultContext.newPage();
           logger.info({ windowId, platform }, 'Created new tab for platform (no existing tab found)');

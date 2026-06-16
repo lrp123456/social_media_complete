@@ -115,121 +115,59 @@ export class TencentCrawler {
   // ════════════════════════════════════════
 
   /**
-   * 检测登录状态，需要时通过企微推送二维码
-   * 先访问 /platform，如果被重定向到 /login 则需要扫码
+   * 检测登录状态 — 简化逻辑
+   * 只看 URL：在 /platform 页面就是登录有效，在 /login 就是需要扫码
+   * 能采集数据 = 登录有效，不依赖页面文本内容判断
    */
   async handleLogin(page: Page, userId: number): Promise<boolean> {
     logger.info('[Login] Checking login status');
 
-    // 继承上次页面状态 — 如果已在 /platform 下，先验证会话是否真正有效
     const currentUrl = page.url();
-    if (currentUrl.includes('/platform') && !currentUrl.includes('/login')) {
-      // 等待 wujie 微前端 JavaScript 加载
-      // 初始 HTML 包含 "javascript enabled" 提示，加载后会消失
-      await HumanActions.wait(page, 2000, 3000);
-      let bodyText = await HumanActions.cdpGetBodyText(page);
 
-      // 如果 wujie 仍未加载，等待更长时间
-      if (bodyText.includes('javascript enabled')) {
-        logger.info({ currentUrl }, '[Login] Wujie not loaded yet, waiting longer');
-        await HumanActions.wait(page, 4000, 6000);
-        bodyText = await HumanActions.cdpGetBodyText(page);
-      }
-
-      // 检测会话过期
-      // wujie 未加载时不做判断（可能是页面加载问题）
-      const isWujieLoaded = !bodyText.includes('javascript enabled');
-      const sessionExpired = isWujieLoaded && (
-        bodyText.includes('已过期')
-        || bodyText.includes('已退出')
-        || bodyText.includes('请重新登录')
-        || bodyText.includes('登录已失效')
-        || bodyText.includes('扫码登录')
-        || bodyText.includes('请使用微信')
-        || (bodyText.includes('二维码') && bodyText.includes('扫码'))
-      );
-
-      if (!sessionExpired) {
-        logger.info({ currentUrl, isWujieLoaded }, '[Login] Session still valid (inherited from last page), skip login');
-        return true;
-      }
-
-      // 会话已过期，需要重新登录
-      logger.warn({ currentUrl, bodySnippet: bodyText.substring(0, 300) }, '[Login] Session expired, need re-login');
-
-      // 动态导入 botManager
-      const { botManager } = await import('../services/wechatBotService');
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
-
-      // 尝试导航到首页触发登录重定向
-      await page.goto(TENCENT_HOME, { waitUntil: 'domcontentloaded' });
-      await HumanActions.wait(page, 3000, 5000);
-
-      // 截取当前页面（可能是登录二维码或平台首页）
-      if (user?.wechatUserid) {
-        await this.captureAndSendQR(page, userId, 'tencent', user.wechatUserid, botManager);
-      }
-
-      // 轮询等待扫码（最长120秒）
-      const maxWait = 120_000;
-      const start = Date.now();
-      while (Date.now() - start < maxWait) {
-        const checkUrl = page.url();
-        const checkBody = await HumanActions.cdpGetBodyText(page);
-
-        // 检查是否已恢复到正常平台页面
-        if (checkUrl.includes('/platform') && !checkUrl.includes('/login')
-          && !checkBody.includes('已过期') && !checkBody.includes('已退出')
-          && !checkBody.includes('扫码登录')) {
-          logger.info('[Login] Login successful after re-auth');
-          return true;
-        }
-
-        // 检查二维码是否过期
-        if (checkBody.includes('已过期')) {
-          logger.info('[Login] QR code expired, refreshing');
-          await HumanActions.cdpClick(page, '.qrcode-refresh-btn', { timeout: 5000 }).catch(() => {});
-          await HumanActions.wait(page, 2000, 3000);
-          if (user?.wechatUserid) {
-            await this.captureAndSendQR(page, userId, 'tencent', user.wechatUserid, botManager);
-          }
-        }
-
-        await HumanActions.wait(page, 2000, 3000);
-      }
-
-      logger.error('[Login] Re-auth timeout after 120s');
-      return false;
-
-    } else {
-      // 不在 /platform 下，需要导航到首页检查登录
-      await page.goto(TENCENT_HOME, { waitUntil: 'domcontentloaded' });
-      await HumanActions.wait(page, 2000, 3000);
+    // 在登录页 → 需要扫码
+    if (currentUrl.includes('/login')) {
+      logger.info({ currentUrl }, '[Login] On login page, need QR scan');
+      return await this.handleQRLogin(page, userId);
     }
 
-    // 检查登录状态
-    const url = page.url();
-    if (url.includes('/platform') && !url.includes('/login')) {
-      logger.info('[Login] Session still valid, skip login');
+    // 在平台页面 → 登录有效
+    if (currentUrl.includes('/platform')) {
+      logger.info({ currentUrl }, '[Login] On platform page, session valid');
       return true;
     }
 
-    // 被重定向到登录页，需要扫码
-    logger.info('[Login] Session expired, need QR scan');
+    // 不在平台页也不在登录页 → 导航到首页检查
+    logger.info({ currentUrl }, '[Login] Navigating to home to check status');
+    await page.goto(TENCENT_HOME, { waitUntil: 'domcontentloaded' });
+    await HumanActions.wait(page, 3000, 5000);
 
-    // 动态导入 botManager（避免循环依赖）
+    const url = page.url();
+    if (url.includes('/platform') && !url.includes('/login')) {
+      logger.info('[Login] Session valid after navigation');
+      return true;
+    }
+
+    // 被重定向到登录页
+    logger.info('[Login] Redirected to login page, need QR scan');
+    return await this.handleQRLogin(page, userId);
+  }
+
+  /**
+   * 处理二维码登录流程
+   */
+  private async handleQRLogin(page: Page, userId: number): Promise<boolean> {
     const { botManager } = await import('../services/wechatBotService');
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+
     if (user?.wechatUserid) {
       await this.captureAndSendQR(page, userId, 'tencent', user.wechatUserid, botManager);
     }
 
-    // 轮询等待扫码（最长120秒）
     const maxWait = 120_000;
     const start = Date.now();
     while (Date.now() - start < maxWait) {
-      const currentUrl = page.url();
-      if (currentUrl.includes('/platform') && !currentUrl.includes('/login')) {
+      const checkUrl = page.url();
+      if (checkUrl.includes('/platform') && !checkUrl.includes('/login')) {
         logger.info('[Login] Login successful');
         return true;
       }

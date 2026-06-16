@@ -1,0 +1,19 @@
+# apps/admin-dashboard/Dockerfile.dev — 开发模式（源码通过 volume 挂载）
+FROM node:20-slim
+
+WORKDIR /app
+
+# Build-time arg for Next.js public env vars
+ARG NEXT_PUBLIC_API_URL=http://localhost:3001/api/v1
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+
+# 复制配置文件（不变的部分）
+COPY apps/admin-dashboard/package.json apps/admin-dashboard/next.config.js apps/admin-dashboard/tsconfig.json apps/admin-dashboard/tailwind.config.js apps/admin-dashboard/postcss.config.js apps/admin-dashboard/.npmrc ./
+
+# 安装依赖
+RUN npm install
+
+# 源码通过 volume 挂载，不需要 COPY src/ 和 public/
+
+# next dev 用于热更新
+CMD ["npx", "next", "dev", "-p", "3000"]

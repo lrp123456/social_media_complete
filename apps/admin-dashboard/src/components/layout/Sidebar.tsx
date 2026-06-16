@@ -18,8 +18,9 @@ const navItems: NavItem[] = [
   { href: '/',         label: '运营看板',   icon: 'dashboard' },
   { href: '/material', label: '素材更新',   icon: 'inventory_2' },
   { href: '/creation', label: '智能创作',   icon: 'auto_awesome' },
-  { href: '/matrix',   label: '社媒矩阵',   icon: 'public' },
-  { href: '/settings', label: '系统设置',   icon: 'settings' },
+  { href: '/matrix',              label: '社媒矩阵',   icon: 'public' },
+  { href: '/settings/selectors',  label: '选择器配置', icon: 'terminal' },
+  { href: '/settings',            label: '系统设置',   icon: 'settings' },
 ];
 
 export function Sidebar() {

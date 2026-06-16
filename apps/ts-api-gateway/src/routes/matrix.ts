@@ -1189,13 +1189,14 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     }
 
     // Add to BullMQ queue
-    const job = await (monitorQueue.add as any)(user.platform, {
+    const job = await (monitorQueue.add as any)('monitor', {
+      taskType: 'monitor',
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
       windowId: user.fingerprintWindowId,
       fingerprintWindowId: user.fingerprintWindowId,
-    });
+    }, { jobId: `manual_${Date.now()}_${user.id}` });
 
     // 重置该 (窗口, 平台) 的调度器倒计时
     resetSchedulerTimer(user.fingerprintWindowId, user.platform);
@@ -1253,7 +1254,8 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     const jobIds: string[] = [];
     for (const [, userGroup] of byWindow) {
       for (const user of userGroup) {
-        const job = await (monitorQueue.add as any)(user.platform, {
+        const job = await (monitorQueue.add as any)('monitor', {
+          taskType: 'monitor',
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,

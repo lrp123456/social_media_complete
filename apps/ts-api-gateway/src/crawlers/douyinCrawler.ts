@@ -65,6 +65,7 @@ export interface ReplyTarget {
   createTime: number;
   level: 1 | 2;
   rootText?: string;
+  rootCreateTime?: number;  // 根评论的创建时间（用于子评论回复时定位根评论）
 }
 
 export type RiskControlDetection = {
@@ -2875,6 +2876,7 @@ export class DouyinCrawler {
         level: target.level,
         createTime: target.createTime,
         rootText: target.rootText,
+        rootCreateTime: target.rootCreateTime,
       });
       logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
     }
@@ -3161,6 +3163,7 @@ export class DouyinCrawler {
           var timeWindow = params.timeWindow;
           var isSubReply = params.isSubReply;
           var rootText = params.rootText;
+          var rootCreateTime = params.rootCreateTime;
 
           var vh = window.innerHeight;
 
@@ -3243,7 +3246,9 @@ export class DouyinCrawler {
             if (isSubReply) {
               var rootOk = rootText && commentText.toLowerCase().indexOf(rootText) >= 0;
               if (!rootOk) continue;
-              if (!timeOk) continue;
+              // 用根评论的创建时间匹配根评论（而非子评论的创建时间）
+              var rootTimeOk = rootCreateTime > 0 && time !== null && Math.abs(time - rootCreateTime) <= timeWindow;
+              if (!rootTimeOk) continue;
 
               // 找到根评论后，在其内搜索子评论（子评论也使用 [class*="comment-content-text-"]）
               var subTextEls = commentWrapper.querySelectorAll('[class*="comment-content-text-"]');
@@ -3305,7 +3310,7 @@ export class DouyinCrawler {
           }
           return { found: false, needExpand: false };
         },
-        { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, isSubReply: isSub, rootText: (target.rootText || '').toLowerCase() },
+        { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, isSubReply: isSub, rootText: (target.rootText || '').toLowerCase(), rootCreateTime: target.rootCreateTime || 0 },
       );
 
       // 如果主搜索未找到，尝试简单文本匹配（评论管理页面结构不同）

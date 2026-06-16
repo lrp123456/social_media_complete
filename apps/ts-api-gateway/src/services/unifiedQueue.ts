@@ -104,7 +104,7 @@ export const platformWorker = new Worker<PlatformTask>(
 
       let lock: any = null;
       try {
-        lock = await WindowMutex.acquireWithBackoff(task.windowId);
+        lock = await WindowMutex.acquireWithBackoff(task.windowId, 30_000); // 回复最多等30秒锁
         await executeReplyAction(task, task.replyData);
         logger.info(`✅ 回复完成: ${task.taskId}`);
       } catch (err: any) {

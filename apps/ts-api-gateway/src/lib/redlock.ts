@@ -38,7 +38,7 @@ export function getRedlock(): Redlock {
  * 锁定 window_id，确保同一时间只有一个任务操控该窗口
  */
 export class WindowMutex {
-  private static readonly LOCK_TTL = 90_000; // 90 秒（监控任务约需 2-3 分钟，TTL 由持有者自动续期；崩溃后 90s 自动释放）
+  private static readonly LOCK_TTL = 600_000; // 600 秒（10分钟，与任务超时 MONITOR_TIMEOUT_MS 匹配）
   private static readonly LOCK_PREFIX = 'window_lock:';
 
   static lockKey(windowId: string): string {
@@ -73,22 +73,25 @@ export class WindowMutex {
   }
 
   /**
-   * 尝试获取锁，快速失败由 BullMQ 重试
-   * 不在 worker 内部长时间等待，而是立即失败让 BullMQ 的重试机制处理
-   * 这样 worker 不会被阻塞，可以处理其他窗口的任务
+   * 持续尝试获取锁，直到成功或超时
+   * 任务排队等待锁释放，而不是快速失败
    */
-  static async acquireWithBackoff(windowId: string, maxRetries = 2): Promise<Redlock.Lock> {
-    for (let i = 0; i < maxRetries; i++) {
+  static async acquireWithBackoff(windowId: string, maxWaitMs = 600_000): Promise<Redlock.Lock> {
+    const startTime = Date.now();
+    let attempt = 0;
+
+    while (Date.now() - startTime < maxWaitMs) {
+      attempt++;
       try {
         return await WindowMutex.acquire(windowId);
       } catch {
-        if (i < maxRetries - 1) {
-          // 短暂等待后重试一次（5秒）
-          console.log(`[Redlock] 窗口 ${windowId} 锁获取失败，5s 后重试`);
-          await new Promise((resolve) => setTimeout(resolve, 5_000));
-        }
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`[Redlock] 窗口 ${windowId} 锁获取失败，等待重试 (已等待 ${elapsed}s, 第${attempt}次尝试)`);
+        // 每5秒重试一次
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
       }
     }
-    throw new Error(`窗口 ${windowId} 正被其他任务占用，稍后由 BullMQ 重试`);
+
+    throw new Error(`窗口 ${windowId} 等待锁超时 (${maxWaitMs / 1000}s)`);
   }
 }

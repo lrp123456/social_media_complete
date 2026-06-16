@@ -410,12 +410,12 @@ class WeChatBotManager {
    */
   async sendLoginAlert(userid: string, platform: string, userId: number, imageBuffer?: Buffer): Promise<void> {
     const platformNames: Record<string, string> = {
-      douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书',
+      douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书', tencent: '视频号',
     };
     const label = platformNames[platform] || platform;
 
     try {
-      // 如果有截图，上传到 OSS 获取公网 URL
+      // 如果有截图，先尝试上传到 OSS
       let imageUrl: string | undefined;
       if (imageBuffer) {
         try {
@@ -424,11 +424,28 @@ class WeChatBotManager {
           imageUrl = result.ossUrl;
           logger.info({ userid, platform, imageUrl }, '登录截图已上传OSS');
         } catch (imgErr: any) {
-          logger.warn({ userid, err: imgErr.message }, '上传截图到OSS失败');
+          logger.warn({ userid, err: imgErr.message }, '上传截图到OSS失败，尝试企业微信临时素材');
+          // OSS 失败时，上传到企业微信获取 media_id
+          try {
+            const mediaResult = await this.client.uploadMedia(imageBuffer, {
+              msgtype: 'image',
+              media: { filename: `login_qr_${platform}.png`, filelength: imageBuffer.length },
+            });
+            if (mediaResult.media_id) {
+              // 发送图片消息
+              await this.client.sendMessage(userid, {
+                msgtype: 'image',
+                image: { media_id: mediaResult.media_id },
+              } as any);
+              logger.info({ userid, platform, mediaId: mediaResult.media_id }, '登录截图已通过企业微信发送');
+            }
+          } catch (mediaErr: any) {
+            logger.warn({ userid, err: mediaErr.message }, '企业微信上传临时素材也失败');
+          }
         }
       }
 
-      // 发送模板卡片
+      // 发送模板卡片（如果有图片URL则附带图片）
       const card: any = {
         card_type: 'news_notice',
         source: { desc: '监控系统', desc_color: 0 },
@@ -528,7 +545,8 @@ async function autoStartBot(): Promise<void> {
           const { monitorQueue } = await import('./monitorService');
           const user = await prisma.user.findUnique({ where: { id: targetUserId }, select: { fingerprintWindowId: true } }).catch(() => null);
           if (user) {
-            await monitorQueue.add(targetPlatform, {
+            await monitorQueue.add('monitor', {
+              taskType: 'monitor',
               taskId: `manual_${Date.now()}_${targetUserId}`,
               userId: targetUserId,
               platform: targetPlatform,

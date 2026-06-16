@@ -17,7 +17,7 @@ import {
   cleanupCancelledJob,
 } from './unifiedQueue';
 import type { PlatformName } from '@social-media/shared-config';
-import { DouyinCrawler } from '../crawlers/douyinCrawler';
+import { DouyinCrawler, ReplyTarget } from '../crawlers/douyinCrawler';
 import { KuaishouCrawler } from '../crawlers/kuaishouCrawler';
 import { XiaohongshuCrawler } from '../crawlers/xiaohongshuCrawler';
 import { TencentCrawler } from '../crawlers/tencentCrawler';
@@ -1304,11 +1304,33 @@ export async function executeReplyAction(
   const { prisma } = await import('../lib/prisma');
   const commentRow = await prisma.comment.findFirst({
     where: { cid: replyData.commentCid },
-    select: { id: true, text: true, video: { select: { description: true } } },
+    select: {
+      id: true,
+      text: true,
+      createTime: true,
+      level: true,
+      rootId: true,
+      video: { select: { description: true } },
+    },
   });
   const commentDbId = commentRow?.id;
   const commentText = commentRow?.text || replyData.commentCid;
   const videoDescription = commentRow?.video?.description || '';
+  const commentCreateTime = Number(commentRow?.createTime) || 0;
+  const commentLevel = (commentRow?.level as 1 | 2) || 1;
+  const commentRootId = commentRow?.rootId || undefined;
+
+  // 如果是子评论，查询所属根评论的文本和创建时间（用于定位根评论容器）
+  let rootCommentText: string | undefined;
+  let rootCommentCreateTime: number | undefined;
+  if (commentLevel === 2 && commentRootId) {
+    const rootRow = await prisma.comment.findFirst({
+      where: { cid: commentRootId },
+      select: { text: true, createTime: true },
+    });
+    rootCommentText = rootRow?.text || undefined;
+    rootCommentCreateTime = rootRow ? Number(rootRow.createTime) : undefined;
+  }
 
   try {
     // ── 抖音回复：委托给 douyinCrawler.replyToComment ──
@@ -1318,6 +1340,7 @@ export async function executeReplyAction(
         await douyinCrawler.navigateToCreatorHome(page);
       }
 
+      // 导航到评论管理页面
       const navSuccess = await douyinCrawler.navigateToCommentManage(page);
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
@@ -1325,17 +1348,79 @@ export async function executeReplyAction(
         return;
       }
 
+      // 等待评论管理页面加载完成（评论列表应该默认显示）
+      await HumanActions.wait(page, 3000, 5000);
+
+      // 打开抽屉选择目标视频
       const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
-      if (!drawerOpened) {
-        logger.error('回复失败：无法打开作品选择抽屉');
-        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
-        return;
+      if (drawerOpened) {
+        const videoClicked = await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
+        if (!videoClicked) {
+          logger.warn({ videoId: replyData.videoId }, '[Reply] 无法在抽屉中点击目标视频');
+        }
+        // 等待抽屉自动关闭
+        await HumanActions.wait(page, 2500, 4000);
+        const drawerStillOpen = await (douyinCrawler as any).isDrawerVisible(page);
+        if (drawerStillOpen) {
+          logger.info('[Reply] 抽屉仍然打开，手动关闭');
+          await (douyinCrawler as any).closeDrawer(page);
+          await HumanActions.wait(page, 1000, 2000);
+        }
+      } else {
+        logger.warn('[Reply] 无法打开选择作品抽屉，尝试在当前页面搜索评论');
       }
 
-      await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
-      await HumanActions.wait(page, 1500, 3000);
+      // 等待评论列表加载（最多 20 秒）
+      let commentListLoaded = false;
+      for (let w = 0; w < 10; w++) {
+        await HumanActions.wait(page, 1500, 2500);
+        const pageInfo = await page.evaluate(function() {
+          var el = document.querySelector('.douyin-creator-interactive-tabs-content');
+          var bodyLen = (document.body.innerText || '').length;
+          var dataCids = document.querySelectorAll('[data-cid]').length;
+          var commentTexts = document.querySelectorAll('[class*="comment-content-text"]');
+          var commentTextContents = [];
+          for (var i = 0; i < Math.min(commentTexts.length, 5); i++) {
+            commentTextContents.push((commentTexts[i].innerText || '').slice(0, 50));
+          }
+          // 检查所有可能包含评论的容器
+          var allContainers = document.querySelectorAll('[class*="comment"], [class*="reply"], [class*="item-"]');
+          var containerInfo = [];
+          for (var j = 0; j < Math.min(allContainers.length, 10); j++) {
+            var c = allContainers[j];
+            var t = (c.innerText || '').slice(0, 80);
+            if (t.length > 2) containerInfo.push({ cls: (c.className || '').toString().slice(0, 40), text: t });
+          }
+          return {
+            hasContainer: !!el,
+            scrollDiff: el ? el.scrollHeight - el.clientHeight : 0,
+            bodyLen: bodyLen,
+            dataCids: dataCids,
+            commentTexts: commentTexts.length,
+            commentTextContents: commentTextContents,
+            containerInfo: containerInfo,
+            url: window.location.href,
+          };
+        });
+        logger.info({ pageInfo, attempt: w + 1 }, '[Reply] 页面状态检查');
+        if (pageInfo.dataCids > 0 || pageInfo.commentTexts > 0 || pageInfo.bodyLen > 500) {
+          commentListLoaded = true;
+          logger.info({ waitedMs: (w + 1) * 2000 }, '[Reply] 评论列表已加载');
+          break;
+        }
+      }
+      if (!commentListLoaded) {
+        logger.warn('[Reply] 评论列表未加载，尝试在当前页面搜索');
+      }
 
-      const replied = await douyinCrawler.replyToComment(page, commentText, replyData.text);
+      const replyTarget: ReplyTarget = {
+        text: commentText,
+        createTime: commentCreateTime,
+        level: commentLevel,
+        rootText: rootCommentText,
+        rootCreateTime: rootCommentCreateTime,
+      };
+      const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1345,7 +1430,7 @@ export async function executeReplyAction(
       }
     }
 
-    // ── 快手回复：导航到评论页 → 委托给 kuaishouCrawler.replyToComment ──
+    // ── 快手回复：选择视频 → 导航到评论页 → 委托给 kuaishouCrawler.replyToComment ──
     if (task.platform === 'kuaishou') {
       const currentUrl = page.url();
       if (!currentUrl.includes('cp.kuaishou.com')) {
@@ -1361,7 +1446,16 @@ export async function executeReplyAction(
 
       await HumanActions.wait(page, 1500, 3000);
 
-      const replied = await kuaishouCrawler.replyToComment(page, replyData.commentCid, replyData.text);
+      // 选择目标视频（评论管理页面默认显示第一个视频的评论，需切换到目标视频）
+      if (videoDescription) {
+        const videoSwitched = await kuaishouCrawler.selectVideoForReply(page, replyData.videoId, videoDescription);
+        if (!videoSwitched) {
+          logger.warn({ videoDescription }, '快手切换到目标视频失败，将尝试在当前视频下回复');
+        }
+        await HumanActions.wait(page, 1500, 3000);
+      }
+
+      const replied = await kuaishouCrawler.replyToComment(page, replyData.commentCid, replyData.text, commentText);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');

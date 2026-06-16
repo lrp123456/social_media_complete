@@ -1981,57 +1981,208 @@ export class KuaishouCrawler {
   }
 
   /**
-   * 回复评论
+   * 选择目标视频（用于回复流程）
    */
-  async replyToComment(page: Page, commentCid: string, replyText: string): Promise<boolean> {
-    logger.info({ commentCid, textLength: replyText.length }, '[Reply] Starting reply');
+  async selectVideoForReply(page: Page, videoId: string, videoDescription: string): Promise<boolean> {
+    const drawerOpened = await this.openSelectVideoDrawer(page);
+    if (!drawerOpened) {
+      logger.error('[Reply] Failed to open video selection drawer');
+      return false;
+    }
+    const clicked = await this.findAndClickVideoInDrawer(page, videoId, videoDescription);
+    if (clicked) {
+      await HumanActions.wait(page, 1500, 3000);
+    }
+    return clicked;
+  }
+
+  /**
+   * 回复评论
+   * 通过 commentCid 或 commentText 定位目标评论后点击该评论的回复按钮，
+   * 然后在同一个评论容器内查找输入框和发送按钮，避免误操作其他评论。
+   */
+  async replyToComment(page: Page, commentCid: string, replyText: string, commentText?: string): Promise<boolean> {
+    logger.info({ commentCid, commentText: commentText?.slice(0, 30), textLength: replyText.length }, '[Reply] Starting reply');
 
     try {
       await HumanActions.thinkingPause(page, 800, 2000);
 
-      // 点击回复按钮
-      const replyClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
-      if (!replyClicked) {
-        logger.error('[Reply] Reply button not found');
+      // ── Step 1: 定位目标评论的回复按钮 ──
+      // 实际 DOM 结构（2026-06-10 验证）：
+      //   .comment-item                         ← 评论容器（BEM 语义类）
+      //     img.comment-item__cover              ← 头像
+      //     .comment-content                     ← 内容包装器
+      //       .comment-content__username          ← 用户名
+      //       .comment-content__date              ← 日期
+      //       .comment-content__detail > span     ← 评论正文
+      //       .comment-content__btns
+      //         .comment-content__btns__btn       ← 每个操作按钮
+      //           .btn-icon.icon-reply + "回复"
+      //         .comment-content__btns__btn
+      //           .btn-icon.icon-delete-comment + "删除"
+      //       .comment-input__wrapper (display:none 初始隐藏)
+      //         .comment-input [contenteditable] [placeholder="回复 xxx："]
+      //         .comment-input__wrapper__control
+      //           .comment-btn (取消)
+      //           .comment-btn.sure-btn (确认)    ← 提交按钮
+      const locateResult = await page.evaluate((params: { cid: string; text: string }) => {
+        // 精确使用 BEM 类名 .comment-item（避免 [class*="comment-item"] 匹配到 .comment-item__cover 等子类）
+        const containers = Array.from(document.querySelectorAll('.comment-item')) as HTMLElement[];
+
+        /** 在评论容器内查找"回复"按钮（返回 .comment-content__btns__btn 的坐标） */
+        const findReplyBtn = (el: HTMLElement): { x: number; y: number; width: number; height: number } | null => {
+          // 优先：查找包含 .icon-reply 的按钮容器
+          const replyIcon = el.querySelector('.icon-reply') as HTMLElement;
+          if (replyIcon) {
+            // 回复按钮是 .icon-reply 的父级 .comment-content__btns__btn
+            const btnWrapper = replyIcon.closest('.comment-content__btns__btn') as HTMLElement;
+            if (btnWrapper) {
+              const r = btnWrapper.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+            }
+          }
+          // 次选：在 .comment-content__btns__btn 中按文本 "回复" 查找
+          const btns = el.querySelectorAll('.comment-content__btns__btn');
+          for (const btn of Array.from(btns)) {
+            if ((btn.textContent || '').trim().includes('回复')) {
+              const r = (btn as HTMLElement).getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+            }
+          }
+          return null;
+        };
+
+        // 方法1: data-comment-id / data-id 精确匹配
+        for (const c of containers) {
+          const cidAttr = c.getAttribute('data-comment-id') || c.getAttribute('data-id') || '';
+          if (params.cid && cidAttr && cidAttr === params.cid) {
+            const rect = findReplyBtn(c);
+            if (rect) return { ...rect, method: 'cid-attr' };
+          }
+        }
+
+        // 方法2: 评论正文文本匹配（使用 .comment-content__detail 精确取评论正文，避免取到用户名/按钮文字）
+        if (params.text) {
+          for (const c of containers) {
+            const detailEl = c.querySelector('.comment-content__detail') as HTMLElement;
+            const itemText = (detailEl?.textContent || '').trim();
+            const searchText = params.text.trim();
+            // 使用 includes 双向匹配：精确正文可能带 @ 回复前缀等差异
+            if (itemText && (itemText === searchText || itemText.includes(searchText) || searchText.includes(itemText))) {
+              const rect = findReplyBtn(c);
+              if (rect) return { ...rect, method: 'text-match' };
+            }
+          }
+        }
+
+        // 方法3: 回退 — 第一个可见回复按钮
+        const allBtns = document.querySelectorAll('.comment-content__btns__btn') as NodeListOf<HTMLElement>;
+        for (const btn of Array.from(allBtns)) {
+          if ((btn.textContent || '').trim().includes('回复')) {
+            const r = btn.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height, method: 'fallback-first' };
+          }
+        }
+
+        return null;
+      }, { cid: commentCid, text: commentText || '' });
+
+      if (!locateResult) {
+        logger.error({ commentCid, commentText }, '[Reply] Reply button not found for target comment');
         return false;
       }
 
+      logger.info({ commentCid, method: locateResult.method }, '[Reply] Located reply button');
+
+      // ── Step 2: CDP 点击目标评论的回复按钮 ──
+      const clickX = locateResult.x + locateResult.width / 2;
+      const clickY = locateResult.y + locateResult.height / 2;
+      await HumanActions.clickAtCoordinates(page, clickX, clickY);
       await HumanActions.wait(page, 800, 1500);
 
-      // 点击输入框
-      const inputSelectors = [
-        'div[contenteditable="true"]',
-        'textarea[placeholder*="回复"]',
-        '.reply-input-area textarea',
-        '[class*="reply"] textarea',
-      ];
+      // ── Step 3: 定位并点击回复输入框 ──
+      // 点击回复后，对应评论内的 .comment-input__wrapper 从 display:none 变为可见
+      // 输入框为 .comment-input [contenteditable="true"]
+      const inputRect = await page.evaluate(() => {
+        // 优先：查找可见的 .comment-input__wrapper 内的 .comment-input
+        const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper')) as HTMLElement[];
+        for (let i = wrappers.length - 1; i >= 0; i--) {
+          const w = wrappers[i];
+          // 跳过 display:none 的 wrapper
+          if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
+          const input = w.querySelector('.comment-input') as HTMLElement;
+          if (input) {
+            const r = input.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+          }
+        }
+        // 回退：查找所有可见的 contenteditable div（排除顶部发表评论输入框）
+        const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"]')) as HTMLElement[];
+        for (let i = candidates.length - 1; i >= 0; i--) {
+          const el = candidates[i];
+          // 跳过顶部发表评论输入框（class 含 author-comment-input）
+          if (el.closest('.author-comment-input')) continue;
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }
+        return null;
+      });
 
-      let inputClicked = false;
-      for (const sel of inputSelectors) {
-        inputClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
-        if (inputClicked) break;
-      }
-
-      if (!inputClicked) {
+      if (!inputRect) {
         logger.error('[Reply] Reply input not found');
         return false;
       }
+
+      await HumanActions.clickAtCoordinates(page, inputRect.x + inputRect.width / 2, inputRect.y + inputRect.height / 2);
       await HumanActions.wait(page, 300, 600);
 
-      // 输入回复内容
+      // ── Step 4: 输入回复内容 ──
       await HumanActions.safeCDPType(page, replyText);
       await HumanActions.wait(page, 500, 1200);
 
-      // 点击发送
-      const submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
-      if (!submitClicked) {
+      // ── Step 5: 定位并点击确认发送按钮 ──
+      // 快手评论回复的提交按钮是 .comment-btn.sure-btn，文本为 "确认"（不是 "发送"）
+      const submitRect = await page.evaluate(() => {
+        // 优先：精确查找 .sure-btn
+        const sureBtn = document.querySelector('.sure-btn') as HTMLElement;
+        if (sureBtn) {
+          const r = sureBtn.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }
+        // 次选：在可见的 .comment-input__wrapper__control 内查找 .comment-btn（非"取消"的那个）
+        const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper__control')) as HTMLElement[];
+        for (const w of wrappers) {
+          if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
+          const btns = w.querySelectorAll('.comment-btn');
+          for (const btn of Array.from(btns)) {
+            const text = (btn.textContent || '').trim();
+            if (text === '确认' || text === '发送') {
+              const r = (btn as HTMLElement).getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+            }
+          }
+        }
+        // 回退：按文本 "确认" 查找
+        const allBtns = Array.from(document.querySelectorAll('span, button, div')).filter(
+          (n) => (n.textContent || '').trim() === '确认'
+        ) as HTMLElement[];
+        for (let i = allBtns.length - 1; i >= 0; i--) {
+          const r = allBtns[i].getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }
+        return null;
+      });
+
+      if (submitRect) {
+        await HumanActions.clickAtCoordinates(page, submitRect.x + submitRect.width / 2, submitRect.y + submitRect.height / 2);
+      } else {
         logger.warn('[Reply] Submit button not found');
       }
 
       await HumanActions.wait(page, 1500, 3000);
       await HumanActions.betweenActionsPause(page);
 
-      logger.info({ commentCid, submitClicked }, '[Reply] Reply sent');
+      logger.info({ commentCid, submitClicked: !!submitRect }, '[Reply] Reply sent');
       return true;
     } catch (err: any) {
       logger.error({ error: err.message, commentCid }, '[Reply] Reply failed');

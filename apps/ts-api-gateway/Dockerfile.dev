@@ -1,0 +1,31 @@
+# apps/ts-api-gateway/Dockerfile.dev — 开发模式（源码通过 volume 挂载）
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y openssl curl --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 复制 workspace 包配置
+COPY prisma/ prisma/
+COPY packages/ packages/
+COPY apps/ts-api-gateway/package.json apps/ts-api-gateway/tsconfig.json apps/ts-api-gateway/.npmrc apps/ts-api-gateway/
+
+# 安装依赖
+WORKDIR /app/packages/browser-core
+RUN npm install --legacy-peer-deps
+WORKDIR /app/packages/shared-config
+RUN npm install --legacy-peer-deps
+WORKDIR /app/packages/selectors
+RUN npm install --legacy-peer-deps
+WORKDIR /app/apps/ts-api-gateway
+RUN npm install --legacy-peer-deps
+RUN npm install @wecom/aibot-node-sdk --legacy-peer-deps
+
+# 生成 Prisma Client
+RUN npx prisma generate --schema /app/prisma/schema.prisma
+
+# 源码通过 volume 挂载，不需要 COPY src/
+
+# tsx watch 用于热更新
+CMD ["npx", "tsx", "watch", "src/index.ts"]

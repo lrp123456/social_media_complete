@@ -1,0 +1,51 @@
+# docker-compose.dev.yml — 开发模式覆盖（源码挂载 + 热更新）
+# 用法: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# 停止: docker compose -f docker-compose.yml -f docker-compose.dev.yml down
+
+services:
+  # ============================================================
+  # TS API Gateway - 开发模式（tsx watch 热更新）
+  # ============================================================
+  ts-api-gateway:
+    build:
+      dockerfile: apps/ts-api-gateway/Dockerfile.dev
+    environment:
+      NODE_ENV: development
+    volumes:
+      # 源码挂载（只读，防止容器内修改影响宿主机）
+      - ./apps/ts-api-gateway/src:/app/apps/ts-api-gateway/src:ro
+      - ./apps/ts-api-gateway/data:/app/apps/ts-api-gateway/data
+      - ./packages:/app/packages:ro
+      - ./prisma:/app/prisma:ro
+      # node_modules 使用命名卷（避免被挂载覆盖）
+      - ts_api_node_modules:/app/apps/ts-api-gateway/node_modules
+      - ts_api_packages_node_modules:/app/packages/browser-core/node_modules
+      - ts_api_packages_shared_node_modules:/app/packages/shared-config/node_modules
+      - ts_api_packages_selectors_node_modules:/app/packages/selectors/node_modules
+    command: npx tsx watch src/index.ts
+
+  # ============================================================
+  # Admin Dashboard - 开发模式（next dev 热更新）
+  # ============================================================
+  admin-dashboard:
+    build:
+      dockerfile: apps/admin-dashboard/Dockerfile.dev
+      args:
+        NEXT_PUBLIC_API_URL: "http://localhost:3001/api/v1"
+    environment:
+      NODE_ENV: development
+      WATCHPACK_POLLING: "true"  # WSL2 跨平台文件变更检测
+    volumes:
+      # 源码挂载
+      - ./apps/admin-dashboard/src:/app/src:ro
+      - ./apps/admin-dashboard/public:/app/public:ro
+      # node_modules 使用命名卷
+      - admin_node_modules:/app/node_modules
+    command: npx next dev -p 3000
+
+volumes:
+  ts_api_node_modules:
+  ts_api_packages_node_modules:
+  ts_api_packages_shared_node_modules:
+  ts_api_packages_selectors_node_modules:
+  admin_node_modules:
