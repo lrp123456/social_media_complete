@@ -1016,122 +1016,6 @@ function MonitorTab() {
               ))}
             </div>
 
-            {/* Per-window Countdown Groups + Unified Trigger */}
-            <div className="flex items-start gap-3 flex-wrap">
-              {/* 按窗口分组倒计时 */}
-              {groupedByUser.map((group) => {
-                const windowStatuses = (schedulerData?.statuses || []).filter(
-                  (s) => s.windowId === group.windowId,
-                );
-                if (windowStatuses.length === 0) return null;
-                return (
-                  <div
-                    key={group.windowId}
-                    className="flex-1 min-w-[260px] bg-surface border border-outline-variant rounded-2xl overflow-hidden"
-                  >
-                    {/* 窗口头部 */}
-                    <div className="flex items-center gap-2 px-4 py-2.5 bg-surface-container-high/60 border-b border-outline-variant/40">
-                      <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-                        <span className="text-[10px] font-bold text-primary tabular-nums">W</span>
-                      </div>
-                      <span className="text-label-sm text-on-surface font-medium truncate">
-                        {group.operatorName}
-                      </span>
-                      <span className="text-[10px] text-outline ml-auto flex-shrink-0">
-                        {group.windowName.length > 12 ? group.windowName.slice(0, 12) + '…' : group.windowName}
-                      </span>
-                    </div>
-                    {/* 平台倒计时行 */}
-                    <div className="divide-y divide-outline-variant/30">
-                      {windowStatuses.map((s) => {
-                        const pairKey = `${s.windowId}_${s.platform}`;
-                        const cd = countdowns.get(pairKey) || '--';
-                        const isIdle = s.mode === 'idle';
-                        const isPaused = pausedPairs.get(pairKey);
-                        const platformLabel =
-                          s.platform === 'douyin' ? '抖音' :
-                          s.platform === 'kuaishou' ? '快手' :
-                          s.platform === 'tencent' ? '视频号' : s.platform;
-                        const platformInitial =
-                          s.platform === 'douyin' ? '抖' :
-                          s.platform === 'kuaishou' ? '快' :
-                          s.platform === 'tencent' ? '视' : s.platform.slice(0, 2);
-                        return (
-                          <div
-                            key={pairKey}
-                            className={cn(
-                              'flex items-center gap-3 px-4 py-2.5 transition-colors',
-                              isPaused ? 'bg-surface-container-low/30' : 'hover:bg-surface-container-low/40',
-                            )}
-                          >
-                            {/* 平台图标 */}
-                            <div
-                              className={cn(
-                                'w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 transition-colors',
-                                isPaused
-                                  ? 'bg-gray-100 text-gray-400'
-                                  : isIdle
-                                    ? 'bg-amber-100 text-amber-600'
-                                    : 'bg-indigo-50 text-indigo-500',
-                              )}
-                            >
-                              {platformInitial}
-                            </div>
-                            {/* 倒计时 */}
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className={cn(
-                                    'text-label-xs font-medium',
-                                    isPaused ? 'text-outline' : 'text-on-surface',
-                                  )}
-                                >
-                                  {platformLabel}
-                                </span>
-                                {isPaused && (
-                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-gray-200 text-gray-500 font-medium">
-                                    暂停
-                                  </span>
-                                )}
-                                {!isPaused && isIdle && (
-                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-amber-100 text-amber-600 font-medium">
-                                    空闲
-                                  </span>
-                                )}
-                                {!isPaused && !isIdle && (
-                                  <span className="text-[9px] px-1.5 py-px rounded-full bg-indigo-50 text-indigo-500 font-medium">
-                                    活跃
-                                  </span>
-                                )}
-                              </div>
-                              <p
-                                className={cn(
-                                  'text-body-sm font-bold tabular-nums',
-                                  isPaused ? 'text-outline' : 'text-on-surface',
-                                )}
-                              >
-                                {cd}
-                              </p>
-                            </div>
-                            {/* 间隔 + 上次执行 */}
-                            <div className="text-right flex-shrink-0">
-                              <p className={cn('text-[10px]', isPaused ? 'text-outline/60' : 'text-on-surface-variant')}>
-                                {Math.round(s.intervalMs / 1000)}s
-                              </p>
-                              {s.lastRunAt > 0 && (
-                                <p className={cn('text-[10px]', isPaused ? 'text-outline/40' : 'text-outline')}>
-                                  上次 {new Date(s.lastRunAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-
               {/* 统一立即更新按钮 */}
               <button
                 onClick={handleTriggerAll}
@@ -1642,6 +1526,16 @@ function MonitorTab() {
                                     <p className="text-[9px] text-on-surface-variant">新增</p>
                                   </div>
                                 </div>
+
+                                {/* 下次监控倒计时 */}
+                                {isActive && (
+                                  <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
+                                    <span className="text-[10px] text-indigo-400">⏱</span>
+                                    <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
+                                      {countdowns.get(`${account.fingerprintWindowId}_${account.platform}`) || '--'}
+                                    </span>
+                                  </div>
+                                )}
 
                                 {/* 操作按钮 */}
                                 <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
