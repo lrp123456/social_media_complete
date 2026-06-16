@@ -59,13 +59,16 @@ export interface RootCommentSnapshot {
   userNickname: string;
 }
 
-// ── Reply target descriptor (text + time for dual-criteria matching) ──
+// ── Reply target descriptor (text + username for matching) ──
 export interface ReplyTarget {
   text: string;
   createTime: number;
   level: 1 | 2;
   rootText?: string;
-  rootCreateTime?: number;  // 根评论的创建时间（用于子评论回复时定位根评论）
+  rootUsername?: string;     // 根评论的用户名
+  rootReplyCount?: number;   // 根评论的子回复数
+  replyToName?: string;      // 子评论回复的目标用户名
+  username?: string;         // 当前评论的用户名
 }
 
 export type RiskControlDetection = {
@@ -2876,7 +2879,9 @@ export class DouyinCrawler {
         level: target.level,
         createTime: target.createTime,
         rootText: target.rootText,
-        rootCreateTime: target.rootCreateTime,
+        rootUsername: target.rootUsername,
+        rootReplyCount: target.rootReplyCount,
+        username: target.username,
       });
       logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
     }
@@ -3159,51 +3164,19 @@ export class DouyinCrawler {
       let rootContainer: any = await page.evaluate(
         (params) => {
           var searchText = params.searchText;
-          var targetTime = params.targetTime;
-          var timeWindow = params.timeWindow;
           var isSubReply = params.isSubReply;
           var rootText = params.rootText;
-          var rootCreateTime = params.rootCreateTime;
+          var rootUsername = params.rootUsername;
+          var rootReplyCount = params.rootReplyCount;
+          var targetUsername = params.targetUsername;
 
           var vh = window.innerHeight;
-
-          var containerSelectors = ['[class*="container-sXKyMs"]', '[class*="reply-item"]', '[class*="comment-item"]', '[class*="comment-content-text"]'];
-          for (var si = 0; si < containerSelectors.length; si++) {
-            var containers = document.querySelectorAll(containerSelectors[si]);
-            for (var ci = 0; ci < containers.length; ci++) {
-              var container = containers[ci];
-              var text = (container.innerText || '').toLowerCase();
-              if (!text || text.length < 2) continue;
-
-              // 内联提取发布时间戳（不使用函数，避免 esbuild __name 注入）
-              var time = null;
-              var t = container.innerText || '';
-              var m = t.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
-              if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
-              if (time === null) {
-                m = t.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
-                if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
-              }
-              if (time === null) {
-                m = t.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
-                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
-              }
-              if (time === null) {
-                m = t.match(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
-                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
-              }
-              if (time === null) {
-                m = t.match(/(\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
-                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
-              }
-            }
-          }
 
           // 策略：通过评论正文元素 [class*="comment-content-text-"] 定位每条评论
           var textEls = document.querySelectorAll('[class*="comment-content-text-"]');
 
           for (var ti = 0; ti < textEls.length; ti++) {
-            var textEl = textEls[ti] as HTMLElement;
+            var textEl = textEls[ti];
             var commentText = (textEl.innerText || '').trim();
             if (!commentText || commentText.length < 1) continue;
 
@@ -3212,7 +3185,6 @@ export class DouyinCrawler {
             var maxDepth = 10;
             while (commentWrapper && maxDepth > 0) {
               maxDepth--;
-              // 找到包含操作区（回复按钮）的容器
               var hasOps = commentWrapper.querySelector('[class*="operations-"], [class*="action"]');
               var hasTime = commentWrapper.querySelector('[class*="time-"]');
               var hasCheckbox = commentWrapper.querySelector('.douyin-creator-interactive-checkbox, [class*="checkbox"]');
@@ -3221,58 +3193,48 @@ export class DouyinCrawler {
             }
             if (!commentWrapper) continue;
 
-            // 从评论包装器中提取时间（内联，不使用函数）
-            var timeEl = commentWrapper.querySelector('[class*="time-"]');
-            var timeText = timeEl ? (timeEl.innerText || '') : '';
-            var time = null;
-            var m2 = timeText.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
-            if (m2) { time = Math.floor(new Date(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5]).getTime() / 1000); }
-            if (time === null) {
-              m2 = timeText.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
-              if (m2) { time = Math.floor(new Date(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5]).getTime() / 1000); }
-            }
-            if (time === null) {
-              m2 = timeText.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
-              if (m2) { time = Math.floor(new Date(new Date().getFullYear(), +m2[1] - 1, +m2[2], +m2[3], +m2[4]).getTime() / 1000); }
-            }
-            if (time === null) {
-              m2 = timeText.match(/(\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
-              if (m2) { time = Math.floor(new Date(new Date().getFullYear(), +m2[1] - 1, +m2[2], +m2[3], +m2[4]).getTime() / 1000); }
-            }
+            // 提取用户名（从 [class*="username-"] 元素）
+            var usernameEl = commentWrapper.querySelector('[class*="username-"]');
+            var username = usernameEl ? (usernameEl.innerText || '').trim() : '';
 
-            var textOk = commentText.toLowerCase().indexOf(searchText) >= 0 || searchText.indexOf(commentText.toLowerCase().slice(0, Math.min(commentText.length, 40))) >= 0;
-            var timeOk = time !== null && Math.abs(time - targetTime) <= timeWindow;
+            // 提取子回复数（从"查看N条回复"按钮）
+            var replyCountMatch = commentWrapper.innerText.match(/查看(\d+)条回复/);
+            var replyCount = replyCountMatch ? parseInt(replyCountMatch[1], 10) : 0;
 
             if (isSubReply) {
-              var rootOk = rootText && commentText.toLowerCase().indexOf(rootText) >= 0;
+              // ── 查找根评论：用 rootText + rootUsername + rootReplyCount 匹配 ──
+              var rootOk = rootText && commentText.toLowerCase().indexOf(rootText.toLowerCase()) >= 0;
               if (!rootOk) continue;
-              // 用根评论的创建时间匹配根评论（而非子评论的创建时间）
-              var rootTimeOk = rootCreateTime > 0 && time !== null && Math.abs(time - rootCreateTime) <= timeWindow;
-              if (!rootTimeOk) continue;
 
-              // 找到根评论后，在其内搜索子评论（子评论也使用 [class*="comment-content-text-"]）
+              // 匹配用户名（如果提供了 rootUsername）
+              if (rootUsername && username && username !== rootUsername) continue;
+
+              // 匹配子回复数（如果提供了 rootReplyCount）
+              if (rootReplyCount > 0 && replyCount > 0 && replyCount !== rootReplyCount) continue;
+
+              // 找到根评论后，在其内搜索子评论
               var subTextEls = commentWrapper.querySelectorAll('[class*="comment-content-text-"]');
               for (var si = 0; si < subTextEls.length; si++) {
-                if (subTextEls[si] === textEl) continue; // 跳过根评论自身
-                var subText = (subTextEls[si].innerText || '').trim().toLowerCase();
-                if (subText.indexOf(searchText) >= 0) {
-                  // 找到匹配的子评论，定位其回复按钮
-                  var subParent = subTextEls[si].closest('[class*="content-"]')?.parentElement;
-                  if (subParent) {
-                    var opsArea = subParent.querySelector('[class*="operations-"]');
-                    if (!opsArea) opsArea = subTextEls[si].closest('[class*="content-"]')?.querySelector('[class*="operations-"]') || null;
-                  }
-                  // 直接在子评论的兄弟节点中查找操作区
-                  var siblingOps = subTextEls[si].parentElement?.querySelector('[class*="operations-"]');
-                  if (siblingOps) {
-                    var items = siblingOps.querySelectorAll('[class*="item-"]');
-                    for (var ri = 0; ri < items.length; ri++) {
-                      if ((items[ri].textContent || '').trim() === '回复') {
-                        var r = items[ri].getBoundingClientRect();
-                        if (r.left > 0 && r.top > 0 && r.top <= vh) {
-                          (subTextEls[si] as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
-                          return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
-                        }
+                if (subTextEls[si] === textEl) continue;
+                var subText = (subTextEls[si].innerText || '').trim();
+                if (subText.toLowerCase().indexOf(searchText.toLowerCase()) < 0) continue;
+
+                // 匹配子评论的用户名（如果提供了 targetUsername）
+                var subWrapper = subTextEls[si].parentElement;
+                var subUsernameEl = subWrapper ? subWrapper.querySelector('[class*="username-"]') : null;
+                var subUsername = subUsernameEl ? (subUsernameEl.innerText || '').trim() : '';
+                if (targetUsername && subUsername && subUsername !== targetUsername) continue;
+
+                // 找到匹配的子评论，定位其回复按钮
+                var siblingOps = subTextEls[si].parentElement?.querySelector('[class*="operations-"]');
+                if (siblingOps) {
+                  var items = siblingOps.querySelectorAll('[class*="item-"]');
+                  for (var ri = 0; ri < items.length; ri++) {
+                    if ((items[ri].textContent || '').trim() === '回复') {
+                      var r = items[ri].getBoundingClientRect();
+                      if (r.left > 0 && r.top > 0 && r.top <= vh) {
+                        subTextEls[si].scrollIntoView({ behavior: 'instant', block: 'center' });
+                        return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
                       }
                     }
                   }
@@ -3286,31 +3248,34 @@ export class DouyinCrawler {
                 found: true, needExpand: true, isRoot: true,
                 x: Math.round(rect.left + rect.width / 2),
                 y: Math.round(rect.top + rect.height / 2),
-                expandX: -1, expandY: -1,
               };
             } else {
-              if (textOk && timeOk) {
-                commentWrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
-                // 在该评论包装器内查找“回复”按钮
-                var opsArea = commentWrapper.querySelector('[class*="operations-"]');
-                if (opsArea) {
-                  var items = opsArea.querySelectorAll('[class*="item-"]');
-                  for (var ri = 0; ri < items.length; ri++) {
-                    if ((items[ri].textContent || '').trim() === '回复') {
-                      var r = items[ri].getBoundingClientRect();
-                      if (r.left > 0 && r.top > 0 && r.top <= vh)
-                        return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
-                    }
+              // ── 查找一级评论：用 text + username 匹配 ──
+              var textOk = commentText.toLowerCase().indexOf(searchText.toLowerCase()) >= 0;
+              if (!textOk) continue;
+
+              // 匹配用户名（如果提供了 targetUsername）
+              if (targetUsername && username && username !== targetUsername) continue;
+
+              commentWrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
+              var opsArea = commentWrapper.querySelector('[class*="operations-"]');
+              if (opsArea) {
+                var items = opsArea.querySelectorAll('[class*="item-"]');
+                for (var ri = 0; ri < items.length; ri++) {
+                  if ((items[ri].textContent || '').trim() === '回复') {
+                    var r = items[ri].getBoundingClientRect();
+                    if (r.left > 0 && r.top > 0 && r.top <= vh)
+                      return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
                   }
                 }
-                var rect = commentWrapper.getBoundingClientRect();
-                return { found: true, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), needExpand: false };
               }
+              var rect = commentWrapper.getBoundingClientRect();
+              return { found: true, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), needExpand: false };
             }
           }
           return { found: false, needExpand: false };
         },
-        { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, isSubReply: isSub, rootText: (target.rootText || '').toLowerCase(), rootCreateTime: target.rootCreateTime || 0 },
+        { searchText: target.text, isSubReply: isSub, rootText: target.rootText || '', rootUsername: target.rootUsername || '', rootReplyCount: target.rootReplyCount || 0, targetUsername: target.username || '' },
       );
 
       // 如果主搜索未找到，尝试简单文本匹配（评论管理页面结构不同）

@@ -14,7 +14,7 @@ const DEBUG_DIR = path.resolve(process.cwd(), 'data', 'reply_debug');
 export interface DebugManifest {
   sessionId: string;
   startTime: string;
-  target: { text: string; level: number; createTime: number; rootText?: string; rootCreateTime?: number };
+  target: { text: string; level: number; createTime: number; rootText?: string; rootUsername?: string; rootReplyCount?: number; username?: string };
   steps: Array<{
     step: number;
     label: string;
@@ -46,7 +46,7 @@ export function createReplySessionId(target: { text: string; createTime: number;
 /** 创建初始 manifest */
 export function createManifest(
   sessionId: string,
-  target: { text: string; level: number; createTime: number; rootText?: string; rootCreateTime?: number },
+  target: { text: string; level: number; createTime: number; rootText?: string; rootUsername?: string; rootReplyCount?: number; username?: string },
 ): DebugManifest {
   return {
     sessionId,

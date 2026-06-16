@@ -1310,6 +1310,8 @@ export async function executeReplyAction(
       createTime: true,
       level: true,
       rootId: true,
+      userNickname: true,
+      replyToName: true,
       video: { select: { description: true } },
     },
   });
@@ -1319,17 +1321,27 @@ export async function executeReplyAction(
   const commentCreateTime = Number(commentRow?.createTime) || 0;
   const commentLevel = (commentRow?.level as 1 | 2) || 1;
   const commentRootId = commentRow?.rootId || undefined;
+  const commentUsername = commentRow?.userNickname || undefined;
+  const commentReplyToName = commentRow?.replyToName || undefined;
 
-  // 如果是子评论，查询所属根评论的文本和创建时间（用于定位根评论容器）
+  // 如果是子评论，查询所属根评论的文本、用户名和子回复数
   let rootCommentText: string | undefined;
-  let rootCommentCreateTime: number | undefined;
+  let rootCommentUsername: string | undefined;
+  let rootCommentReplyCount: number | undefined;
   if (commentLevel === 2 && commentRootId) {
     const rootRow = await prisma.comment.findFirst({
       where: { cid: commentRootId },
-      select: { text: true, createTime: true },
+      select: { text: true, userNickname: true },
     });
     rootCommentText = rootRow?.text || undefined;
-    rootCommentCreateTime = rootRow ? Number(rootRow.createTime) : undefined;
+    rootCommentUsername = rootRow?.userNickname || undefined;
+
+    // 查询根评论的子回复数
+    const rootCountRow = await prisma.videoRootCommentCount.findFirst({
+      where: { cid: commentRootId },
+      select: { replyCount: true },
+    });
+    rootCommentReplyCount = rootCountRow?.replyCount || undefined;
   }
 
   try {
@@ -1418,7 +1430,10 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
         level: commentLevel,
         rootText: rootCommentText,
-        rootCreateTime: rootCommentCreateTime,
+        rootUsername: rootCommentUsername,
+        rootReplyCount: rootCommentReplyCount,
+        replyToName: commentReplyToName,
+        username: commentUsername,
       };
       const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text);
       if (replied) {
