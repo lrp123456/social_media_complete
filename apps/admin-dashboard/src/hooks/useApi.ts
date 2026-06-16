@@ -668,8 +668,8 @@ export function useSchedulerStatus() {
     queryKey: ['monitor', 'scheduler-status'],
     queryFn: () =>
       api.get('/matrix/monitor/scheduler-status').then((r) => {
-        const data = r.data as { success: boolean; data: SchedulerStatusResponse };
-        return data.data;
+        // interceptor 已自动解包 { success, data } → data
+        return r.data as SchedulerStatusResponse;
       }),
     refetchInterval: 10000, // 每10秒同步一次
     retry: 2,
@@ -1395,7 +1395,7 @@ export function useSelectorConfig() {
   return useQuery({
     queryKey: ['selectors', 'config'],
     queryFn: () =>
-      api.get('/config-automation/selectors/full').then((r) => r.data.data as SelectorConfig),
+      api.get('/config-automation/selectors/full').then((r) => r.data as SelectorConfig),
     staleTime: 30_000,
   });
 }
@@ -1407,7 +1407,7 @@ export function useSelectorEffectiveness(platform?: string) {
       api.get('/config-automation/selectors/effectiveness', {
         params: platform ? { platform } : undefined,
       }).then((r) => {
-        const d = r.data.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
+        const d = r.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
         return { stats: d.stats, failed: d.failed };
       }),
     staleTime: 30_000,
@@ -1422,7 +1422,7 @@ export function useFailedSelectors(threshold = 0.3, minAttempts = 5) {
       api.get('/config-automation/selectors/effectiveness', {
         params: { threshold, minAttempts },
       }).then((r) => {
-        const d = r.data.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
+        const d = r.data as { stats: SelectorEffectivenessStats[]; failed: SelectorEffectivenessStats[] };
         return d.failed;
       }),
     staleTime: 30_000,
@@ -1453,5 +1453,25 @@ export function useDeleteSelector() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['selectors'] });
     },
+  });
+}
+
+// ============================================================
+// 调试模式开关
+// ============================================================
+
+export function useDebugMode() {
+  return useQuery({
+    queryKey: ['debug-mode'],
+    queryFn: () => api.get('/system/debug-mode').then((r) => r.data),
+    refetchInterval: 30000,
+  });
+}
+
+export function useUpdateDebugMode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => api.put('/system/debug-mode', { enabled }).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['debug-mode'] }),
   });
 }
