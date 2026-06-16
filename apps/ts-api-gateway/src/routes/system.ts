@@ -51,4 +51,38 @@ router.get('/overview', async (_req: Request, res: Response) => {
   }
 });
 
+/** GET /api/v1/system/debug-mode - 获取调试模式状态 */
+router.get('/debug-mode', async (_req: Request, res: Response) => {
+  try {
+    const status = await prisma.systemStatus.findFirst();
+    res.json({ success: true, data: { enabled: status?.isDebugMode ?? false } });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '获取调试模式状态失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+/** PUT /api/v1/system/debug-mode - 设置调试模式 */
+router.put('/debug-mode', async (req: Request, res: Response) => {
+  try {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'enabled must be a boolean' });
+    }
+
+    const status = await prisma.systemStatus.findFirst();
+    if (status) {
+      await prisma.systemStatus.update({ where: { id: status.id }, data: { isDebugMode: enabled } });
+    } else {
+      await prisma.systemStatus.create({ data: { id: 1, isDebugMode: enabled } });
+    }
+
+    logger.info({ enabled }, '调试模式已切换');
+    res.json({ success: true, data: { enabled } });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '设置调试模式失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 export default router;
