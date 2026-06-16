@@ -3135,9 +3135,11 @@ export class DouyinCrawler {
 
     await this.scrollCommentArea(page, 'top');
     await HumanActions.wait(page, 500, 800);
+    await snap?.('scroll_to_top');
 
     for (let scrollRound = 0; scrollRound < MAX_SCROLL; scrollRound++) {
       logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Scroll round');
+      await snap?.('scroll_round_' + (scrollRound + 1));
 
       // ── 搜索当前视窗中匹配 rootText+time 的根评论容器 ──
       // 实际 DOM 结构（2026-06-09 验证）：
@@ -3366,6 +3368,7 @@ export class DouyinCrawler {
         let expanded = false;
         // 用 CDP 在容器坐标附近点击展开按钮
         const btnText = await this.clickExpandButton(page);
+        await snap?.('expand_sub_replies', { btnText });
         if (!btnText) {
           // 回退：在容器坐标处点击任何”查看N条回复”
           await HumanActions.withCDPContext(page, async (ctx) => {
