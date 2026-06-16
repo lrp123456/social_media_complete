@@ -5,6 +5,7 @@ import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import fs from 'fs';
 import path from 'path';
 
@@ -56,6 +57,14 @@ export interface RootCommentSnapshot {
   createTime: number;
   userUid: string;
   userNickname: string;
+}
+
+// ── Reply target descriptor (text + time for dual-criteria matching) ──
+export interface ReplyTarget {
+  text: string;
+  createTime: number;
+  level: 1 | 2;
+  rootText?: string;
 }
 
 export type RiskControlDetection = {
@@ -2836,237 +2845,904 @@ export class DouyinCrawler {
   // ════════════════════════════════════════
 
   /**
-   * 拟人化回复评论
-   * 流程：定位目标评论 → 点击回复按钮 → 输入内容 → 点击发送 → 验证结果
-   * 基于调研报告：DOM 无 data-cid，通过文本内容匹配定位评论
+   * 拟人化回复评论（支持一级评论和子评论）—— 双重确认（文本 + 时间）
+   *
+   * @param target 回复目标（文本、创建时间、层级、所属根评论文本）
+   * @param replyText AI 生成的回复内容
    */
   async replyToComment(
     page: Page,
-    commentText: string,
+    target: ReplyTarget,
     replyText: string,
   ): Promise<boolean> {
-    logger.info({ commentText: commentText.slice(0, 30), textLength: replyText.length }, '[Reply] Starting douyin reply');
+    logger.info({
+      text: target.text.slice(0, 30),
+      level: target.level,
+      createTime: target.createTime,
+      rootText: target.rootText?.slice(0, 30),
+    }, '[Reply] Starting douyin reply (dual-criteria)');
+
+    // ── 调试模式初始化 ──
+    const debugEnabled = await isDebugModeEnabled();
+    let manifest: DebugManifest | null = null;
+    let sessionId = '';
+    let stepIdx = 0;
+
+    if (debugEnabled) {
+      sessionId = createReplySessionId(target);
+      manifest = createManifest(sessionId, {
+        text: target.text,
+        level: target.level,
+        createTime: target.createTime,
+        rootText: target.rootText,
+      });
+      logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
+    }
+
+    const snap = async (label: string, extra?: Record<string, any>) => {
+      if (manifest) {
+        stepIdx++;
+        await saveDebugSnapshot({ page, stepLabel: label, sessionId, stepIndex: stepIdx, manifest, extra });
+      }
+    };
 
     try {
-      // 模拟人类思考时间
       await HumanActions.thinkingPause(page, 800, 2000);
+      await snap('reply_start');
 
-      // Step 0: 展开所有”查看N条回复”链接，确保子评论可见
-      const expandCount = await this.expandAllReplyThreads(page);
-      if (expandCount > 0) {
-        logger.info({ expandCount }, '[Reply] Expanded sub-comment threads');
+      const foundCoords = await this.scrollExpandAndFindTarget(page, target, snap);
+
+      if (!foundCoords) {
+        await snap('target_not_found');
+        logger.warn({ text: target.text.slice(0, 40), level: target.level }, '[Reply] Target not found');
+        if (manifest) finishManifest(manifest, false);
+        return false;
+      }
+
+      await snap('target_found', { x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) });
+      logger.info({ x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) }, '[Reply] Target located, clicking reply');
+
+      // ── 点击”回复”按钮 ──
+      let clickedReplyBtn = false;
+      let inputClicked = false;
+      if (foundCoords.x > 0 && foundCoords.y > 0) {
+        // 先 hover 到评论区域，触发回复按钮显示
+        await HumanActions.withCDPContext(page, async (ctx) => {
+          await ctx.mouse.moveTo({ x: foundCoords.x, y: foundCoords.y });
+          await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
+        });
         await HumanActions.wait(page, 500, 1000);
-      }
+        await snap('hover_target', { x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) });
 
-      // Step 1: 定位目标评论容器（通过文本匹配，data-cid 已失效）
-      // 同时匹配一级评论和子评论的容器
-      const containerCsses = [
-        '[class*=”container-sXKyMs”]',        // 一级评论
-        '[class*=”reply-item”]',               // 子评论容器
-        '[class*=”sub-reply”]',                // 子回复变体
-        '[class*=”container-”] [class*=”comment-content-text”]', // 评论文本兜底
-      ];
-      let targetNodeId: number | null = null;
-      let targetContainerText = '';
-
-      for (const containerCss of containerCsses) {
-        if (targetNodeId) break;
-        const containers = await HumanActions.queryElementsWithInfo(page, containerCss);
-        for (const c of containers) {
-          if (c.text && c.text.includes(commentText)) {
-            targetNodeId = c.nodeId;
-            targetContainerText = c.text;
-            break;
-          }
-        }
-      }
-
-      if (!targetNodeId) {
-        // 最后尝试：直接搜索包含目标文本的任意容器
-        const allContainers = await HumanActions.queryElementsWithInfo(page, '[class*=”container”]');
-        for (const c of allContainers) {
-          if (c.text && c.text.includes(commentText)) {
-            targetNodeId = c.nodeId;
-            targetContainerText = c.text;
-            break;
-          }
-        }
-      }
-
-      if (!targetNodeId) {
-        logger.warn({ commentText: commentText.slice(0, 30) }, '[Reply] Target comment not found by text match, using first container');
-        const containers = await HumanActions.queryElementsWithInfo(page, '[class*=”container-sXKyMs”]');
-        if (containers.length > 0) targetNodeId = containers[0].nodeId;
-        else {
-          logger.error('[Reply] No comment containers found');
-          return false;
-        }
-      } else {
-        logger.info({ commentText: commentText.slice(0, 30), matchedText: targetContainerText.slice(0, 60) }, '[Reply] Found target comment container');
-      }
-
-      // Step 2: 在目标评论容器内点击”回复”按钮（scoped 搜索，避免误点其他评论的回复）
-      // 使用 page.evaluate 在目标容器子树内定位并返回”回复”按钮坐标
-      const replyCoords = await page.evaluate((searchText) => {
-        // 在所有容器中搜索包含目标文本的容器
-        const allContainers = document.querySelectorAll('[class*=”container-sXKyMs”],[class*=”reply-item”]');
-        const containers = Array.from(allContainers);
-        for (const container of containers) {
-          const el = container as HTMLElement;
-          if (el.innerText && el.innerText.includes(searchText)) {
-            // 找到目标容器，在其内部查找”回复”按钮
-            const allItems = Array.from(container.querySelectorAll('[class*=”item-”]'));
-            for (const item of allItems) {
-              const itemEl = item as HTMLElement;
-              if (itemEl.innerText?.trim() === '回复') {
-                const rect = itemEl.getBoundingClientRect();
-                return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+        // 诊断：hover 后页面上有哪些”回复”元素
+        const replyBtnDiag = await page.evaluate(function() {
+          var all = document.querySelectorAll('*');
+          var replyEls = [];
+          for (var i = 0; i < all.length; i++) {
+            var t = (all[i].textContent || '').trim();
+            if (t === '回复') {
+              var r = all[i].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                replyEls.push({
+                  tag: all[i].tagName,
+                  cls: (all[i].className || '').toString().slice(0, 60),
+                  x: Math.round(r.left + r.width / 2),
+                  y: Math.round(r.top + r.height / 2),
+                  w: Math.round(r.width),
+                  h: Math.round(r.height),
+                });
               }
             }
-            // 回退：找到的第一个操作栏 item
-            const replyBtn = (container as Element).querySelector('[class*=”item-”]') as HTMLElement | null;
-            if (replyBtn) {
-              const rect = replyBtn.getBoundingClientRect();
-              return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, found: true };
+          }
+          var editables = document.querySelectorAll('[contenteditable=”true”]');
+          var editableInfo = [];
+          for (var j = 0; j < editables.length; j++) {
+            var er = editables[j].getBoundingClientRect();
+            if (er.width > 0 && er.height > 0) {
+              editableInfo.push({
+                tag: editables[j].tagName,
+                cls: (editables[j].className || '').toString().slice(0, 60),
+                x: Math.round(er.left + er.width / 2),
+                y: Math.round(er.top + er.height / 2),
+              });
             }
           }
+          return { replyEls: replyEls, editables: editableInfo };
+        });
+        logger.info({ replyBtnDiag }, '[Reply] 回复按钮诊断');
+
+        // 尝试找到并点击回复按钮
+        if (replyBtnDiag.replyEls.length > 0) {
+          // 用 CSS 选择器点击第一个回复按钮（更可靠）
+          clickedReplyBtn = await HumanActions.cdpClick(page, '.item-M3fSkJ', { timeout: 3000 });
+          if (!clickedReplyBtn) {
+            // 回退：用坐标点击
+            var btn = replyBtnDiag.replyEls[0];
+            await HumanActions.withCDPContext(page, async (ctx) => {
+              await ctx.mouse.clickAt(btn.x, btn.y);
+            });
+            clickedReplyBtn = true;
+          }
+          logger.info({ clicked: clickedReplyBtn }, '[Reply] 点击了回复按钮');
+          await snap('click_reply_btn', { clicked: clickedReplyBtn });
+
+          // 立即检查并点击 contenteditable（它短暂出现后会消失）
+          inputClicked = await page.evaluate(function() {
+            var editables = document.querySelectorAll('[contenteditable="true"]');
+            for (var i = 0; i < editables.length; i++) {
+              var r = editables[i].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                editables[i].focus();
+                editables[i].click();
+                return true;
+              }
+            }
+            return false;
+          });
+          if (inputClicked) {
+            logger.info('[Reply] 立即点击了 contenteditable');
+            await HumanActions.wait(page, 300, 600);
+            await snap('input_focused', { immediate: true });
+          }
         }
-        return { x: 0, y: 0, found: false };
-      }, commentText);
-
-      let clickedReplyBtn = false;
-      if (replyCoords.found) {
-        // 使用坐标点击目标容器内的”回复”按钮
-        await page.mouse.click(replyCoords.x, replyCoords.y);
-        clickedReplyBtn = true;
-        logger.info({ x: Math.round(replyCoords.x), y: Math.round(replyCoords.y) }, '[Reply] Scoped click on reply button within target container');
+        if (!clickedReplyBtn) {
+          clickedReplyBtn = await HumanActions.cdpClickByText(page, '回复', { timeout: 3000 });
+        }
+        if (!clickedReplyBtn) {
+          await HumanActions.withCDPContext(page, async (ctx) => {
+            await ctx.mouse.clickAt(foundCoords.x, foundCoords.y);
+          });
+          clickedReplyBtn = true;
+        }
       }
 
-      if (!clickedReplyBtn) {
-        // 回退1: 通过文本全局搜索”回复”
-        logger.info('[Reply] Scoped reply button search failed, falling back to global search');
-        clickedReplyBtn = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
-      }
-      if (!clickedReplyBtn) {
-        // 回退2: 通过操作栏内的 item class
-        const opsClicked = await HumanActions.cdpClick(
-          page, '[class*=”operations”] [class*=”item-”]', { timeout: 3000 }
-        );
-        if (!opsClicked) {
-          logger.error('[Reply] Reply button not found');
+      // 如果回复按钮点击后没找到输入框，再试一次
+      if (!inputClicked) {
+        await HumanActions.wait(page, 500, 1000);
+        inputClicked = await page.evaluate(function() {
+          var editables = document.querySelectorAll('[contenteditable="true"]');
+          for (var i = 0; i < editables.length; i++) {
+            var r = editables[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              editables[i].focus();
+              editables[i].click();
+              return true;
+            }
+          }
           return false;
-        }
-        clickedReplyBtn = true;
-      }
-
-      // 等待输入框展开动画
-      await HumanActions.wait(page, 800, 1500);
-
-      // Step 3: 点击回复输入框（限定在 reply-content 容器内，避免误选顶部主输入框）
-      const inputSelectors = [
-        '[class*=”reply-content”] div[contenteditable=”true”]',
-        'div[contenteditable=”true”].input-d24X73',
-        'div[contenteditable=”true”]',
-      ];
-
-      let inputClicked = false;
-      for (const sel of inputSelectors) {
-        inputClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
-        if (inputClicked) break;
+        });
       }
 
       if (!inputClicked) {
-        logger.error('[Reply] Reply input not found after trying all selectors');
+        logger.error('[Reply] Reply input not found');
         return false;
       }
-      await HumanActions.wait(page, 300, 600);
 
-      // Step 4: 拟人化输入（使用 safeCDPType，自带随机延迟）
+      // ── 拟人化输入 ──
       await HumanActions.safeCDPType(page, replyText);
-
       await HumanActions.wait(page, 500, 1200);
+      await snap('text_typed', { textLength: replyText.length });
 
-      // Step 5: 点击发送按钮 — 限死在回复表单区域内，排除 header 的 “选择作品” 按钮
-      // 关键：不能全局搜索 button-primary，因为 header 的 “选择作品” 按钮也有这个 class
-      const submitSelectors = [
-        // 优先级1: 回复区域内的 primary button (不含 disabled)
-        '[class*=”reply-content”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
-        '[class*=”footer”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
-        // 优先级2: 最近出现的非 disabled primary button（排除 header）
-        'button.douyin-creator-interactive-button-primary:not([class*=”disabled”]):not([class*=”large”])',
-        // 优先级3: 文本匹配 “发送”（最稳定）
-      ];
+      // ── 点击发送 ──
+      // 先在 contenteditable 附近查找提交按钮（返回坐标，用 CDP 点击）
+      const submitBtnCoords = await page.evaluate(function() {
+        var editables = document.querySelectorAll('[contenteditable=”true”]');
+        for (var i = 0; i < editables.length; i++) {
+          var r = editables[i].getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            var parent = editables[i].parentElement;
+            for (var depth = 0; depth < 8 && parent; depth++) {
+              var btns = parent.querySelectorAll('button, [role=”button”], [class*=”btn”]');
+              for (var j = 0; j < btns.length; j++) {
+                var t = (btns[j].textContent || '').trim();
+                if (t === '发送' || t === '发布' || t === '回复') {
+                  var br = btns[j].getBoundingClientRect();
+                  if (br.width > 0 && br.height > 0 && !btns[j].disabled) {
+                    return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2), text: t };
+                  }
+                }
+              }
+              parent = parent.parentElement;
+            }
+          }
+        }
+        return null;
+      });
 
       let submitClicked = false;
-      for (const sel of submitSelectors) {
-        submitClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
-        if (submitClicked) {
-          logger.info({ selector: sel }, '[Reply] Submit button clicked');
-          break;
+      if (submitBtnCoords) {
+        logger.info({ submitBtnCoords }, '[Reply] 找到提交按钮');
+        await HumanActions.withCDPContext(page, async (ctx) => {
+          await ctx.mouse.moveTo({ x: submitBtnCoords.x, y: submitBtnCoords.y });
+          await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+          await ctx.mouse.clickAt(submitBtnCoords.x, submitBtnCoords.y);
+        });
+        submitClicked = true;
+        logger.info('[Reply] 通过坐标点击了提交按钮');
+      } else {
+        // 回退：用 CSS 选择器
+        const submitSelectors = [
+          '[class*=”reply-content”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
+          '[class*=”footer”] button.douyin-creator-interactive-button-primary:not([class*=”disabled”])',
+        ];
+        for (const sel of submitSelectors) {
+          submitClicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
+          if (submitClicked) { logger.info({ selector: sel }, '[Reply] Submit clicked'); break; }
+        }
+        if (!submitClicked) {
+          submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
+          if (submitClicked) logger.info('[Reply] Submit clicked via text');
         }
       }
-      if (!submitClicked) {
-        // 回退：文本匹配 “发送”（排除 “选择作品” 的干扰）
-        submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
-        if (submitClicked) {
-          logger.info('[Reply] Submit button clicked via text match');
+      if (!submitClicked) logger.warn('[Reply] Submit not found, but text was typed');
+
+      await HumanActions.wait(page, 2000, 4000);
+      await snap('submit_clicked', { clicked: submitClicked });
+
+      // 验证回复是否成功（检查是否有错误提示或回复是否消失）
+      const verifyResult = await page.evaluate(function() {
+        // 检查是否有错误提示
+        var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"], [class*="toast"]');
+        for (var i = 0; i < errorEls.length; i++) {
+          var t = (errorEls[i].innerText || '').trim();
+          if (t.length > 0 && t.length < 100) return { error: t };
         }
-      }
-      if (!submitClicked) {
-        logger.warn('[Reply] Submit button not found, but text was typed');
-      }
+        // 检查 contenteditable 是否还有内容（成功后应该清空）
+        var editables = document.querySelectorAll('[contenteditable="true"]');
+        for (var j = 0; j < editables.length; j++) {
+          var r = editables[j].getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) {
+            return { editableText: (editables[j].innerText || '').slice(0, 50) };
+          }
+        }
+        return { editableText: 'none' };
+      });
+      logger.info({ verifyResult }, '[Reply] 提交后验证');
+      await snap('verify_result', verifyResult);
 
-      // 等待发送完成
-      await HumanActions.wait(page, 1500, 3000);
-
-      // 模拟发送后的人类行为
       await HumanActions.betweenActionsPause(page);
 
-      logger.info({ commentText: commentText.slice(0, 30), submitClicked }, '[Reply] Douyin reply sent successfully');
+      logger.info({ text: target.text.slice(0, 30), level: target.level }, '[Reply] Douyin reply completed');
+      if (manifest) finishManifest(manifest, true);
       return true;
     } catch (err: any) {
-      logger.error({ error: err.message, commentText: commentText.slice(0, 30) }, '[Reply] Douyin reply failed');
+      await snap('error', { message: err.message });
+      logger.error({ error: err.message, text: target.text.slice(0, 30) }, '[Reply] Douyin reply failed');
+      if (manifest) finishManifest(manifest, false);
       return false;
     }
   }
 
   /**
-   * 展开所有”查看N条回复”链接，让子评论可见
+   * 缓慢滚动评论区，通过文本+时间双重确认找到目标评论的”回复”按钮坐标。
+   *
+   * 子评论 (level=2)：先找到匹配 rootText+时间的根评论容器 → 只展开该容器的子评论 → 搜索目标子评论
+   * 一级评论 (level=1)：直接匹配文本+时间
+   *
+   * 关键：不盲目展开所有”查看N条回复”，只展开匹配 rootText 的根评论。
    */
-  private async expandAllReplyThreads(page: Page): Promise<number> {
-    let expandedCount = 0;
-    try {
-      // 查找所有 “查看N条回复” 的链接文本
-      const expandTexts = await page.evaluate(() => {
-        const result: string[] = [];
-        const allDivs = Array.from(document.querySelectorAll('div'));
-        for (const div of allDivs) {
-          const text = (div as HTMLElement).innerText?.trim() || '';
-          // 匹配 “查看X条回复” 格式
-          if (/^查看\d+条回复$/.test(text)) {
-            result.push(text);
-          }
-        }
-        return result;
-      });
+  private async scrollExpandAndFindTarget(
+    page: Page,
+    target: ReplyTarget,
+    snap?: (label: string, extra?: Record<string, any>) => Promise<void>,
+  ): Promise<{ x: number; y: number } | null> {
+    const MAX_SCROLL = 30;
+    const TIME_WINDOW = 60;
+    const isSub = target.level === 2;
 
-      if (expandTexts.length === 0) return 0;
+    const startT0 = Date.now();
+    logger.info({ text: target.text.slice(0, 30), time: target.createTime, isSub }, '[Reply::Find] Start (root-first expand)');
 
-      // 逐个点击展开
-      for (const text of expandTexts) {
-        try {
-          const clicked = await HumanActions.cdpClickByText(page, text, { timeout: 3000 });
-          if (clicked) {
-            expandedCount++;
-            await HumanActions.wait(page, 300, 600);
+    await this.scrollCommentArea(page, 'top');
+    await HumanActions.wait(page, 500, 800);
+
+    for (let scrollRound = 0; scrollRound < MAX_SCROLL; scrollRound++) {
+      logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Scroll round');
+
+      // ── 搜索当前视窗中匹配 rootText+time 的根评论容器 ──
+      // 实际 DOM 结构（2026-06-09 验证）：
+      //   <div>                                    ← 无 class 的评论包装器
+      //     <span class="douyin-creator-interactive-checkbox">
+      //     <span class="douyin-creator-interactive-avatar">
+      //     <div class="content-FM0UMi">           ← 内容包装器（hash 类名）
+      //       <div>
+      //         <div class="username-aLgaNB">      ← 用户名
+      //         <div class="time-NRtTXO">          ← 时间（格式："05月28日 08:34"）
+      //         <div class="comment-content-text-JvmAKq"> ← 评论正文
+      //         <div class="operations-WFV7Am">    ← 操作按钮区
+      //           <div class="item-M3fSkJ">回复</div>
+      // 注意：评论没有带 class 的外层容器，需通过子元素反查
+      let rootContainer: any = await page.evaluate(
+        (params) => {
+          var searchText = params.searchText;
+          var targetTime = params.targetTime;
+          var timeWindow = params.timeWindow;
+          var isSubReply = params.isSubReply;
+          var rootText = params.rootText;
+
+          var vh = window.innerHeight;
+
+          var containerSelectors = ['[class*="container-sXKyMs"]', '[class*="reply-item"]', '[class*="comment-item"]', '[class*="comment-content-text"]'];
+          for (var si = 0; si < containerSelectors.length; si++) {
+            var containers = document.querySelectorAll(containerSelectors[si]);
+            for (var ci = 0; ci < containers.length; ci++) {
+              var container = containers[ci];
+              var text = (container.innerText || '').toLowerCase();
+              if (!text || text.length < 2) continue;
+
+              // 内联提取发布时间戳（不使用函数，避免 esbuild __name 注入）
+              var time = null;
+              var t = container.innerText || '';
+              var m = t.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+              if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+              if (time === null) {
+                m = t.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+              }
+              if (time === null) {
+                m = t.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+              }
+              if (time === null) {
+                m = t.match(/(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+              }
+              if (time === null) {
+                m = t.match(/(\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+              }
+            }
           }
-        } catch {
-          // 单次展开失败不影响其他
+
+          // 策略：通过评论正文元素 [class*="comment-content-text-"] 定位每条评论
+          var textEls = document.querySelectorAll('[class*="comment-content-text-"]');
+
+          for (var ti = 0; ti < textEls.length; ti++) {
+            var textEl = textEls[ti] as HTMLElement;
+            var commentText = (textEl.innerText || '').trim();
+            if (!commentText || commentText.length < 1) continue;
+
+            // 向上查找评论包装器（找到包含操作按钮或时间的父级 div）
+            var commentWrapper = textEl.parentElement;
+            var maxDepth = 10;
+            while (commentWrapper && maxDepth > 0) {
+              maxDepth--;
+              // 找到包含操作区（回复按钮）的容器
+              var hasOps = commentWrapper.querySelector('[class*="operations-"], [class*="action"]');
+              var hasTime = commentWrapper.querySelector('[class*="time-"]');
+              var hasCheckbox = commentWrapper.querySelector('.douyin-creator-interactive-checkbox, [class*="checkbox"]');
+              if ((hasOps && hasTime) || hasCheckbox) break;
+              commentWrapper = commentWrapper.parentElement;
+            }
+            if (!commentWrapper) continue;
+
+            // 从评论包装器中提取时间（内联，不使用函数）
+            var timeEl = commentWrapper.querySelector('[class*="time-"]');
+            var timeText = timeEl ? (timeEl.innerText || '') : '';
+            var time = null;
+            var m2 = timeText.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+            if (m2) { time = Math.floor(new Date(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5]).getTime() / 1000); }
+            if (time === null) {
+              m2 = timeText.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
+              if (m2) { time = Math.floor(new Date(+m2[1], +m2[2] - 1, +m2[3], +m2[4], +m2[5]).getTime() / 1000); }
+            }
+            if (time === null) {
+              m2 = timeText.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s*(\d{1,2}):(\d{2})/);
+              if (m2) { time = Math.floor(new Date(new Date().getFullYear(), +m2[1] - 1, +m2[2], +m2[3], +m2[4]).getTime() / 1000); }
+            }
+            if (time === null) {
+              m2 = timeText.match(/(\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+              if (m2) { time = Math.floor(new Date(new Date().getFullYear(), +m2[1] - 1, +m2[2], +m2[3], +m2[4]).getTime() / 1000); }
+            }
+
+            var textOk = commentText.toLowerCase().indexOf(searchText) >= 0 || searchText.indexOf(commentText.toLowerCase().slice(0, Math.min(commentText.length, 40))) >= 0;
+            var timeOk = time !== null && Math.abs(time - targetTime) <= timeWindow;
+
+            if (isSubReply) {
+              var rootOk = rootText && commentText.toLowerCase().indexOf(rootText) >= 0;
+              if (!rootOk) continue;
+              if (!timeOk) continue;
+
+              // 找到根评论后，在其内搜索子评论（子评论也使用 [class*="comment-content-text-"]）
+              var subTextEls = commentWrapper.querySelectorAll('[class*="comment-content-text-"]');
+              for (var si = 0; si < subTextEls.length; si++) {
+                if (subTextEls[si] === textEl) continue; // 跳过根评论自身
+                var subText = (subTextEls[si].innerText || '').trim().toLowerCase();
+                if (subText.indexOf(searchText) >= 0) {
+                  // 找到匹配的子评论，定位其回复按钮
+                  var subParent = subTextEls[si].closest('[class*="content-"]')?.parentElement;
+                  if (subParent) {
+                    var opsArea = subParent.querySelector('[class*="operations-"]');
+                    if (!opsArea) opsArea = subTextEls[si].closest('[class*="content-"]')?.querySelector('[class*="operations-"]') || null;
+                  }
+                  // 直接在子评论的兄弟节点中查找操作区
+                  var siblingOps = subTextEls[si].parentElement?.querySelector('[class*="operations-"]');
+                  if (siblingOps) {
+                    var items = siblingOps.querySelectorAll('[class*="item-"]');
+                    for (var ri = 0; ri < items.length; ri++) {
+                      if ((items[ri].textContent || '').trim() === '回复') {
+                        var r = items[ri].getBoundingClientRect();
+                        if (r.left > 0 && r.top > 0 && r.top <= vh) {
+                          (subTextEls[si] as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
+                          return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+
+              // 子评论未找到或尚未展开，返回根评论坐标以便展开
+              commentWrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
+              var rect = commentWrapper.getBoundingClientRect();
+              return {
+                found: true, needExpand: true, isRoot: true,
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                expandX: -1, expandY: -1,
+              };
+            } else {
+              if (textOk && timeOk) {
+                commentWrapper.scrollIntoView({ behavior: 'instant', block: 'center' });
+                // 在该评论包装器内查找“回复”按钮
+                var opsArea = commentWrapper.querySelector('[class*="operations-"]');
+                if (opsArea) {
+                  var items = opsArea.querySelectorAll('[class*="item-"]');
+                  for (var ri = 0; ri < items.length; ri++) {
+                    if ((items[ri].textContent || '').trim() === '回复') {
+                      var r = items[ri].getBoundingClientRect();
+                      if (r.left > 0 && r.top > 0 && r.top <= vh)
+                        return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), needExpand: false };
+                    }
+                  }
+                }
+                var rect = commentWrapper.getBoundingClientRect();
+                return { found: true, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), needExpand: false };
+              }
+            }
+          }
+          return { found: false, needExpand: false };
+        },
+        { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, isSubReply: isSub, rootText: (target.rootText || '').toLowerCase() },
+      );
+
+      // 如果主搜索未找到，尝试简单文本匹配（评论管理页面结构不同）
+      if (!rootContainer.found) {
+        logger.info('[Reply::Find] 主搜索未找到，尝试简单文本匹配');
+        const simpleMatch = await page.evaluate(
+          (params) => {
+            var searchText = params.searchText;
+            var vh = window.innerHeight;
+            var textEls = document.querySelectorAll('[class*="comment-content-text"]');
+            for (var i = 0; i < textEls.length; i++) {
+              var el = textEls[i];
+              var text = (el.innerText || '').trim().toLowerCase();
+              if (!text) continue;
+              if (text.indexOf(searchText) >= 0 || searchText.indexOf(text) >= 0) {
+                // 找到匹配的评论文本，向上查找回复按钮
+                var parent = el.parentElement;
+                for (var depth = 0; depth < 10 && parent; depth++) {
+                  var ops = parent.querySelector('[class*="operations-"], [class*="action-"]');
+                  if (ops) {
+                    var items = ops.querySelectorAll('[class*="item-"]');
+                    for (var ri = 0; ri < items.length; ri++) {
+                      if ((items[ri].textContent || '').trim() === '回复') {
+                        var r = items[ri].getBoundingClientRect();
+                        if (r.width > 0 && r.height > 0) {
+                          return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                        }
+                      }
+                    }
+                  }
+                  parent = parent.parentElement;
+                }
+                // 没找到回复按钮，返回元素坐标
+                el.scrollIntoView({ behavior: 'instant', block: 'center' });
+                var rect = el.getBoundingClientRect();
+                return { found: true, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+              }
+            }
+            return { found: false, x: 0, y: 0 };
+          },
+          { searchText: target.text.toLowerCase() },
+        );
+        if (simpleMatch.found) {
+          logger.info('[Reply::Find] 简单文本匹配成功');
+          rootContainer = { found: true, x: simpleMatch.x, y: simpleMatch.y, needExpand: false };
         }
       }
-    } catch (err: any) {
-      logger.info({ error: err.message }, '[Reply] Expand reply threads failed (non-critical)');
+
+      if (rootContainer.found) {
+        if (!rootContainer.needExpand) {
+          // 直接找到了目标（一级评论或已展开的子评论）
+          logger.info({ scrollRound, elapsedMs: Date.now() - startT0 }, '[Reply::Find] Target found directly');
+          return { x: rootContainer.x, y: rootContainer.y };
+        }
+
+        // 需要展开这个根评论的子评论
+        logger.info({ scrollRound }, '[Reply::Find] Found matching root, expanding its sub-comments');
+
+        // 点击根评论容器内的”查看N条回复”按钮
+        let expanded = false;
+        // 用 CDP 在容器坐标附近点击展开按钮
+        const btnText = await this.clickExpandButton(page);
+        if (!btnText) {
+          // 回退：在容器坐标处点击任何”查看N条回复”
+          await HumanActions.withCDPContext(page, async (ctx) => {
+            await ctx.mouse.moveTo({ x: rootContainer.x, y: rootContainer.y });
+            await new Promise(r => setTimeout(r, 100));
+          });
+          // 尝试文本点击
+          await HumanActions.cdpClickByText(page, /查看\d+条回复/, { timeout: 3000 });
+        }
+
+        expanded = true;
+        await HumanActions.wait(page, 1000, 2000);
+
+        // 展开后搜索子评论
+        const subResult = await page.evaluate(
+          (params) => {
+            var searchText = params.searchText;
+            var targetTime = params.targetTime;
+            var timeWindow = params.timeWindow;
+            var rootText = params.rootText;
+            var vh = window.innerHeight;
+
+            // 抖音子评论DOM: 每条子评论也用 [class*="comment-content-text-"] 显示文本
+            // 在同一页面的所有评论文本元素中搜索（展开后子评论已渲染到DOM中）
+            var textEls = document.querySelectorAll('[class*="comment-content-text-"]');
+            for (var i = 0; i < textEls.length; i++) {
+              var textEl = textEls[i];
+              var commentText = (textEl.innerText || '').trim();
+              if (!commentText || commentText.length < 2) continue;
+              var commentLower = commentText.toLowerCase();
+
+              // 如果指定了rootText，子评论必须在包含rootText的评论wrapper内
+              if (rootText) {
+                var wrapper = textEl.parentElement;
+                var found_root = false;
+                while (wrapper) {
+                  if ((wrapper.innerText || '').toLowerCase().indexOf(rootText) >= 0) {
+                    if (wrapper.querySelector('input[type="checkbox"]') || (wrapper.getAttribute('class') || '').indexOf('comment-wrapper') >= 0) {
+                      found_root = true;
+                      break;
+                    }
+                  }
+                  wrapper = wrapper.parentElement;
+                }
+                if (!found_root) continue;
+              }
+
+              if (commentLower.indexOf(searchText) >= 0) {
+                // 向上找到评论wrapper（包含整条评论的容器）
+                var commentWrapper = textEl.parentElement;
+                while (commentWrapper && !commentWrapper.querySelector('[class*="time-"]')) {
+                  commentWrapper = commentWrapper.parentElement;
+                }
+                if (!commentWrapper) continue;
+
+                // 从wrapper内的time元素提取时间
+                var timeEl = commentWrapper.querySelector('[class*="time-"]');
+                var timeText = timeEl ? (timeEl.innerText || '').trim() : '';
+                var time = null;
+                var m;
+
+                // YYYY/MM/DD HH:MM 或 YYYY-MM-DD HH:MM
+                m = timeText.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+
+                // 发布于 YYYY年MM月DD日 HH:MM
+                if (time === null) {
+                  m = timeText.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+                }
+
+                // 发布于 MM月DD日 HH:MM
+                if (time === null) {
+                  m = timeText.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                // MM月DD日 HH:MM（抖音评论最常见格式）
+                if (time === null) {
+                  m = timeText.match(/(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                // MM/DD HH:MM
+                if (time === null) {
+                  m = timeText.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                var timeOk = time !== null && Math.abs(time - targetTime) <= timeWindow;
+                if (!timeOk) continue;
+
+                // 找到回复按钮: 在wrapper内找 [class*="operations-"] > [class*="item-"] 且文本为"回复"
+                textEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+                var opsContainers = commentWrapper.querySelectorAll('[class*="operations-"]');
+                for (var oi = 0; oi < opsContainers.length; oi++) {
+                  var opItems = opsContainers[oi].querySelectorAll('[class*="item-"]');
+                  for (var ri = 0; ri < opItems.length; ri++) {
+                    if ((opItems[ri].innerText || '').trim() === '回复') {
+                      var r = opItems[ri].getBoundingClientRect();
+                      if (r.left > 0 && r.top > 0 && r.top <= vh)
+                        return { found: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                    }
+                  }
+                }
+                // 回退：返回评论文本元素坐标
+                var r2 = textEl.getBoundingClientRect();
+                return { found: true, x: Math.round(r2.left + r2.width / 2), y: Math.round(r2.top + r2.height / 2) };
+              }
+            }
+            return { found: false, x: 0, y: 0 };
+          },
+          { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, rootText: (target.rootText || '').toLowerCase() },
+        );
+
+        if (subResult.found) {
+          logger.info({ scrollRound, elapsedMs: Date.now() - startT0 }, '[Reply::Find] Sub-comment found after expand');
+          return { x: subResult.x, y: subResult.y };
+        }
+
+        // 加载更多（如果子评论超过10条）
+        for (let lm = 0; lm < 10; lm++) {
+          const hasMore = await page.evaluate(function() {
+            var all = document.querySelectorAll('*');
+            for (var i = 0; i < all.length; i++) {
+              var t = (all[i].textContent || '').trim();
+              if (/^查看\d+条回复$/.test(t) && all[i] instanceof HTMLElement) {
+                var isLeaf = true;
+                for (var j = 0; j < all[i].children.length; j++) {
+                  if (/^查看\d+条回复$/.test((all[i].children[j].textContent || '').trim())) { isLeaf = false; break; }
+                }
+                if (isLeaf) return true;
+              }
+            }
+            return false;
+          });
+          if (!hasMore) break;
+
+          await this.scrollCommentArea(page, 150);
+          await this.clickExpandButton(page);
+          await HumanActions.wait(page, 800, 1500);
+
+          const foundMore = await page.evaluate(
+            (params) => {
+              var searchText = params.searchText;
+              var targetTime = params.targetTime;
+              var timeWindow = params.timeWindow;
+              var rootText = params.rootText;
+              var vh = window.innerHeight;
+              // 抖音子评论DOM: 每条子评论也用 [class*="comment-content-text-"] 显示文本
+              var textEls = document.querySelectorAll('[class*="comment-content-text-"]');
+              for (var i = 0; i < textEls.length; i++) {
+                var textEl = textEls[i];
+                var commentText = (textEl.innerText || '').trim();
+                if (!commentText || commentText.length < 2) continue;
+                var commentLower = commentText.toLowerCase();
+                if (commentLower.indexOf(searchText) < 0) continue;
+
+                // 如果指定了rootText，检查评论上下文
+                if (rootText) {
+                  var wrapper = textEl.parentElement;
+                  var found_root = false;
+                  while (wrapper) {
+                    if ((wrapper.innerText || '').toLowerCase().indexOf(rootText) >= 0) {
+                      if (wrapper.querySelector('input[type="checkbox"]') || (wrapper.getAttribute('class') || '').indexOf('comment-wrapper') >= 0) {
+                        found_root = true;
+                        break;
+                      }
+                    }
+                    wrapper = wrapper.parentElement;
+                  }
+                  if (!found_root) continue;
+                }
+
+                // 向上找到评论wrapper
+                var commentWrapper = textEl.parentElement;
+                while (commentWrapper && !commentWrapper.querySelector('[class*="time-"]')) {
+                  commentWrapper = commentWrapper.parentElement;
+                }
+                if (!commentWrapper) continue;
+
+                // 从wrapper内的time元素提取时间
+                var timeEl = commentWrapper.querySelector('[class*="time-"]');
+                var timeText = timeEl ? (timeEl.innerText || '').trim() : '';
+                var time = null;
+                var m;
+
+                // YYYY/MM/DD HH:MM 或 YYYY-MM-DD HH:MM
+                m = timeText.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+                if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+
+                // 发布于 YYYY年MM月DD日 HH:MM
+                if (time === null) {
+                  m = timeText.match(/发布于\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+                }
+
+                // 发布于 MM月DD日 HH:MM
+                if (time === null) {
+                  m = timeText.match(/发布于\s*(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                // MM月DD日 HH:MM（抖音评论最常见格式）
+                if (time === null) {
+                  m = timeText.match(/(\d{1,2})月(\d{1,2})日\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                // MM/DD HH:MM
+                if (time === null) {
+                  m = timeText.match(/(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})/);
+                  if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+                }
+
+                if (time === null || Math.abs(time - targetTime) > timeWindow) continue;
+
+                // 找到回复按钮: [class*="operations-"] > [class*="item-"] 且文本为"回复"
+                textEl.scrollIntoView({ behavior: 'instant', block: 'center' });
+                var opsContainers = commentWrapper.querySelectorAll('[class*="operations-"]');
+                for (var oi = 0; oi < opsContainers.length; oi++) {
+                  var opItems = opsContainers[oi].querySelectorAll('[class*="item-"]');
+                  for (var ri = 0; ri < opItems.length; ri++) {
+                    if ((opItems[ri].innerText || '').trim() === '回复') {
+                      var r = opItems[ri].getBoundingClientRect();
+                      if (r.left > 0 && r.top > 0 && r.top <= vh)
+                        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                    }
+                  }
+                }
+                // 回退：返回评论文本元素坐标
+                var r2 = textEl.getBoundingClientRect();
+                return { x: Math.round(r2.left + r2.width / 2), y: Math.round(r2.top + r2.height / 2) };
+              }
+              return null;
+            },
+            { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, rootText: (target.rootText || '').toLowerCase() },
+          );
+          if (foundMore) { logger.info({ lm }, '[Reply::Find] Found after load-more'); return foundMore; }
+        }
+
+        // 这个根评论展开后没找到目标子评论 — 继续滚动找下一个匹配的根评论
+        logger.info({ scrollRound }, '[Reply::Find] Target not in this root, continuing scroll');
+      }
+
+      // ── 诊断：页面上有哪些可滚动容器和评论元素 ──
+      if (scrollRound === 0) {
+        const diag = await page.evaluate(function() {
+          // 找所有有滚动能力的容器
+          var scrollables = [];
+          var all = document.querySelectorAll('*');
+          for (var i = 0; i < all.length; i++) {
+            var el = all[i];
+            if (el.scrollHeight > el.clientHeight + 20 && el.clientHeight > 50) {
+              scrollables.push({
+                tag: el.tagName,
+                cls: (el.className || '').toString().slice(0, 80),
+                sh: el.scrollHeight, st: el.scrollTop, ch: el.clientHeight,
+                childCount: el.children.length,
+              });
+            }
+          }
+          // 找评论相关元素
+          var commentEls = document.querySelectorAll('[class*="comment"], [class*="reply"], [data-cid]');
+          // 检查目标文本是否存在
+          var bodyText = document.body.innerText || '';
+          return {
+            scrollables: scrollables.slice(0, 10),
+            commentElCount: commentEls.length,
+            hasRootText: bodyText.indexOf('美丽动人') >= 0,
+            hasTargetText: bodyText.indexOf('谢谢') >= 0,
+            bodyLen: bodyText.length,
+          };
+        });
+        logger.info({ diag }, '[Reply::Find] Page diagnostic');
+      }
+
+      // ── 先尝试点击"展开更多评论"按钮（评论管理页面分页机制） ──
+      const expandMoreClicked = await page.evaluate(function() {
+        var btns = document.querySelectorAll('span, div, button, a');
+        for (var i = 0; i < btns.length; i++) {
+          var t = (btns[i].textContent || '').trim();
+          if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
+            var el = btns[i];
+            // 检查可见性
+            var rect = el.getBoundingClientRect();
+            if (rect.width > 0 && rect.height > 0) {
+              el.click();
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+      if (expandMoreClicked) {
+        logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Clicked "展开更多评论"');
+        await HumanActions.wait(page, 1500, 2500);
+        continue; // 重新搜索，不滚动
+      }
+
+      // ── 滚动加载更多 ──
+      const sh = await page.evaluate(function() {
+        var c = document.querySelector('.douyin-creator-interactive-tabs-content');
+        return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
+      });
+      if (!sh) { logger.warn('[Reply::Find] Container gone'); break; }
+
+      logger.info({ scrollRound: scrollRound + 1, scrollTop: sh.st, clientHeight: sh.ch, scrollHeight: sh.sh }, '[Reply::Find] Scroll state');
+
+      if (sh.st + sh.ch >= sh.sh - 10) {
+        logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Bottom reached');
+        break;
+      }
+
+      await this.scrollCommentArea(page, sh.ch * 0.6);
+      await HumanActions.wait(page, 1000, 1500);
     }
-    return expandedCount;
+
+    // ── 最终全扫描 ──
+    logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Exhaustive, final sweep');
+    await this.scrollCommentArea(page, 'top');
+    await HumanActions.wait(page, 500, 800);
+
+    // 最后再搜索一遍（一级评论 or 已展开的子评论）
+    const finalResult = await page.evaluate(
+      (params) => {
+        var searchText = params.searchText;
+        var targetTime = params.targetTime;
+        var timeWindow = params.timeWindow;
+        var isSub = params.isSub;
+        var rootText = params.rootText;
+        var vh = window.innerHeight;
+        var sels = ['[class*=”comment-content-text”]', '[class*=”content-”][class*=”text”]', 'div[data-cid] div[class*=”text”]', '[class*=”reply-item”]', '[class*=”sub-reply”]', '[class*=”comment-item”]', '[class*=”container-sXKyMs”]'];
+        for (var si = 0; si < sels.length; si++) {
+          var els = document.querySelectorAll(sels[si]);
+          for (var ei = 0; ei < els.length; ei++) {
+            var el = els[ei];
+            var text = (el.innerText || '').toLowerCase();
+            if (!text || text.length < 2) continue;
+            if (text.indexOf(searchText) < 0 && searchText.indexOf(text.slice(0, Math.min(text.length, 30))) < 0) continue;
+            if (isSub && rootText && text.indexOf(rootText) < 0) continue;
+            // 内联提取时间
+            var time = null;
+            var t = el.innerText || '';
+            var m = t.match(/(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+            if (m) { time = Math.floor(new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]).getTime() / 1000); }
+            if (time === null) {
+              m = t.match(/发布于\s*(\d{1,2})[\/\-.](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+              if (m) { time = Math.floor(new Date(new Date().getFullYear(), +m[1] - 1, +m[2], +m[3], +m[4]).getTime() / 1000); }
+            }
+            if (time !== null && Math.abs(time - targetTime) > timeWindow) continue;
+
+            el.scrollIntoView({ behavior: 'instant', block: 'center' });
+            // 向上查找”回复”按钮
+            var parent = el;
+            for (var level = 0; level < 6 && parent; level++, parent = parent.parentElement) {
+              var ops = parent.querySelector('[class*=”operations”], [class*=”operation”], [class*=”action”]');
+              if (ops) {
+                var items = ops.querySelectorAll('[class*=”item-”], [class*=”action-item”], [class*=”item”]');
+                for (var ri = 0; ri < items.length; ri++) {
+                  if ((items[ri].innerText || '').trim() === '回复') {
+                    var r = items[ri].getBoundingClientRect();
+                    if (r.left > 0 && r.top > 0 && r.top <= vh)
+                      return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                  }
+                }
+              }
+            }
+            var r2 = el.getBoundingClientRect();
+            return { x: Math.round(r2.left + r2.width / 2), y: Math.round(r2.top + r2.height / 2) };
+          }
+        }
+        return null;
+      },
+      { searchText: target.text.toLowerCase(), targetTime: target.createTime, timeWindow: TIME_WINDOW, isSub: isSub, rootText: (target.rootText || '').toLowerCase() },
+    );
+
+    return finalResult;
   }
 }
