@@ -1151,9 +1151,7 @@ export class DouyinCrawler {
       };
     }
 
-    // 查询当前用户，判断是否需要提取平台作者 ID
-    const user = await db.getUserById(userId);
-    let needAuthorId = !user?.platformAuthorId; // 如果还没存过 authorId 就标记需要提取
+    // syncPlatformAuthorId 会处理首次绑定 + 自愈检测，不需要 needAuthorId 标志
 
     logger.info({ userId }, '[Phase1] Fetching video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
@@ -1214,20 +1212,9 @@ export class DouyinCrawler {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New video with no comments — skipping');
         }
 
-        // 提取作者 ID
-        if (needAuthorId && video.authorUid) {
-          const userForUpdate = await db.getUserById(userId);
-          if (userForUpdate && !userForUpdate.platformAuthorId) {
-            await prisma.user.update({
-              where: { id: userId },
-              data: {
-                platformAuthorId: video.authorUid,
-                platformAuthorName: video.authorNickname || '',
-              },
-            });
-            needAuthorId = false;
-            logger.info({ userId, authorUid: video.authorUid }, '[Phase1] Extracted platform author ID');
-          }
+        // 同步作者 ID（首次绑定 + 自愈）
+        if (video.authorUid) {
+          await db.syncPlatformAuthorId(userId, video.authorUid, video.authorNickname);
         }
 
         continue;
@@ -1278,16 +1265,10 @@ export class DouyinCrawler {
     }
 
     // 如果循环中未提取到 authorId（所有视频都已入库），从第一个有 authorUid 的视频提取
-    if (needAuthorId) {
-      for (const video of videos) {
-        if (video.authorUid) {
-          await prisma.user.update({
-            where: { id: userId },
-            data: { platformAuthorId: video.authorUid, platformAuthorName: video.authorNickname || '' },
-          });
-          logger.info({ userId, authorUid: video.authorUid }, '[Phase1] Extracted platform author ID (fallback)');
-          break;
-        }
+    for (const video of videos) {
+      if (video.authorUid) {
+        await db.syncPlatformAuthorId(userId, video.authorUid, video.authorNickname);
+        break;
       }
     }
 
