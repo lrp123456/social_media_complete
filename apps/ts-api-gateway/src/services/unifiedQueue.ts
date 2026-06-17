@@ -275,20 +275,23 @@ export const platformWorker = new Worker<PlatformTask>(
         if (result.hasUpdate) {
           logger.info(`✅ 监控: ${task.taskId} (${task.platform}) - ${result.newComments} 新评论, ${result.updatedVideos.length} 视频更新`);
 
-          if (result.newComments > 0) {
-            const phase3Result = (result as any)._phase3Result;
-            const queue = (result as any)._queue || [];
+          // 检查是否有首次爬取的 commentGroups（即使 newComments=0 也需要发摘要通知）
+          const phase3Result = (result as any)._phase3Result;
+          const queue = (result as any)._queue || [];
+          const hasFirstCrawlGroups = phase3Result?.results?.some((r: any) =>
+            r.success && r.commentGroups && r.commentGroups.length > 0
+          ) ?? false;
 
-            const user = await prisma.user.findUnique({ where: { id: task.userId } });
-            const platformAuthorId = user?.platformAuthorId;
+          if (result.newComments > 0 || hasFirstCrawlGroups) {
 
             const commentGroups = phase3Result?.results
               ?.filter((r: any) => r.success && r.commentGroups)
               ?.flatMap((r: any) =>
                 r.commentGroups
                   .map((g: any) => {
+                    // 通知过滤：依赖 isAuthor 字段，level 1 和 level 2 都过滤
                     const newSubReplies = g.newInGroup
-                      .filter((n: any) => n.level === 2 && n.userUid !== platformAuthorId)
+                      .filter((n: any) => n.level === 2 && !n.isAuthor)
                       .map((n: any) => ({
                         cid: n.cid,
                         text: n.text,
@@ -297,7 +300,7 @@ export const platformWorker = new Worker<PlatformTask>(
                         createTime: n.createTime,
                       }));
                     const allSubReplies = [
-                      ...g.subReplies.filter((s: any) => s.userUid !== platformAuthorId),
+                      ...g.subReplies.filter((s: any) => !s.isAuthor),
                       ...newSubReplies,
                     ];
                     const seenCids = new Set<string>();
@@ -314,7 +317,7 @@ export const platformWorker = new Worker<PlatformTask>(
                       subReplies: dedupedSubReplies,
                       newCids: new Set(
                         g.newInGroup
-                          .filter((n: any) => n.userUid !== platformAuthorId)
+                          .filter((n: any) => !n.isAuthor)
                           .map((n: any) => n.cid)
                       ),
                     };
@@ -396,6 +399,56 @@ platformWorker.on('failed', (job, err) => {
 
 platformWorker.on('stalled', (jobId) => {
   logger.warn(`任务停滞: ${jobId}`);
+});
+
+// ============================================================
+// Worker 启动清理：移除上一轮遗留的 active jobs
+// ============================================================
+
+platformWorker.on('ready', async () => {
+  try {
+    const redis = getRedis();
+    const queueName = QUEUE_NAME;
+    const activeKey = `bull:${queueName}:active`;
+    const stalledKey = `bull:${queueName}:stalled`;
+
+    // 读取 active list 中的所有 job ID
+    const staleJobIds = await redis.lrange(activeKey, 0, -1);
+    if (staleJobIds.length === 0) {
+      logger.info('[启动清理] active list 为空，无需清理');
+      return;
+    }
+
+    logger.info({ count: staleJobIds.length, jobIds: staleJobIds }, '[启动清理] 发现遗留 active jobs，开始清理');
+
+    for (const jobId of staleJobIds) {
+      try {
+        // 从 active list 移除
+        await redis.lrem(activeKey, 1, jobId);
+        // 标记失败原因（保留记录）
+        const jobKey = `bull:${queueName}:${jobId}`;
+        const jobData = await redis.hgetall(jobKey);
+        if (jobData && Object.keys(jobData).length > 0) {
+          await redis.hset(jobKey, 'failedReason', JSON.stringify({
+            error: 'Worker restarted — job was stale in active list',
+            cleanedAt: Date.now(),
+          }));
+        }
+        logger.info({ jobId }, '[启动清理] 已从 active list 移除');
+      } catch (cleanErr: any) {
+        logger.warn({ jobId, err: cleanErr.message }, '[启动清理] 清理单个 job 失败');
+      }
+    }
+
+    // 清理 stalled 集合中的同批 jobs
+    for (const jobId of staleJobIds) {
+      await redis.srem(stalledKey, jobId).catch(() => {});
+    }
+
+    logger.info({ cleaned: staleJobIds.length }, '[启动清理] 完成');
+  } catch (err: any) {
+    logger.error({ err: err.message }, '[启动清理] 失败');
+  }
 });
 
 // ============================================================

@@ -43,6 +43,7 @@ export interface CommentNode {
   text: string;
   userNickname: string;
   userUid: string;
+  isAuthor?: boolean;
   createTime: number;
   diggCount: number;
   level: 1 | 2;
