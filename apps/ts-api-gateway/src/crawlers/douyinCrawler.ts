@@ -1746,20 +1746,30 @@ export class DouyinCrawler {
             const rootCid = String(root.cid);
             const groupSubs = subReplies
               .filter(s => String(s.reply_id ?? '0') === rootCid)
-              .map(s => ({
-                cid: String(s.cid || ''),
-                text: s.text || '',
-                userNickname: s.user?.nickname || '',
-                userUid: s.user?.uid || '',
-                createTime: s.create_time || 0,
-                diggCount: s.digg_count || 0,
-                level: 2 as const,
-                rootId: rootCid,
-                parentId: rootCid,
-                replyToName: s.reply_to_username || '',
-                replyId: String(s.reply_id ?? '0'),
-                subComments: [],
-              }));
+              .map(s => {
+                const subUid = s.user?.uid || '';
+                const subLabelType = s.label_type ?? 0;
+                const subIsAuthor = (subLabelType === 1)
+                  || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
+                return {
+                  cid: String(s.cid || ''),
+                  text: s.text || '',
+                  userNickname: s.user?.nickname || '',
+                  userUid: subUid,
+                  createTime: s.create_time || 0,
+                  diggCount: s.digg_count || 0,
+                  level: 2 as const,
+                  rootId: rootCid,
+                  parentId: rootCid,
+                  replyToName: s.reply_to_username || '',
+                  replyId: String(s.reply_id ?? '0'),
+                  isAuthor: subIsAuthor,
+                  subComments: [],
+                };
+              });
+
+            const rootIsAuthorFlag = (root.label_type === 1)
+              || (firstCrawlAuthorId ? String(root.user?.uid || '') === String(firstCrawlAuthorId) : false);
 
             const rootNode: CommentNode = {
               cid: rootCid,
@@ -1770,23 +1780,15 @@ export class DouyinCrawler {
               diggCount: root.digg_count || 0,
               level: 1,
               replyId: '0',
+              isAuthor: rootIsAuthorFlag,
               subComments: [],
             };
 
-            // 过滤作者评论（label_type 优先，UID 兜底）
-            const isRootAuthor = (root.label_type === 1)
-              || (firstCrawlAuthorId ? String(rootNode.userUid) === String(firstCrawlAuthorId) : false);
-            const nonAuthorSubs = groupSubs.filter(s => {
-              const subUid = s.userUid;
-              const subRaw = subReplies.find((r: any) => String(r.cid) === s.cid);
-              const subLabelType = subRaw?.label_type ?? 0;
-              const subIsAuthor = (subLabelType === 1)
-                || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
-              return !subIsAuthor;
-            });
+            // 过滤作者评论
+            const nonAuthorSubs = groupSubs.filter(s => !s.isAuthor);
 
             const groupNew: CommentNode[] = [
-              ...(isRootAuthor ? [] : [rootNode]),
+              ...(rootIsAuthorFlag ? [] : [rootNode]),
               ...nonAuthorSubs,
             ];
 
@@ -2023,6 +2025,7 @@ export class DouyinCrawler {
                   parentId: n.parentId || undefined,
                   replyToName: n.replyToName || undefined,
                   replyId: n.reply_id || '0',
+                  isAuthor: n.is_author || false,
                   subComments: [],
                 })),
               });
