@@ -548,7 +548,7 @@ export async function batchUpsertComments(
           cid: c.comment_id,
           text: c.content,
           userNickname: c.nickname,
-          userUid: c.head_img_url,
+          userUid: c.user_uid || c.head_img_url || '',
           diggCount: c.like_count,
           createTime: BigInt(c.create_time),
           replyId: c.parent_id || '0',
