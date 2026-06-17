@@ -85,4 +85,23 @@ router.put('/debug-mode', async (req: Request, res: Response) => {
   }
 });
 
+/** GET /api/v1/system/locks - 查看当前所有窗口锁的持有状态 */
+router.get('/locks', async (_req: Request, res: Response) => {
+  try {
+    const { WindowMutex } = await import('../lib/redlock');
+    const snapshots = await WindowMutex.inspect();
+
+    res.json({
+      success: true,
+      data: {
+        locks: snapshots,
+        serverTime: Date.now(),
+      },
+    });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '获取窗口锁状态失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 export default router;
