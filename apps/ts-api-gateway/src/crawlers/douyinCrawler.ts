@@ -1818,6 +1818,14 @@ export class DouyinCrawler {
           const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
           const dbRootCids = new Set(lastSnapshots.keys());
 
+          // 加载该视频的所有已入库 cid（含子回复），用于去重展开后的子回复
+          const dbAllCids = new Set(
+            (await prisma.comment.findMany({
+              where: { videoId: item.awemeId },
+              select: { cid: true },
+            })).map(c => c.cid)
+          );
+
           // 获取作者 ID 用于过滤（作者的评论不计为新增）
           const currentUser = await db.getUserById(item._userId!);
           const platformAuthorId = currentUser?.platformAuthorId;
@@ -1831,40 +1839,41 @@ export class DouyinCrawler {
           }, '[Tree] Incremental: starting comparison — API roots=%d DB roots=%d', apiRootCids.size, dbRootCids.size);
 
           // ── 3a. 新增根评论 ──
+          // 判定条件：DB 没有该 cid = 新评论。不再用 createTime > lastCheckTime
+          // 因为评论可能因热度排序、置顶等原因 createTime 早于 lastCheckTime 但仍是 DB 缺失的新评论
           let newRootsFrom3a = 0;
           for (const snapshot of currentSnapshots) {
             if (!dbRootCids.has(snapshot.cid)) {
-              if (snapshot.createTime * 1000 > lastCheckTime) {
-                const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
-                newRootsFrom3a++;
-                newCommentsToUpsert.push({
-                  cid: snapshot.cid,
-                  text: snapshot.text,
-                  user_nickname: snapshot.userNickname,
-                  user_uid: snapshot.userUid,
-                  digg_count: 0,
-                  create_time: snapshot.createTime,
-                  reply_id: '0',
-                  rootId: undefined,
-                  parentId: undefined,
-                  level: 1,
-                  replyToName: undefined,
-                  is_author: isAuthor,
-                });
-              }
+              const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
+              newRootsFrom3a++;
+              newCommentsToUpsert.push({
+                cid: snapshot.cid,
+                text: snapshot.text,
+                user_nickname: snapshot.userNickname,
+                user_uid: snapshot.userUid,
+                digg_count: 0,
+                create_time: snapshot.createTime,
+                reply_id: '0',
+                rootId: undefined,
+                parentId: undefined,
+                level: 1,
+                replyToName: undefined,
+                is_author: isAuthor,
+              });
             }
           }
 
           logger.info({ awemeId: item.awemeId, newRootsFrom3a }, '[Tree] Incremental 3a: new root comments found=%d', newRootsFrom3a);
 
           // ── 3b-0. 将 trulyNew 中的子评论直接计入 newSubs ──
+          // trulyNew 已经过 existingCids 去重（只含展开后才出现的子评论）
+          // 不再用 createTime <= lastCheckTime 过滤，避免老回复被错误丢弃
           let newSubsFromTrulyNew = 0;
           for (const c of trulyNew) {
             const replyId = c.reply_id ?? '0';
             const isSub = replyId !== 0 && replyId !== '0' && replyId !== null;
             if (!isSub) continue;
             const createTime = c.create_time || 0;
-            if (createTime * 1000 <= lastCheckTime) continue;
             const isAuthor = platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false;
             newSubsFromTrulyNew++;
             newCommentsToUpsert.push({
@@ -1887,6 +1896,8 @@ export class DouyinCrawler {
           }
 
           // ── 3b. 根评论 replyCount 增加 → 局部展开 ──
+          // 判定条件：cid 不在 dbAllCids 中 = 新评论
+          // 不再用 createTime > lastCheckTime，避免历史回复被错误丢弃
           let rootsWithReplyIncrease = 0;
           let newSubsFrom3b = 0;
           for (const snapshot of currentSnapshots) {
@@ -1903,15 +1914,21 @@ export class DouyinCrawler {
 
                 for (const reply of replies) {
                   const apiMatch = apiReplies.find((c: any) => c.text?.includes(reply.text.slice(0, 10)));
+                  const cid = apiMatch?.cid || '';
                   const createTime = apiMatch?.create_time || 0;
                   const userUid = apiMatch?.user?.uid || '';
                   const userNickname = apiMatch?.user?.nickname || '';
 
-                  if (createTime * 1000 > lastCheckTime) {
+                  // 用 cid 判断是否已入库；无 cid 时用 lastCheckTime 兜底
+                  const isNewComment = cid
+                    ? !dbAllCids.has(cid)
+                    : createTime * 1000 > lastCheckTime;
+
+                  if (isNewComment) {
                     const isAuthor = platformAuthorId ? userUid === platformAuthorId : false;
                     newSubsFrom3b++;
                     newCommentsToUpsert.push({
-                      cid: apiMatch?.cid || '',
+                      cid,
                       text: reply.text,
                       user_nickname: userNickname,
                       user_uid: userUid,
