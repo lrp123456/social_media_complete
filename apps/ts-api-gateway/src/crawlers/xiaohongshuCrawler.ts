@@ -200,6 +200,30 @@ export class XiaohongshuCrawler {
     const allItems = this.interceptor.getCollectedItems(pattern);
     const sliced = allItems.slice(0, this.maxMonitorVideos);
 
+    // 从 raw responses 中提取作者 ID
+    let xhsAuthorId: string | undefined;
+    let xhsAuthorName: string | undefined;
+    const rawResponses = this.interceptor.getResponses(pattern) || [];
+    for (const resp of rawResponses) {
+      const body = (resp as any)?.body;
+      const items = body?.data?.notes || body?.data?.note_infos || body?.data?.note_list || body?.data?.data?.items || [];
+      for (const item of items) {
+        const uid = item.user?.userId
+          || item.user?.user_id
+          || item.user_id
+          || item.userId
+          || item.author?.userId;
+        if (uid) {
+          xhsAuthorId = String(uid);
+          xhsAuthorName = item.user?.nickname || item.user?.name || item.author?.nickname || '';
+          break;
+        }
+      }
+      if (xhsAuthorId) break;
+    }
+    (sliced as any)._xhsAuthorId = xhsAuthorId;
+    (sliced as any)._xhsAuthorName = xhsAuthorName;
+
     logger.info({
       step: 'FETCH_COMPLETE',
       totalCollected: allItems.length,
@@ -517,6 +541,14 @@ export class XiaohongshuCrawler {
 
     logger.info({ userId }, '[XHS-Light] Fetching note list');
     const videos = await this.fetchNoteListFromSource(page);
+
+    // 同步作者 ID
+    const xhsAuthorId = (videos as any)._xhsAuthorId;
+    const xhsAuthorName = (videos as any)._xhsAuthorName;
+    if (xhsAuthorId) {
+      await db.syncPlatformAuthorId(userId, xhsAuthorId, xhsAuthorName);
+      logger.info({ userId, xhsAuthorId }, '[XHS-Light] Synced platform author ID');
+    }
 
     // 诊断日志：记录每个笔记的评论数提取情况
     logger.info({
