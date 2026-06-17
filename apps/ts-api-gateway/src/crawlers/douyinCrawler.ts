@@ -3215,7 +3215,7 @@ export class DouyinCrawler {
       await snap('text_typed', { textLength: replyText.length });
 
       // ── 6. 找到发送按钮（在 reply-content 面板内找 text="发送" 且未 disabled 的 button）──
-      const sendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
+      let sendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
         function findReplyBtn(): Element | null {
           var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
           var best: Element | null = null, bestDist = Infinity;
@@ -3267,7 +3267,7 @@ export class DouyinCrawler {
           while (cur) {
             const text = (cur.textContent || '').trim();
             const cls = (cur.className || '').toLowerCase();
-            if (text.includes('在线客服') || cls.includes('online-service') || cls.includes('service-popup')) {
+            if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
               return true;
             }
             cur = cur.parentElement;
@@ -3276,11 +3276,19 @@ export class DouyinCrawler {
         }, { x: sendBtn.x, y: sendBtn.y });
 
         if (isBlockedByService) {
-          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，点击空白处关闭');
-          await HumanActions.withCDPContext(page, async (ctx) => {
-            await ctx.mouse.clickAt(100, 300);
+          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，通过 JS 隐藏');
+
+          // ★ Bugfix: 之前用 ctx.mouse.clickAt(100, 300) 盲点关闭客服窗口，
+          // 但 (100, 300) 落在左侧边栏菜单上，击中"内容管理"导致页面从
+          // interactive/comment 导航到 content/manage，回复面板丢失，发送失败。
+          // 改为用 JS 直接隐藏 creator-help-bar 元素，不触发任何点击。
+          await page.evaluate(function() {
+            var els = document.querySelectorAll('[class*="creator-help-bar"]');
+            for (var i = 0; i < els.length; i++) {
+              (els[i] as HTMLElement).style.display = 'none';
+            }
           });
-          await HumanActions.wait(page, 800, 1500);
+          await HumanActions.wait(page, 500, 1000);
 
           // 重新获取发送按钮坐标
           const newSendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
@@ -3328,9 +3336,25 @@ export class DouyinCrawler {
           if (newSendBtn) {
             sendBtn.x = newSendBtn.x;
             sendBtn.y = newSendBtn.y;
-            logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 关闭客服窗口后重新定位发送按钮');
+            logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 隐藏客服窗口后重新定位发送按钮');
           } else {
-            logger.warn('[Reply] 关闭客服窗口后仍无法定位发送按钮，使用原坐标尝试');
+            // 隐藏客服窗口后仍找不到发送按钮 — 检查回复面板是否还在
+            const panelExists = await page.evaluate(function() {
+              var editables = document.querySelectorAll('[contenteditable="true"]');
+              for (var i = 0; i < editables.length; i++) {
+                var r = editables[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return true;
+              }
+              return false;
+            });
+            if (!panelExists) {
+              logger.error('[Reply] 回复面板已关闭，无法发送');
+              if (manifest) finishManifest(manifest, false);
+              return false;
+            }
+            // 回复面板还在但找不到发送按钮 — 放弃坐标点击，走选择器回退
+            logger.warn('[Reply] 隐藏客服窗口后仍无法定位发送按钮，改用选择器回退');
+            sendBtn = null;
           }
         }
       }
@@ -3363,7 +3387,12 @@ export class DouyinCrawler {
       await snap('submit_clicked', { clicked: submitClicked });
 
       // ── 7. 等待 + 验证 ──
+      // ★ Bugfix: 之前不检查 URL 变化，页面导航走后仍返回 true（假成功）
+      const urlBeforeSubmit = page.url();
       await HumanActions.wait(page, 2000, 4000);
+      const urlAfterSubmit = page.url();
+      const urlChanged = !urlAfterSubmit.includes('interactive/comment');
+
       const verifyResult = await page.evaluate(function() {
         var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"], [class*="toast"]');
         for (var i = 0; i < errorEls.length; i++) {
@@ -3379,8 +3408,26 @@ export class DouyinCrawler {
         }
         return { editableText: 'none' };
       });
-      logger.info({ verifyResult }, '[Reply] 提交后验证');
-      await snap('verify_result', verifyResult);
+      logger.info({ verifyResult, urlChanged, urlAfterSubmit }, '[Reply] 提交后验证');
+      await snap('verify_result', { ...verifyResult, urlChanged, urlAfterSubmit });
+
+      // ★ 验证失败检测
+      if (urlChanged) {
+        logger.error({ urlBefore: urlBeforeSubmit, urlAfter: urlAfterSubmit }, '[Reply] 提交后页面导航离开，回复失败');
+        if (manifest) finishManifest(manifest, false);
+        return false;
+      }
+      if (verifyResult.error) {
+        logger.error({ error: verifyResult.error }, '[Reply] 提交后检测到错误提示，回复失败');
+        if (manifest) finishManifest(manifest, false);
+        return false;
+      }
+      // 如果输入框仍有文字，说明回复未发送成功
+      if (verifyResult.editableText && verifyResult.editableText !== 'none' && verifyResult.editableText.trim().length > 0) {
+        logger.error({ editableText: verifyResult.editableText }, '[Reply] 输入框仍有文字，回复可能未发送');
+        if (manifest) finishManifest(manifest, false);
+        return false;
+      }
 
       await HumanActions.betweenActionsPause(page);
 
