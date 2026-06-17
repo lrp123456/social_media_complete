@@ -231,7 +231,7 @@ function abortPromise(signal: AbortSignal, msg = '锁失效，业务中止'): Pr
 }
 ```
 
-放在 `redlock.ts` 同文件导出，或 `lib/abortPromise.ts`。
+放在 `redlock.ts` 同文件导出（避免单函数文件碎片化）。
 
 ## 5. 错误流（穷举）
 
