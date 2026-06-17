@@ -342,11 +342,32 @@ export class DouyinCrawler {
     await this.scrollToLoadMoreWithDualStop(page, pattern);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
-    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
-      ...item,
-      authorUid: item.author?.uid || '',
-      authorNickname: item.author?.nickname || '',
-    }));
+
+    // 从 raw responses 中提取 authorUid（parseVideoItem 会剥离 author 字段）
+    const rawResponses = this.interceptor.getResponses(pattern) || [];
+    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    for (const resp of rawResponses) {
+      const body = (resp as any)?.body;
+      const rawItems: any[] = body?.aweme_list || body?.data?.aweme_list || body?.item_list || body?.data?.list || [];
+      for (const raw of rawItems) {
+        const id = raw.aweme_id || raw.item_id || raw.id;
+        if (id && raw.author?.uid) {
+          awemeIdToAuthor.set(String(id), {
+            uid: String(raw.author.uid),
+            nickname: raw.author.nickname || '',
+          });
+        }
+      }
+    }
+
+    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => {
+      const author = awemeIdToAuthor.get(String(item.aweme_id));
+      return {
+        ...item,
+        authorUid: author?.uid || '',
+        authorNickname: author?.nickname || '',
+      };
+    });
 
     logger.info({
       source,

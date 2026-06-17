@@ -565,10 +565,29 @@ export class KuaishouCrawler {
     }
 
     const allItems = this.interceptor.getCollectedItems(pattern);
+
+    // 从 raw responses 中提取 authorUid
+    const rawResponses = this.interceptor.getResponses(pattern) || [];
+    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    for (const resp of rawResponses) {
+      const body = (resp as any)?.body;
+      const rawItems: any[] = body?.data?.list || body?.list || body?.data?.feeds || body?.feeds || [];
+      for (const raw of rawItems) {
+        const id = raw.workId || raw.photoId || raw.id;
+        const uid = raw.userId || raw.authorId;
+        if (id && uid) {
+          awemeIdToAuthor.set(String(id), {
+            uid: String(uid),
+            nickname: raw.userName || raw.authorName || '',
+          });
+        }
+      }
+    }
+
     const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
       ...item,
-      authorUid: String(item.userId || item.authorId || ''),
-      authorNickname: item.userName || item.authorName || '',
+      authorUid: awemeIdToAuthor.get(String(item.aweme_id))?.uid || String(item.userId || item.authorId || ''),
+      authorNickname: awemeIdToAuthor.get(String(item.aweme_id))?.nickname || item.userName || item.authorName || '',
     }));
 
     logger.info({
