@@ -344,11 +344,22 @@ export class DouyinCrawler {
     const allItems = this.interceptor.getCollectedItems(pattern);
 
     // 从 raw responses 中提取 authorUid（parseVideoItem 会剥离 author 字段）
+    // 探测所有 extractItems 已知的形状路径
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
     for (const resp of rawResponses) {
       const body = (resp as any)?.body;
-      const rawItems: any[] = body?.aweme_list || body?.data?.aweme_list || body?.item_list || body?.data?.list || [];
+      if (!body || typeof body !== 'object') continue;
+      const rawItems: any[] =
+        (Array.isArray(body.items) ? body.items : null) ||
+        (Array.isArray(body.video_list) ? body.video_list : null) ||
+        (Array.isArray(body.aweme_list) ? body.aweme_list : null) ||
+        (Array.isArray(body.item_list) ? body.item_list : null) ||
+        (Array.isArray(body.data?.items) ? body.data.items : null) ||
+        (Array.isArray(body.data?.list) ? body.data.list : null) ||
+        (Array.isArray(body.data?.aweme_list) ? body.data.aweme_list : null) ||
+        (Array.isArray(body.data?.videoList) ? body.data.videoList : null) ||
+        [];
       for (const raw of rawItems) {
         const id = raw.aweme_id || raw.item_id || raw.id;
         if (id && raw.author?.uid) {
@@ -359,6 +370,10 @@ export class DouyinCrawler {
         }
       }
     }
+    logger.info(
+      { source, mapSize: awemeIdToAuthor.size, sampleAuthor: awemeIdToAuthor.size > 0 ? Array.from(awemeIdToAuthor.values())[0] : null },
+      '[Phase1] Author extraction from raw responses',
+    );
 
     const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => {
       const author = awemeIdToAuthor.get(String(item.aweme_id));

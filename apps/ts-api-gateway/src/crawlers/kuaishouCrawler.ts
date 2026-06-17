@@ -566,12 +566,24 @@ export class KuaishouCrawler {
 
     const allItems = this.interceptor.getCollectedItems(pattern);
 
-    // 从 raw responses 中提取 authorUid
+    // 从 raw responses 中提取 authorUid（探测所有可能的形状路径）
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
     for (const resp of rawResponses) {
       const body = (resp as any)?.body;
-      const rawItems: any[] = body?.data?.list || body?.list || body?.data?.feeds || body?.feeds || [];
+      if (!body || typeof body !== 'object') continue;
+      const rawItems: any[] =
+        (Array.isArray(body.items) ? body.items : null) ||
+        (Array.isArray(body.list) ? body.list : null) ||
+        (Array.isArray(body.feeds) ? body.feeds : null) ||
+        (Array.isArray(body.data?.items) ? body.data.items : null) ||
+        (Array.isArray(body.data?.list) ? body.data.list : null) ||
+        (Array.isArray(body.data?.feeds) ? body.data.feeds : null) ||
+        (Array.isArray(body.data?.photoList?.photoItems) ? body.data.photoList.photoItems : null) ||
+        (Array.isArray(body.data?.photoList) ? body.data.photoList : null) ||
+        (Array.isArray(body.data?.analysisList) ? body.data.analysisList : null) ||
+        (Array.isArray(body.data?.worksList) ? body.data.worksList : null) ||
+        [];
       for (const raw of rawItems) {
         const id = raw.workId || raw.photoId || raw.id;
         const uid = raw.userId || raw.authorId;
@@ -583,6 +595,10 @@ export class KuaishouCrawler {
         }
       }
     }
+    logger.info(
+      { source, mapSize: awemeIdToAuthor.size, sampleAuthor: awemeIdToAuthor.size > 0 ? Array.from(awemeIdToAuthor.values())[0] : null },
+      '[Kuaishou Phase1] Author extraction from raw responses',
+    );
 
     const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
       ...item,
