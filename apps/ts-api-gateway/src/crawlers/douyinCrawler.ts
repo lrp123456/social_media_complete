@@ -1866,18 +1866,21 @@ export class DouyinCrawler {
           logger.info({ awemeId: item.awemeId, newRootsFrom3a }, '[Tree] Incremental 3a: new root comments found=%d', newRootsFrom3a);
 
           // ── 3b-0. 将 trulyNew 中的子评论直接计入 newSubs ──
-          // trulyNew 已经过 existingCids 去重（只含展开后才出现的子评论）
-          // 不再用 createTime <= lastCheckTime 过滤，避免老回复被错误丢弃
+          // trulyNew 仅过滤掉"本次抓取期间重复的 cid"，但可能含 DB 已入库的旧子回复
+          // （例如展开按钮触发的 reply API 拿到的本来就在 DB 里的子回复）
+          // 必须用 dbAllCids 做最终去重判定
           let newSubsFromTrulyNew = 0;
           for (const c of trulyNew) {
             const replyId = c.reply_id ?? '0';
             const isSub = replyId !== 0 && replyId !== '0' && replyId !== null;
             if (!isSub) continue;
+            const cid = String(c.cid || '');
+            if (!cid || dbAllCids.has(cid)) continue; // 已在 DB 中，跳过
             const createTime = c.create_time || 0;
             const isAuthor = platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false;
             newSubsFromTrulyNew++;
             newCommentsToUpsert.push({
-              cid: String(c.cid || ''),
+              cid,
               text: c.text || '',
               user_nickname: c.user?.nickname || '',
               user_uid: c.user?.uid || '',
