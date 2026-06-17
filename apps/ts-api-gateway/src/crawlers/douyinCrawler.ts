@@ -3388,10 +3388,18 @@ export class DouyinCrawler {
       const urlChanged = !urlAfterSubmit.includes('interactive/comment');
 
       const verifyResult = await page.evaluate(function() {
-        var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"], [class*="toast"]');
+        // ★ Bugfix: 之前扫 [class*="toast"] 会把"回复成功"的 toast 当 error
+        // 现在只扫 error/fail 元素，并排除包含成功关键词的文本
+        var SUCCESS_KEYWORDS = ['成功', 'success', '已发送', '已回复'];
+        var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"]');
         for (var i = 0; i < errorEls.length; i++) {
           var t = (errorEls[i].textContent || '').trim();
-          if (t.length > 0 && t.length < 100) return { error: t };
+          if (t.length === 0 || t.length >= 100) continue;
+          var isSuccess = false;
+          for (var k = 0; k < SUCCESS_KEYWORDS.length; k++) {
+            if (t.indexOf(SUCCESS_KEYWORDS[k]) >= 0) { isSuccess = true; break; }
+          }
+          if (!isSuccess) return { error: t };
         }
         var editables = document.querySelectorAll('[contenteditable="true"]');
         for (var j = 0; j < editables.length; j++) {
