@@ -20,7 +20,7 @@ import type { PlatformName } from '@social-media/shared-config';
 import { DouyinCrawler, ReplyTarget } from '../crawlers/douyinCrawler';
 import { KuaishouCrawler } from '../crawlers/kuaishouCrawler';
 import { XiaohongshuCrawler } from '../crawlers/xiaohongshuCrawler';
-import { TencentCrawler } from '../crawlers/tencentCrawler';
+import { TencentCrawler, TencentReplyTarget } from '../crawlers/tencentCrawler';
 import * as db from './monitorDatabaseService';
 import { botManager } from './wechatBotService';
 import type { CommentNode } from '../crawlers/douyinCrawler';
@@ -162,6 +162,7 @@ export async function sendMonitorNotification(
     }
 
     if (!data || data.commentGroups.length === 0) {
+      logger.info({ userId, platform, type, newComments: data?.newComments }, '评论通知跳过：commentGroups 为空（可能是首次爬取尚未采集到评论详情）');
       return;
     }
 
@@ -1186,11 +1187,33 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       return;
     }
 
-    // 去重：查询当前队列中是否已有同用户任务
-    const existingJobs = await monitorQueue.getJobs(['active', 'waiting']);
-    const activeUserIds = new Set(
-      existingJobs.map((j) => (j.data as any).userId).filter(Boolean),
-    );
+    // 去重：查询当前队列中是否有真正在执行的同用户任务
+    // 关键：BullMQ 的 getJobs(['active']) 会返回 stalled jobs（worker 重启后残留）
+    // 通过检查 Redis 中的 BullMQ 任务锁来判断 job 是否真正活跃
+    const [activeJobs, waitingJobs] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+    ]);
+    const redis = getRedis();
+    const activeUserIds = new Set<number>();
+    for (const j of [...activeJobs, ...waitingJobs]) {
+      const data = j.data as any;
+      if (!data?.userId) continue;
+      // waiting jobs 一定不是 stalled，直接加入
+      if (!await j.isActive()) {
+        activeUserIds.add(data.userId);
+        continue;
+      }
+      // active jobs：检查 BullMQ 任务锁是否存在
+      // 锁不存在 = worker 已停止续约 = stale job
+      const lockKey = `bull:platform:${j.id}:lock`;
+      const hasLock = await redis.exists(lockKey);
+      if (hasLock) {
+        activeUserIds.add(data.userId);
+      } else {
+        logger.debug({ jobId: j.id, userId: data.userId }, '[调度] 跳过无锁 active job（疑似 stale）');
+      }
+    }
 
     // 入队（跳过已有任务的用户）
     let queued = 0;
@@ -1306,12 +1329,13 @@ export async function executeReplyAction(
     where: { cid: replyData.commentCid },
     select: {
       id: true,
+      cid: true,
       text: true,
       createTime: true,
       level: true,
       rootId: true,
       userNickname: true,
-      replyToName: true,
+      videoId: true,
       video: { select: { description: true } },
     },
   });
@@ -1321,27 +1345,40 @@ export async function executeReplyAction(
   const commentCreateTime = Number(commentRow?.createTime) || 0;
   const commentLevel = (commentRow?.level as 1 | 2) || 1;
   const commentRootId = commentRow?.rootId || undefined;
-  const commentUsername = commentRow?.userNickname || undefined;
-  const commentReplyToName = commentRow?.replyToName || undefined;
+  const commentUsername = commentRow?.userNickname || '';
+  const commentVideoId = commentRow?.videoId || '';
 
-  // 如果是子评论，查询所属根评论的文本、用户名和子回复数
+  // 根评论的子评论数（用于构建 ReplyTarget）
+  let rootSubReplyCount: number | undefined;
   let rootCommentText: string | undefined;
-  let rootCommentUsername: string | undefined;
-  let rootCommentReplyCount: number | undefined;
+  let rootUsername: string | undefined;
+
   if (commentLevel === 2 && commentRootId) {
+    // 查询根评论的 text + userNickname
     const rootRow = await prisma.comment.findFirst({
       where: { cid: commentRootId },
       select: { text: true, userNickname: true },
     });
     rootCommentText = rootRow?.text || undefined;
-    rootCommentUsername = rootRow?.userNickname || undefined;
+    rootUsername = rootRow?.userNickname || undefined;
 
-    // 查询根评论的子回复数
-    const rootCountRow = await prisma.videoRootCommentCount.findFirst({
-      where: { cid: commentRootId },
-      select: { replyCount: true },
-    });
-    rootCommentReplyCount = rootCountRow?.replyCount || undefined;
+    // 从 VideoRootCommentCount 表读根评论的子评论数
+    if (commentVideoId) {
+      const rootCountRow = await prisma.videoRootCommentCount.findFirst({
+        where: { videoId: commentVideoId, cid: commentRootId },
+        select: { replyCount: true },
+      });
+      rootSubReplyCount = rootCountRow?.replyCount ?? undefined;
+    }
+  } else if (commentLevel === 1) {
+    // 根评论自身：查询其子评论数
+    if (commentVideoId && commentRow?.cid) {
+      const rootCountRow = await prisma.videoRootCommentCount.findFirst({
+        where: { videoId: commentVideoId, cid: commentRow.cid },
+        select: { replyCount: true },
+      });
+      rootSubReplyCount = rootCountRow?.replyCount ?? undefined;
+    }
   }
 
   try {
@@ -1357,7 +1394,7 @@ export async function executeReplyAction(
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
-        return;
+        throw new Error('无法导航到评论管理');
       }
 
       // 等待评论管理页面加载完成（评论列表应该默认显示）
@@ -1427,13 +1464,13 @@ export async function executeReplyAction(
 
       const replyTarget: ReplyTarget = {
         text: commentText,
-        createTime: commentCreateTime,
         level: commentLevel,
-        rootText: rootCommentText,
-        rootUsername: rootCommentUsername,
-        rootReplyCount: rootCommentReplyCount,
-        replyToName: commentReplyToName,
         username: commentUsername,
+        subReplyCount: commentLevel === 1 ? rootSubReplyCount : undefined,
+        rootText: rootCommentText,
+        rootUsername: commentLevel === 2 ? rootUsername : undefined,
+        rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
+        createTime: commentCreateTime,
       };
       const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text);
       if (replied) {
@@ -1442,6 +1479,7 @@ export async function executeReplyAction(
       } else {
         logger.error({ commentCid: replyData.commentCid }, '抖音回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+        throw new Error('抖音回复执行失败');
       }
     }
 
@@ -1456,7 +1494,7 @@ export async function executeReplyAction(
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理页面');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
-        return;
+        throw new Error('无法导航到快手评论管理页面');
       }
 
       await HumanActions.wait(page, 1500, 3000);
@@ -1470,13 +1508,26 @@ export async function executeReplyAction(
         await HumanActions.wait(page, 1500, 3000);
       }
 
-      const replied = await kuaishouCrawler.replyToComment(page, replyData.commentCid, replyData.text, commentText);
+      // 构建快手回复目标（借鉴抖音的 ReplyTarget 方案）
+      const kuaishouTarget: import('../crawlers/kuaishouCrawler').KuaishouReplyTarget = {
+        commentCid: replyData.commentCid,
+        text: commentText,
+        username: commentUsername,
+        level: commentLevel,
+        subReplyCount: commentLevel === 1 ? rootSubReplyCount : undefined,
+        rootText: rootCommentText,
+        rootUsername: commentLevel === 2 ? rootUsername : undefined,
+        rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
+        createTime: commentCreateTime,
+      };
+      const replied = await kuaishouCrawler.replyToComment(page, kuaishouTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
       } else {
         logger.error({ commentCid: replyData.commentCid }, '快手回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+        throw new Error('快手回复执行失败');
       }
     }
 
@@ -1486,14 +1537,14 @@ export async function executeReplyAction(
       if (!loggedIn) {
         logger.error('回复失败：视频号登录失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
-        return;
+        throw new Error('视频号登录失败');
       }
 
       const navSuccess = await tencentCrawler.navigateToCommentManage(page);
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
-        return;
+        throw new Error('无法导航到视频号评论管理');
       }
 
       await HumanActions.wait(page, 1500, 3000);
@@ -1519,13 +1570,25 @@ export async function executeReplyAction(
         await HumanActions.wait(page, 2000, 3000);
       }
 
-      const replied = await tencentCrawler.replyToComment(page, replyData.commentCid, replyData.text, commentRow?.text || '');
+      const tencentTarget: TencentReplyTarget = {
+        commentCid: replyData.commentCid,
+        text: commentText,
+        username: commentUsername,
+        level: commentLevel,
+        subReplyCount: commentLevel === 1 ? rootSubReplyCount : undefined,
+        rootText: rootCommentText,
+        rootUsername: commentLevel === 2 ? rootUsername : undefined,
+        rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
+        createTime: commentCreateTime,
+      };
+      const replied = await tencentCrawler.replyToComment(page, tencentTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
       } else {
         logger.error({ commentCid: replyData.commentCid }, '视频号回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+        throw new Error('视频号回复执行失败');
       }
 
       await tencentCrawler.executeExitStrategy(page);
@@ -1534,6 +1597,7 @@ export async function executeReplyAction(
   } catch (err: any) {
     logger.error({ err: err.message }, '回复执行失败');
     if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+    throw err;
   } finally {
     if (task.platform === 'douyin') {
       try {
@@ -1546,6 +1610,19 @@ export async function executeReplyAction(
       } catch {}
     }
   }
+}
+
+/**
+ * 重启监控调度器：清除所有现有定时器，重新扫描活跃用户并注册
+ * 用于配置变更后或 login_required 状态恢复后重新启动监控
+ */
+export function restartMonitorScheduler(): void {
+  logger.info('[调度器] 正在重启...');
+  for (const [key, st] of schedulerStates.entries()) {
+    if (st.timer) clearTimeout(st.timer);
+  }
+  schedulerStates.clear();
+  startMonitorScheduler();
 }
 
 export function startMonitorScheduler(): void {
