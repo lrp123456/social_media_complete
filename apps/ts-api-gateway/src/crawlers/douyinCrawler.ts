@@ -3608,6 +3608,11 @@ export class DouyinCrawler {
 
       // ── C. level=2：展开根评论下的子评论 ──
       if ((target.rootSubReplyCount ?? 0) > 0 && !rootMatch.isExpanded) {
+        // ★ Bugfix: 先把 root 评论滚到视口中间，否则 elementFromPoint 会失败
+        // （root 可能通过 DOM 扫描找到但 y 坐标在视口外或被遮挡）
+        await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
+        await HumanActions.wait(page, 300, 600);
+
         const expanded = await this.expandRootRepliesIfNeeded(page, rootMatch);
         if (!expanded) {
           logger.warn('[Reply::Find] Failed to expand sub-replies');
@@ -3822,6 +3827,45 @@ export class DouyinCrawler {
       }
       return null;
     }, containerSel);
+  }
+
+  /**
+   * 将 root 评论滚动到视口中间，确保 elementFromPoint 能正确定位。
+   * 通过在 DOM 中重新匹配 root 文本内容，找到元素并 scrollIntoView。
+   */
+  private async scrollRootIntoView(page: Page, targetX: number, targetY: number): Promise<void> {
+    await this.injectEsbuildPolyfill(page);
+    const scrolled = await page.evaluate(function(coords: { x: number; y: number }) {
+      // 方案 1：elementFromPoint 直接定位（如果 root 在视口内）
+      var el = document.elementFromPoint(coords.x, coords.y);
+      if (el) {
+        var container = el.closest('div[class*="container-"]');
+        if (container) {
+          (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+          return true;
+        }
+      }
+      // 方案 2：用坐标找到最近的 container（可能在视口外，elementFromPoint 返回 null）
+      var containers = document.querySelectorAll('div[class*="container-"]');
+      var best: Element | null = null;
+      var bestDist = Infinity;
+      for (var i = 0; i < containers.length; i++) {
+        var r = containers[i].getBoundingClientRect();
+        if (r.width === 0 || r.height === 0) continue;
+        var cx = r.left + r.width / 2;
+        var cy = r.top + r.height / 2;
+        var d = Math.hypot(cx - coords.x, cy - coords.y);
+        if (d < bestDist) { bestDist = d; best = containers[i]; }
+      }
+      if (best) {
+        (best as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+        return true;
+      }
+      return false;
+    }, { x: targetX, y: targetY });
+    if (scrolled) {
+      logger.info({ x: targetX, y: targetY }, '[Reply::Find] Root scrolled into view');
+    }
   }
 
   /**
