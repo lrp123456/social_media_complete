@@ -94,6 +94,7 @@ export async function upsertComment(
     digg_count: number;
     create_time: number;
     reply_id: string;
+    is_author?: boolean;
   },
 ): Promise<void> {
   await prisma.comment.upsert({
@@ -101,6 +102,7 @@ export async function upsertComment(
     update: {
       text: comment.text,
       diggCount: comment.digg_count,
+      isAuthor: comment.is_author ?? false,
     },
     create: {
       videoId,
@@ -111,6 +113,7 @@ export async function upsertComment(
       diggCount: comment.digg_count,
       createTime: BigInt(comment.create_time),
       replyId: comment.reply_id,
+      isAuthor: comment.is_author ?? false,
       isNew: 1,
     },
   });
@@ -194,6 +197,7 @@ export async function upsertLightModeComment(
       diggCount: 0,
       createTime: BigInt(info.create_time),
       replyId: '0',
+      isAuthor: false,
       isNew: 1,
     },
   });
@@ -261,6 +265,27 @@ export async function isUserInCooldown(userId: number): Promise<boolean> {
  * 获取所有活跃用户（未屏蔽且启用了监控，且浏览器窗口未被删除）
  */
 export async function getAllActiveUsers() {
+  // ★ Bugfix: 自动恢复 login_required 状态（30分钟后重试登录）
+  // 防止会话过期后监控永久停止
+  const LOGIN_REQUIRED_COOLDOWN_MS = 30 * 60 * 1000; // 30 分钟
+  const staleThreshold = new Date(Date.now() - LOGIN_REQUIRED_COOLDOWN_MS);
+  const staleLoginRequired = await prisma.user.findMany({
+    where: {
+      status: 'login_required',
+      monitoringEnabled: true,
+      updatedAt: { lt: staleThreshold },
+    },
+    select: { id: true, platform: true },
+  });
+  if (staleLoginRequired.length > 0) {
+    const ids = staleLoginRequired.map(u => u.id);
+    logger.info({ ids, platforms: staleLoginRequired.map(u => u.platform) }, '[MonitorDB] 自动恢复 login_required 状态');
+    await prisma.user.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'init' },
+    });
+  }
+
   const users = await prisma.user.findMany({
     where: {
       status: { notIn: ['blocked', 'login_required'] },
@@ -393,6 +418,7 @@ export async function upsertCommentWithHierarchy(
     parentId?: string;
     level: number;
     replyToName?: string;
+    is_author?: boolean;
   },
 ): Promise<void> {
   await prisma.comment.upsert({
@@ -404,6 +430,7 @@ export async function upsertCommentWithHierarchy(
       parentId: comment.parentId ?? null,
       level: comment.level,
       replyToName: comment.replyToName ?? null,
+      isAuthor: comment.is_author ?? false,
     },
     create: {
       videoId,
@@ -418,6 +445,7 @@ export async function upsertCommentWithHierarchy(
       parentId: comment.parentId ?? null,
       level: comment.level,
       replyToName: comment.replyToName ?? null,
+      isAuthor: comment.is_author ?? false,
       isNew: 1,
     },
   });
@@ -440,6 +468,7 @@ export async function upsertCommentTree(
     parentId?: string;
     level: number;
     replyToName?: string;
+    is_author?: boolean;
   }>,
 ): Promise<void> {
   if (comments.length === 0) return;
@@ -454,6 +483,7 @@ export async function upsertCommentTree(
           parentId: c.parentId ?? null,
           level: c.level,
           replyToName: c.replyToName ?? null,
+          isAuthor: c.is_author ?? false,
         },
         create: {
           videoId,
@@ -468,6 +498,7 @@ export async function upsertCommentTree(
           parentId: c.parentId ?? null,
           level: c.level,
           replyToName: c.replyToName ?? null,
+          isAuthor: c.is_author ?? false,
           isNew: 1,
         },
       });
@@ -510,6 +541,7 @@ export async function batchUpsertComments(
           rootId: c.root_id || null,
           parentId: c.parent_id || null,
           replyToName: c.reply_to_name || null,
+          isAuthor: c.is_author,
         },
         create: {
           videoId: c.export_id,
@@ -524,6 +556,7 @@ export async function batchUpsertComments(
           parentId: c.parent_id || null,
           level: c.level,
           replyToName: c.reply_to_name || null,
+          isAuthor: c.is_author,
           isNew: 1,
         },
       });
@@ -715,4 +748,59 @@ export async function updateReplyStatus(
       ...(status === 'sent' ? { repliedAt: new Date() } : {}),
     },
   });
+}
+
+/**
+ * 同步平台作者 ID（首次绑定 + 自愈检测）
+ * - 数据库中无 platformAuthorId → 写入新值
+ * - 数据库中已有但与新值不一致 → 更新并记录告警
+ * - 已一致 → 跳过（零开销）
+ */
+export async function syncPlatformAuthorId(
+  userId: number,
+  newAuthorId: string | number | undefined | null,
+  newAuthorName?: string | null,
+): Promise<void> {
+  if (newAuthorId === undefined || newAuthorId === null || newAuthorId === '') {
+    return;
+  }
+
+  const newAuthorIdStr = String(newAuthorId);
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { platformAuthorId: true, platform: true },
+  });
+  if (!user) return;
+
+  const currentId = user.platformAuthorId ?? null;
+
+  if (currentId === null) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        platformAuthorId: newAuthorIdStr,
+        platformAuthorName: newAuthorName || '',
+      },
+    });
+    logger.info(
+      { userId, platform: user.platform, authorId: newAuthorIdStr },
+      '[AuthorSync] 首次绑定平台作者 ID',
+    );
+    return;
+  }
+
+  if (currentId !== newAuthorIdStr) {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        platformAuthorId: newAuthorIdStr,
+        platformAuthorName: newAuthorName || '',
+      },
+    });
+    logger.warn(
+      { userId, platform: user.platform, oldAuthorId: currentId, newAuthorId: newAuthorIdStr },
+      '[AuthorSync] 平台作者 ID 变更，已更新',
+    );
+  }
 }
