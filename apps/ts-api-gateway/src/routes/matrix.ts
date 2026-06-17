@@ -592,14 +592,15 @@ router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Respo
 
         await redis.del(...keysToDelete).catch(() => {});
 
-        // Step 4: 从集合中移除
+        // Step 4: 从集合中移除（不同类型用不同命令）
+        // active 是 LIST → 用 LREM
+        await redis.lrem(`bull:${queueName}:active`, 1, bullJobId).catch(() => {});
+        // wait/waiting/delayed 是 ZSET → 用 ZREM
         for (const setName of [
-          `bull:${queueName}:active`,
           `bull:${queueName}:wait`,
           `bull:${queueName}:waiting`,
           `bull:${queueName}:delayed`,
         ]) {
-          await redis.srem(setName, bullJobId).catch(() => {});
           await redis.zrem(setName, bullJobId).catch(() => {});
         }
 
@@ -1188,6 +1189,17 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
       return res.status(400).json({ success: false, error: '该用户处于封禁状态，无法触发监控' });
     }
 
+    // 去重：检查是否已有同用户的 active/waiting 任务
+    const existingJobs = await monitorQueue.getJobs(['active', 'waiting']);
+    const hasExisting = existingJobs.some((j: any) => (j.data as any)?.userId === user.id);
+    if (hasExisting) {
+      return res.json({
+        success: true,
+        message: '该用户已有任务在队列中，无需重复触发',
+        deduplicated: true,
+      });
+    }
+
     // Add to BullMQ queue
     const job = await (monitorQueue.add as any)('monitor', {
       taskType: 'monitor',
@@ -1395,6 +1407,15 @@ router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Respons
         level: 'info',
       },
     });
+
+    // 同步重启调度器，使其感知 monitoringEnabled 变化
+    try {
+      const { restartMonitorScheduler } = await import('../services/monitorService');
+      restartMonitorScheduler();
+      logger.info({ userId, enabled }, '[toggle] 调度器已重启');
+    } catch (restartErr: any) {
+      logger.warn({ err: restartErr.message }, '[toggle] 调度器重启失败（不影响 toggle 结果）');
+    }
 
     res.json({ success: true, enabled });
   } catch (err) {

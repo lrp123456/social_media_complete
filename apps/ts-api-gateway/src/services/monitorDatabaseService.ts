@@ -516,6 +516,7 @@ export async function batchUpsertComments(
     content: string;
     nickname: string;
     head_img_url: string;
+    user_uid?: string;
     create_time: number;
     like_count: number;
     reply_count: number;
