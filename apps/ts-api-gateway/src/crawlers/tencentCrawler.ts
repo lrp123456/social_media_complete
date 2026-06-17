@@ -3,6 +3,9 @@ import { RequestInterceptor, HumanActions } from '@social-media/browser-core';
 import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
+import { getSelectorReader } from '../lib/selectorStore';
+import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 
 const logger = createLogger('crawler:tencent');
 
@@ -40,6 +43,7 @@ export type TencentCommentInfo = {
   replyCommentId?: string;      // 被回复的评论ID（子回复才有）
   replyContent?: string;        // 被回复的内容（子回复才有）
   replyNickname?: string;       // 被回复者昵称（子回复才有）
+  username?: string;            // 评论作者标识（用于 isAuthor 判断）
   exportId: string;             // 所属视频ID（本地注入）
   level: 1 | 2;                 // 1=一级评论, 2=子回复
   readFlag?: boolean;
@@ -78,6 +82,22 @@ export interface CheckResult {
   }>;
   riskControlDetected: boolean;
   riskControlInfo?: RiskControlDetection;
+}
+
+/**
+ * 视频号回复目标（与抖音 ReplyTarget / 快手 KuaishouReplyTarget 对齐）
+ * 用于 replyToComment 方法精确定位根评论或子评论
+ */
+export interface TencentReplyTarget {
+  commentCid: string;           // 评论 ID
+  text: string;                 // 评论正文
+  username: string;             // ★ 评论作者昵称（匹配主键）
+  level: 1 | 2;                 // 1=根评论, 2=子评论
+  subReplyCount?: number;       // ★ level=1：子评论数
+  rootText?: string;            // ★ level=2：所属根评论的正文
+  rootUsername?: string;        // ★ level=2：所属根评论的作者昵称
+  rootSubReplyCount?: number;   // ★ level=2：所属根评论的子评论数
+  createTime?: number;          // 仅日志/向后兼容
 }
 
 export type RiskControlDetection = {
@@ -585,6 +605,23 @@ export class TencentCrawler {
     // 获取拦截到的视频列表
     // 响应结构: { errCode, errMsg, data: { list: [...], totalCount, continueFlag, lastBuff } }
     const intercepted = await this.interceptor.waitForResponse(POST_LIST_PATTERN, 15000);
+    // 从拦截到的请求 payload 中提取 _log_finder_id（视频号作者标识）
+    let finderId: string | undefined;
+    try {
+      const reqBody = (intercepted as any)?.requestBody || (intercepted as any)?.requestPostData;
+      if (reqBody) {
+        const parsed = typeof reqBody === 'string' ? JSON.parse(reqBody) : reqBody;
+        finderId = parsed?._log_finder_id || undefined;
+      }
+    } catch (parseErr: any) {
+      logger.warn({ err: parseErr.message }, '[Phase1] Failed to parse post_list request body for finder_id');
+    }
+
+    if (finderId) {
+      await db.syncPlatformAuthorId(userId, finderId);
+      logger.info({ userId, finderId }, '[Phase1] Synced tencent finder_id as platform author ID');
+    }
+
     const videos: TencentVideoInfo[] = intercepted?.body?.data?.list || [];
 
     logger.info({ userId, videoCount: videos.length, intercepted: !!intercepted }, '[Phase1] Videos fetched');
@@ -827,6 +864,7 @@ export class TencentCrawler {
       replyCommentId: raw.replyCommentId,
       replyContent: raw.replyContent,
       replyNickname: raw.replyNickname,
+      username: raw.username || '',
       exportId,
       level,
       readFlag: raw.readFlag,
@@ -1094,6 +1132,10 @@ export class TencentCrawler {
       '[Phase3:Collect] Sub-reply expansion complete');
 
     // ── 步骤3: API 数据 → DB 格式 → 入库（纯 API，不解析 DOM）──
+    // 查询作者 ID 用于 isAuthor 判断
+    const tencentUser = await db.getUserById(userId);
+    const tencentAuthorId = tencentUser?.platformAuthorId;
+
     const dbComments: Map<string, any> = new Map(); // dedup by comment_id
     let subCount = 0;
 
@@ -1105,11 +1147,12 @@ export class TencentCrawler {
           content: apiRoot.commentContent,
           nickname: apiRoot.commentNickname,
           head_img_url: apiRoot.commentHeadurl || '',
+          user_uid: apiRoot.username || '',
           create_time: parseInt(apiRoot.commentCreatetime) || 0,
           like_count: apiRoot.commentLikeCount || 0,
           reply_count: (apiRoot.levelTwoComment || []).length,
           export_id: exportId,
-          is_author: false,
+          is_author: tencentAuthorId ? String(apiRoot.username) === String(tencentAuthorId) : false,
           level: 1 as const,
         });
       }
@@ -1121,11 +1164,12 @@ export class TencentCrawler {
             content: sub.commentContent,
             nickname: sub.commentNickname,
             head_img_url: sub.commentHeadurl || '',
+            user_uid: sub.username || '',
             create_time: parseInt(sub.commentCreatetime) || 0,
             like_count: sub.commentLikeCount || 0,
             reply_count: 0,
             export_id: exportId,
-            is_author: false,
+            is_author: tencentAuthorId ? String(sub.username) === String(tencentAuthorId) : false,
             level: 2 as const,
             root_id: cid,
             parent_id: sub.replyCommentId || cid,
@@ -1469,11 +1513,60 @@ export class TencentCrawler {
       }, videoTitle);
 
       if (rect) {
-        // 找到视频，通过 evaluate 在 shadow DOM 内直接点击
-        const cx = rect.x + rect.width / 2;
-        const cy = rect.y + rect.height / 2;
+        // 找到视频，先 scrollIntoView 确保完全可见，再用 CDP 坐标点击
+        // 先 scrollIntoView（page.evaluate 内执行）
+        await page.evaluate((title: string) => {
+          const sr = document.querySelector('wujie-app')?.shadowRoot;
+          if (!sr) return;
+          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
+          const target = feeds.find(f => {
+            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+            return t === title || t.includes(title.slice(0, 8));
+          });
+          if (target) (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, videoTitle);
+        await HumanActions.wait(page, 500, 1000);
+
+        // 重新获取滚动后的坐标
+        const newRect = await page.evaluate((title: string) => {
+          const sr = document.querySelector('wujie-app')?.shadowRoot;
+          if (!sr) return null;
+          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
+          const target = feeds.find(f => {
+            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+            return t === title || t.includes(title.slice(0, 8));
+          });
+          if (target) return target.getBoundingClientRect();
+          return null;
+        }, videoTitle);
+
+        const clickRect = newRect || rect;
+        const cx = clickRect.x + clickRect.width / 2;
+        const cy = clickRect.y + clickRect.height / 2;
         await HumanActions.cdpIdleMove(page, cx, cy);
-        await HumanActions.wait(page, 100, 300);
+        await HumanActions.wait(page, 200, 400);
+        await HumanActions.clickAtCoordinates(page, cx, cy);
+
+        // 等待评论列表加载（点击视频后需要时间渲染）
+        await HumanActions.wait(page, 3000, 5000);
+
+        // 验证是否切换成功（检查评论列表是否变化）
+        const commentListChanged = await page.evaluate((title: string) => {
+          const sr = document.querySelector('wujie-app')?.shadowRoot;
+          if (!sr) return false;
+          const activeFeed = sr.querySelector('.comment-feed-wrap.active-feed');
+          if (!activeFeed) return false;
+          const activeTitle = activeFeed.querySelector('.feed-title')?.textContent?.trim() || '';
+          return activeTitle === title || activeTitle.includes(title.slice(0, 8));
+        }, videoTitle);
+
+        if (commentListChanged) {
+          logger.info({ videoTitle }, '[Reply:SwitchVideo] Video switched successfully (verified)');
+          return true;
+        }
+
+        // 回退：如果 CDP 点击没生效，用 page.evaluate 直接点击
+        logger.warn({ videoTitle }, '[Reply:SwitchVideo] CDP click did not trigger switch, falling back to evaluate click');
         await page.evaluate((title: string) => {
           const sr = document.querySelector('wujie-app')?.shadowRoot;
           if (!sr) return;
@@ -1485,8 +1578,8 @@ export class TencentCrawler {
           if (target) (target as HTMLElement).click();
         }, videoTitle);
 
-        await HumanActions.wait(page, 2000, 3000);
-        logger.info({ videoTitle }, '[Reply:SwitchVideo] Video clicked successfully');
+        await HumanActions.wait(page, 3000, 5000);
+        logger.info({ videoTitle }, '[Reply:SwitchVideo] Video clicked via evaluate fallback');
         return true;
       }
 
@@ -1504,64 +1597,397 @@ export class TencentCrawler {
   }
 
   /**
-   * 拟人化回复评论
-   *
-   * 实际 DOM 结构（wujie shadow DOM，无 iframe）:
-   * - 回复图标: .action-item .weui-icon-outlined-comment (div, 不是 button)
-   * - 回复输入框: textarea.create-input (placeholder="回复 xxx：")
-   * - 发送按钮: .create-ft .tag-wrap.primary .tag-inner (文字"评论"，不是"发送")
-   * - 取消按钮: .create-ft .tag-wrap.cancel .tag-inner (文字"取消")
+   * 在 page 上下文注入 esbuild 留下的 __name helper（tsx 默认 keepNames: true 会注入）
+   * 必须在任何 page.evaluate 之前调用一次
    */
-  async replyToComment(
-    page: Page,
-    commentCid: string,
-    replyText: string,
-    commentText?: string,
-  ): Promise<boolean> {
-    logger.info({ commentCid, textLength: replyText.length }, '[Reply] Starting reply');
-
+  private async injectEsbuildPolyfill(page: Page): Promise<void> {
     try {
-      // 模拟人类思考时间
-      await HumanActions.thinkingPause(page, 800, 2000);
+      await page.evaluate(() => {
+        // @ts-ignore: 故意挂在 window 上
+        if (typeof (window as any).__name === 'undefined') {
+          (window as any).__name = (target: any, value: string) =>
+            Object.defineProperty(target, 'name', { value, configurable: true });
+        }
+      });
+    } catch {
+      // 注入失败不影响主流程
+    }
+  }
 
-      // 定位目标评论的 "回复" 按钮
-      // 注：视频号回复按钮是 .action-item（div, 不是 button）
-      // wujie shadow DOM 内操作，需用 page.evaluate 访问
-      const replyIconRect = await page.evaluate((params: { cid: string; text: string }) => {
-        const root = document.querySelector('wujie-app')?.shadowRoot;
-        if (!root) return null;
-        // 遍历所有评论项，按文本匹配目标评论
-        const commentItems = root.querySelectorAll('.comment-item-main');
-        for (const item of commentItems) {
-          const textEl = item.querySelector('.comment-content');
-          if (!textEl) continue;
-          // 按评论文本匹配（去除首尾空格后比较）
-          const itemText = (textEl.textContent || '').trim();
-          if (params.text && itemText !== params.text.trim()) continue;
-          // 找到对应评论的 action-list 中的回复图标
-          const replyIcon = item.querySelector('.action-list .action-item .weui-icon-outlined-comment');
-          if (replyIcon) {
-            const rect = replyIcon.getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  // ════════════════════════════════════════
+  // 回复辅助方法（定位根评论/子评论、展开子评论）
+  // ════════════════════════════════════════
+
+  /**
+   * 在根评论中定位回复图标的坐标
+   * 根评论 = .scroll-list > div > .comment-item > .comment-item-main
+   * 通过 username + text 精确匹配
+   */
+  private async findReplyIconInRootComment(
+    page: Page,
+    username: string,
+    text: string,
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const rect = await page.evaluate((params: { username: string; text: string }) => {
+      const apps = document.querySelectorAll('wujie-app');
+      for (const app of apps) {
+        const sr = app.shadowRoot;
+        if (!sr) continue;
+        const scrollList = sr.querySelector('.scroll-list');
+        if (!scrollList) continue;
+        const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+        for (const item of rootItems) {
+          const main = item.querySelector(':scope > .comment-item-main');
+          if (!main) continue;
+          const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+          const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+          if (uname === params.username && content === params.text) {
+            const replyIcon = main.querySelector('.action-icon.weui-icon-outlined-comment');
+            if (replyIcon) {
+              const r = replyIcon.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
             }
           }
         }
-        // 回退：找第一个可见的回复图标
-        const allReplyIcons = root.querySelectorAll('.action-item .weui-icon-outlined-comment');
-        for (const icon of allReplyIcons) {
-          const rect = icon.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }
+      return null;
+    }, { username, text });
+
+    if (rect) {
+      logger.info({ x: rect.x, y: rect.y, username, text: text.slice(0, 30) }, '[Reply] Found reply icon in root comment');
+    } else {
+      logger.warn({ username, text: text.slice(0, 30) }, '[Reply] Root comment not found by username+text');
+    }
+    return rect;
+  }
+
+  /**
+   * 在子评论中定位回复图标的坐标
+   * 流程：定位根评论 → 展开子评论 → 在子评论中匹配目标
+   */
+  private async findReplyIconInSubComment(
+    page: Page,
+    target: TencentReplyTarget,
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    const rootUsername = target.rootUsername || '';
+    const rootText = target.rootText || '';
+    const subUsername = target.username;
+    const subText = target.text;
+
+    // Step 1: 定位根评论并滚动到可见区域
+    const rootFound = await this.scrollRootCommentIntoView(page, rootUsername, rootText);
+    if (!rootFound) {
+      logger.warn({ rootUsername, rootText: rootText.slice(0, 30) }, '[Reply] Root comment not found for sub-reply');
+      return null;
+    }
+
+    // Step 2: 展开子评论（点击"展开更多回复"）
+    await this.expandSubRepliesForReply(page, rootUsername, rootText);
+
+    // Step 3: 在子评论中定位目标（遍历所有 wujie-app）
+    const rect = await page.evaluate((params: {
+      rootUsername: string; rootText: string;
+      subUsername: string; subText: string;
+    }) => {
+      const apps = document.querySelectorAll('wujie-app');
+      for (const app of apps) {
+        const sr = app.shadowRoot;
+        if (!sr) continue;
+        const scrollList = sr.querySelector('.scroll-list');
+        if (!scrollList) continue;
+        const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+        for (const item of rootItems) {
+          const main = item.querySelector(':scope > .comment-item-main');
+          if (!main) continue;
+          const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+          const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+          if (uname !== params.rootUsername || content !== params.rootText) continue;
+
+          // 找到根评论，在 .comment-reply-list 中找子评论
+          const replyList = item.querySelector(':scope > .comment-reply-list');
+          if (!replyList) continue;
+          const subItems = replyList.querySelectorAll(':scope > .comment-item');
+          for (const subItem of subItems) {
+            const subMain = subItem.querySelector(':scope > .comment-item-main');
+            if (!subMain) continue;
+            const subUname = subMain.querySelector('.comment-user-name')?.textContent?.trim() || '';
+            const subContent = subMain.querySelector('.comment-content')?.textContent?.trim() || '';
+            if (subUname === params.subUsername && subContent === params.subText) {
+              const replyIcon = subMain.querySelector('.action-icon.weui-icon-outlined-comment');
+              if (replyIcon) {
+                const r = replyIcon.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  return { x: r.x, y: r.y, width: r.width, height: r.height };
+                }
+              }
+            }
+          }
+        }
+      }
+      return null;
+    }, { rootUsername, rootText, subUsername, subText });
+
+    if (rect) {
+      logger.info({ x: rect.x, y: rect.y, subUsername, subText: subText.slice(0, 30) }, '[Reply] Found reply icon in sub-comment');
+    } else {
+      logger.warn({ subUsername, subText: subText.slice(0, 30) }, '[Reply] Sub-comment not found');
+    }
+    return rect;
+  }
+
+  /**
+   * 滚动评论列表找到目标根评论并使其可见
+   */
+  private async scrollRootCommentIntoView(
+    page: Page,
+    rootUsername: string,
+    rootText: string,
+  ): Promise<boolean> {
+    // 诊断：dump wujie-app 和评论结构信息
+    try {
+      const diag = await page.evaluate(() => {
+        const apps = document.querySelectorAll('wujie-app');
+        const info: any[] = [];
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) { info.push({ hasShadow: false }); continue; }
+          const sl = sr.querySelector('.scroll-list');
+          if (!sl) { info.push({ hasShadow: true, hasScrollList: false }); continue; }
+          const items = sl.querySelectorAll(':scope > div > .comment-item');
+          const firstMain = sl.querySelector('.comment-item-main');
+          const firstUname = firstMain?.querySelector('.comment-user-name')?.textContent?.trim() || '';
+          const firstContent = firstMain?.querySelector('.comment-content')?.textContent?.trim() || '';
+          info.push({
+            hasShadow: true, hasScrollList: true,
+            rootItemCount: items.length,
+            firstUname, firstContent: firstContent.slice(0, 50),
+          });
+        }
+        return info;
+      });
+      logger.info({ wujieApps: diag }, '[Reply] DOM diagnostic: wujie-app shadow roots');
+    } catch {}
+
+    const MAX_SCROLLS = 10;
+    for (let i = 0; i < MAX_SCROLLS; i++) {
+      const found = await page.evaluate((params: { username: string; text: string }) => {
+        const apps = document.querySelectorAll('wujie-app');
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) continue;
+          const scrollList = sr.querySelector('.scroll-list');
+          if (!scrollList) continue;
+          const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+          for (const item of rootItems) {
+            const main = item.querySelector(':scope > .comment-item-main');
+            if (!main) continue;
+            const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+            const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+            if (uname === params.username && content === params.text) {
+              const rect = main.getBoundingClientRect();
+              if (rect.top >= 0 && rect.bottom <= window.innerHeight) return true;
+              (main as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+              return true;
+            }
+          }
+        }
+        return false;
+      }, { username: rootUsername, text: rootText });
+
+      if (found) {
+        await HumanActions.wait(page, 800, 1500);
+        logger.info({ rootUsername, scrolls: i }, '[Reply] Root comment scrolled into view');
+        return true;
+      }
+
+      // 未找到，滚动加载更多评论
+      await this.scrollShadowContainer(page, '.feed-comment__wrp', 300);
+      await HumanActions.wait(page, 1500, 2500);
+    }
+    logger.warn({ rootUsername }, '[Reply] Root comment not found after scrolling');
+    return false;
+  }
+
+  /**
+   * 展开根评论的所有子评论（点击"展开更多回复"直到没有更多）
+   * 在根评论的 .comment-reply-list 内找 .load-more 按钮
+   */
+  private async expandSubRepliesForReply(
+    page: Page,
+    rootUsername: string,
+    rootText: string,
+  ): Promise<void> {
+    const MAX_EXPAND = 10;
+    for (let i = 0; i < MAX_EXPAND; i++) {
+      const btnRect = await page.evaluate((params: { username: string; text: string }) => {
+        const apps = document.querySelectorAll('wujie-app');
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) continue;
+          const scrollList = sr.querySelector('.scroll-list');
+          if (!scrollList) continue;
+          const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+          for (const item of rootItems) {
+            const main = item.querySelector(':scope > .comment-item-main');
+            if (!main) continue;
+            const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+            const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+            if (uname === params.username && content === params.text) {
+              // 找到根评论，在 .comment-reply-list 中找展开按钮
+              const replyList = item.querySelector(':scope > .comment-reply-list');
+              if (!replyList) return null;
+              const loadMore = replyList.querySelector('.load-more');
+              if (loadMore) {
+                const r = loadMore.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+                }
+              }
+              return null; // 没有展开按钮
+            }
           }
         }
         return null;
-      }, { cid: commentCid, text: commentText || '' });
+      }, { username: rootUsername, text: rootText });
 
-      if (!replyIconRect) {
-        logger.error({ commentCid }, '[Reply] Reply icon not found in shadow DOM');
+      if (!btnRect) {
+        logger.info({ expandRound: i }, '[Reply] No more expand buttons');
+        break;
+      }
+
+      // CDP 坐标点击展开按钮
+      await HumanActions.cdpIdleMove(page, btnRect.x, btnRect.y);
+      await HumanActions.wait(page, 200, 400);
+      await HumanActions.clickAtCoordinates(page, btnRect.x, btnRect.y);
+      logger.info({ expandRound: i, x: btnRect.x, y: btnRect.y }, '[Reply] Clicked expand button');
+      await HumanActions.wait(page, 2000, 3500);
+    }
+  }
+
+  /**
+   * 拟人化回复评论（支持根评论 level=1 和子评论 level=2）
+   *
+   * level=1：直接定位根评论 → 点击回复图标
+   * level=2：定位根评论 → 展开子评论 → 定位子评论 → 点击回复图标
+   *
+   * 实际 DOM 结构（wujie shadow DOM，无 iframe）:
+   * - 根评论容器: .scroll-list > div > .comment-item > .comment-item-main
+   * - 子评论容器: .comment-reply-list > .comment-item > .comment-item-main
+   * - 回复图标: .action-icon.weui-icon-outlined-comment
+   * - 展开按钮: .comment-reply-list > .load-more > .load-more__btn > span "展开更多回复"
+   * - 回复输入框: textarea 或 [contenteditable="true"]
+   * - 发送按钮: 文字"评论"或"发送"
+   */
+  async replyToComment(
+    page: Page,
+    target: TencentReplyTarget,
+    replyText: string,
+  ): Promise<boolean> {
+    const { commentCid, level, username, text } = target;
+    logger.info({ commentCid, level, username, textLength: replyText.length }, '[Reply] Starting reply');
+
+    // ── 调试模式初始化 ──
+    const debugEnabled = await isDebugModeEnabled();
+    let manifest: DebugManifest | null = null;
+    let sessionId = '';
+    let stepIdx = 0;
+
+    if (debugEnabled) {
+      sessionId = createReplySessionId({
+        text: target.text || target.commentCid,
+        level: target.level,
+        createTime: target.createTime || 0,
+      });
+      manifest = createManifest(sessionId, {
+        text: target.text || target.commentCid,
+        level: target.level,
+        createTime: target.createTime || 0,
+      });
+      logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
+    }
+
+    const snap = async (label: string, extra?: Record<string, any>) => {
+      if (manifest) {
+        stepIdx++;
+        await saveDebugSnapshot({ page, stepLabel: label, sessionId, stepIndex: stepIdx, manifest, extra });
+      }
+    };
+
+    try {
+      // ★ Bugfix: 注入 esbuild __name polyfill（tsx keepNames:true 会在 evaluate 函数体内注入 __name）
+      await this.injectEsbuildPolyfill(page);
+      await snap('reply_start');
+
+      // ★ Bugfix: 等待评论列表加载完成（shadow DOM 内的 .comment-item-main）
+      // 页面可能已经在评论管理 URL，但评论列表还没渲染
+      const commentListReady = await page.locator('wujie-app').locator('.comment-item-main').first().waitFor({ timeout: 15000 }).then(() => true).catch(() => false);
+      if (!commentListReady) {
+        logger.warn('[Reply] Comment list not loaded within 15s');
+        await snap('error', { message: 'Comment list not loaded' });
+        if (manifest) finishManifest(manifest, false);
         return false;
       }
+      logger.info('[Reply] Comment list loaded');
+
+      // 模拟人类思考时间
+      await HumanActions.thinkingPause(page, 800, 2000);
+
+      // 从 selectors.json 动态读取选择器，缺失时回退硬编码默认值
+      const reader = getSelectorReader();
+      const replyBtnSelectors = reader.getSelectorListWithFallback('tencent', 'buttons', 'btn_comment_reply', [
+        '.action-icon.weui-icon-outlined-comment',
+        '.action-list .action-item:nth-child(2) .action-icon',
+      ]);
+      const inputSelectors = reader.getSelectorListWithFallback('tencent', 'regions', 'reply_input', [
+        'textarea.create-input',
+        '.reply-textarea',
+      ]);
+      const submitSelectors = reader.getSelectorListWithFallback('tencent', 'buttons', 'btn_reply_submit', [
+        '.create-ft .tag-wrap.primary',
+        '.submit-reply-btn',
+      ]);
+
+      // ★ 使用辅助方法定位回复图标（区分根评论 level=1 / 子评论 level=2）
+      // 根评论：直接在 .scroll-list > div > .comment-item 中匹配 username+text
+      // 子评论：先定位根评论 → 展开"更多回复" → 在 .comment-reply-list 中匹配
+      const wujieRoot = page.locator('wujie-app');
+      let replyIconRect: { x: number; y: number; width: number; height: number } | null = null;
+
+      if (level === 1) {
+        replyIconRect = await this.findReplyIconInRootComment(page, username, text);
+      } else {
+        replyIconRect = await this.findReplyIconInSubComment(page, target);
+      }
+
+      // CSS 选择器回退（如果辅助方法未找到）
+      if (!replyIconRect) {
+        const cssReplySels = replyBtnSelectors.filter(s => !s.startsWith('text=') && !s.includes('getBy'));
+        for (const sel of cssReplySels) {
+          try {
+            const iconLocator = wujieRoot.locator(sel);
+            const cnt = await iconLocator.count();
+            if (cnt > 0) {
+              const box = await iconLocator.first().boundingBox();
+              if (box && box.width > 0) {
+                replyIconRect = { x: box.x, y: box.y, width: box.width, height: box.height };
+                logger.info({ sel, x: box.x, y: box.y }, '[Reply] Found via CSS fallback');
+                break;
+              }
+            }
+          } catch { continue; }
+        }
+      }
+
+      if (!replyIconRect) {
+        await snap('reply_icon_not_found');
+        if (manifest) finishManifest(manifest, false);
+        logger.error({ commentCid }, '[Reply] Reply icon not found');
+        return false;
+      }
+
+      await snap('reply_icon_found', { x: Math.round(replyIconRect.x), y: Math.round(replyIconRect.y) });
 
       // CDP 点击回复图标（shadow DOM 内的元素需用坐标点击）
       const replyClickX = replyIconRect.x + replyIconRect.width / 2;
@@ -1572,19 +1998,51 @@ export class TencentCrawler {
       // 等待输入框出现（点击回复按钮后才会出现）
       await HumanActions.wait(page, 800, 1500);
 
-      // 在 shadow DOM 中查找并点击回复输入框
-      const inputRect = await page.evaluate(() => {
-        const root = document.querySelector('wujie-app')?.shadowRoot;
-        if (!root) return null;
-        const textarea = root.querySelector('textarea.create-input');
-        if (textarea) {
-          const rect = textarea.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      // ★ 使用 Playwright locator API 查找输入框（textarea 或 contenteditable）
+      let inputRect: { x: number; y: number; width: number; height: number } | null = null;
+
+      // 策略 1：找 textarea 元素
+      try {
+        const textareaLocator = wujieRoot.locator('textarea');
+        if (await textareaLocator.first().isVisible()) {
+          const box = await textareaLocator.first().boundingBox();
+          if (box) {
+            inputRect = { x: box.x, y: box.y, width: box.width, height: box.height };
           }
         }
-        return null;
-      });
+      } catch {}
+
+      // 策略 2：找 contenteditable 元素
+      if (!inputRect) {
+        try {
+          const editableLocator = wujieRoot.locator('[contenteditable="true"]');
+          if (await editableLocator.first().isVisible()) {
+            const box = await editableLocator.first().boundingBox();
+            if (box) {
+              inputRect = { x: box.x, y: box.y, width: box.width, height: box.height };
+            }
+          }
+        } catch {}
+      }
+
+      // 策略 3：CSS 选择器回退
+      if (!inputRect) {
+        const cssInputSels = inputSelectors.filter(s => !s.startsWith('text=') && !s.includes('getBy'));
+        for (const sel of cssInputSels) {
+          try {
+            const inputLocator = wujieRoot.locator(sel);
+            if (await inputLocator.first().isVisible()) {
+              const box = await inputLocator.first().boundingBox();
+              if (box) {
+                inputRect = { x: box.x, y: box.y, width: box.width, height: box.height };
+                break;
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
 
       if (inputRect) {
         // 点击输入框获取焦点
@@ -1593,39 +2051,75 @@ export class TencentCrawler {
         await HumanActions.clickAtCoordinates(page, inputX, inputY);
         await HumanActions.wait(page, 300, 600);
       } else {
-        // 回退：直接 focus textarea
-        await page.evaluate(() => {
+        // 回退：直接 focus 输入框
+        await page.evaluate((params: { inputSels: string[] }) => {
           const root = document.querySelector('wujie-app')?.shadowRoot;
           if (!root) return;
-          const textarea = root.querySelector('textarea.create-input');
-          if (textarea) textarea.focus();
-        });
+          for (const sel of params.inputSels) {
+            if (sel.startsWith('text=') || sel.includes('getBy')) continue;
+            const el = root.querySelector(sel);
+            if (el) {
+              (el as HTMLElement).focus();
+              break;
+            }
+          }
+        }, { inputSels: inputSelectors });
         await HumanActions.wait(page, 200, 400);
       }
 
+      await snap('input_focused', { inputFound: !!inputRect });
+
       // 拟人化输入（safeCDPType 使用 CDP keyboard 事件，可穿透 shadow DOM）
       await HumanActions.safeCDPType(page, replyText);
-
       await HumanActions.wait(page, 500, 1200);
+      await snap('text_typed');
 
-      // 点击发送按钮（shadow DOM 内的 .create-ft .tag-wrap.primary）
-      const submitClicked = await page.evaluate(() => {
-        const root = document.querySelector('wujie-app')?.shadowRoot;
-        if (!root) return null;
-        const submitBtn = root.querySelector('.create-ft .tag-wrap.primary');
-        if (submitBtn) {
-          const rect = submitBtn.getBoundingClientRect();
-          if (rect.width > 0 && rect.height > 0) {
-            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      // ★ 使用 Playwright 文本匹配查找发送按钮（支持 shadow DOM）
+      let submitRect: { x: number; y: number; width: number; height: number } | null = null;
+
+      // 策略 1：用 getByText 找"发送"或"评论"按钮
+      for (const btnText of ['发送', '评论']) {
+        try {
+          const btn = wujieRoot.getByText(btnText, { exact: true });
+          if (await btn.count() > 0) {
+            for (let i = 0; i < await btn.count(); i++) {
+              if (await btn.nth(i).isVisible()) {
+                const box = await btn.nth(i).boundingBox();
+                if (box && box.width > 0) {
+                  submitRect = { x: box.x, y: box.y, width: box.width, height: box.height };
+                  logger.info({ btnText, x: box.x, y: box.y }, '[Reply] Found submit button via getByText');
+                  break;
+                }
+              }
+            }
+            if (submitRect) break;
+          }
+        } catch {}
+      }
+
+      // 策略 2：CSS 选择器回退
+      if (!submitRect) {
+        const cssSubmitSels = submitSelectors.filter(s => !s.startsWith('text=') && !s.includes('getBy'));
+        for (const sel of cssSubmitSels) {
+          try {
+            const submitLocator = wujieRoot.locator(sel);
+            if (await submitLocator.first().isVisible()) {
+              const box = await submitLocator.first().boundingBox();
+              if (box) {
+                submitRect = { x: box.x, y: box.y, width: box.width, height: box.height };
+                break;
+              }
+            }
+          } catch {
+            continue;
           }
         }
-        return null;
-      });
+      }
 
       let submitted = false;
-      if (submitClicked) {
-        const submitX = submitClicked.x + submitClicked.width / 2;
-        const submitY = submitClicked.y + submitClicked.height / 2;
+      if (submitRect) {
+        const submitX = submitRect.x + submitRect.width / 2;
+        const submitY = submitRect.y + submitRect.height / 2;
         await HumanActions.cdpIdleMove(page, submitX, submitY);
         await HumanActions.clickAtCoordinates(page, submitX, submitY);
         submitted = true;
@@ -1633,8 +2127,24 @@ export class TencentCrawler {
         // 回退：Enter 键发送 (CDP keypress 穿透 shadow DOM)
         logger.warn('[Reply] Submit button not found, trying Enter key');
         await HumanActions.cdpKeyPress(page, 'Enter', 'Enter', 13);
+        await HumanActions.wait(page, 500, 1000);
+        // ★ Bugfix: 验证 Enter 键是否真的触发了发送（输入框是否消失）
+        const inputStillVisible = await page.evaluate(() => {
+          const root = document.querySelector('wujie-app')?.shadowRoot;
+          if (!root) return false;
+          const createWrap = root.querySelector('.comment-create-wrap');
+          return createWrap && (createWrap as HTMLElement).offsetHeight > 0;
+        });
+        if (inputStillVisible) {
+          logger.error({ commentCid }, '[Reply] Enter key fallback FAILED - input area still visible');
+          await snap('error', { message: 'Enter key fallback failed - input area still visible' });
+          if (manifest) finishManifest(manifest, false);
+          return false; // ★ 不再静默返回 true
+        }
         submitted = true;
       }
+
+      await snap('submit_clicked', { submitted });
 
       // 等待发送完成
       await HumanActions.wait(page, 1500, 3000);
@@ -1645,8 +2155,10 @@ export class TencentCrawler {
         if (!root) return true; // 无法确认，假设成功
         const createWrap = root.querySelector('.comment-create-wrap');
         // 如果回复输入区域消失，说明发送成功
-        return !createWrap || createWrap.offsetHeight === 0;
+        return !createWrap || (createWrap as HTMLElement).offsetHeight === 0;
       });
+
+      await snap('verify_result', { replySent, submitted });
 
       if (replySent) {
         logger.info({ commentCid, submitted }, '[Reply] Reply sent successfully');
@@ -1657,8 +2169,11 @@ export class TencentCrawler {
       // 模拟发送后的人类行为
       await HumanActions.betweenActionsPause(page);
 
+      if (manifest) finishManifest(manifest, true);
       return true;
     } catch (err: any) {
+      await snap('error', { message: err.message });
+      if (manifest) finishManifest(manifest, false);
       logger.error({ error: err.message, commentCid }, '[Reply] Reply failed');
       return false;
     }
