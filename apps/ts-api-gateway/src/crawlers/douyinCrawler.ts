@@ -344,7 +344,8 @@ export class DouyinCrawler {
     const allItems = this.interceptor.getCollectedItems(pattern);
 
     // 从 raw responses 中提取 authorUid（parseVideoItem 会剥离 author 字段）
-    // 探测所有 extractItems 已知的形状路径
+    // 抖音 item_list 实际字段：item.user_id（字符串），不是嵌套的 author 对象
+    // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
     for (const resp of rawResponses) {
@@ -362,10 +363,12 @@ export class DouyinCrawler {
         [];
       for (const raw of rawItems) {
         const id = raw.aweme_id || raw.item_id || raw.id;
-        if (id && raw.author?.uid) {
+        // item_list: user_id 是直接字段；work_list: 可能在 author.uid
+        const uid = raw.user_id || raw.author?.uid || raw.author_id;
+        if (id && uid) {
           awemeIdToAuthor.set(String(id), {
-            uid: String(raw.author.uid),
-            nickname: raw.author.nickname || '',
+            uid: String(uid),
+            nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
           });
         }
       }
