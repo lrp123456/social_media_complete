@@ -4,8 +4,9 @@
 
 import { Queue, Worker, Job } from 'bullmq';
 import { getRedis } from '../lib/redis';
-import { WindowMutex } from '../lib/redlock';
+import { WindowMutex, abortPromise, type MutexHandle } from '../lib/redlock';
 import { createLogger } from '../lib/logger';
+import { getTraceId } from '../middleware/trace';
 import type { PlatformName } from '@social-media/shared-config';
 import type { PublishTask } from '../platforms/types';
 
@@ -86,6 +87,7 @@ export function cleanupCancelledJob(bullJobId: string): void {
 
 const MONITOR_TIMEOUT_MS = 10 * 60 * 1000; // 10 分钟
 const PUBLISH_TIMEOUT_MS = 15 * 60 * 1000;  // 15 分钟
+const REPLY_TIMEOUT_MS = 5 * 60 * 1000;     // 5 分钟（回复任务最长 5 分钟）
 
 // ============================================================
 // BullMQ Worker（统一处理所有任务类型）
@@ -102,16 +104,32 @@ export const platformWorker = new Worker<PlatformTask>(
       const { executeReplyAction } = await import('./monitorService');
       logger.info(`💬 回复任务开始: ${task.taskId} → ${task.platform}:${task.userId}`);
 
-      let lock: any = null;
+      let handle: MutexHandle | null = null;
       try {
-        lock = await WindowMutex.acquireWithBackoff(task.windowId, 30_000); // 回复最多等30秒锁
-        await executeReplyAction(task, task.replyData);
+        // ★ 锁获取不超时，只会排队等待（无限重试直到拿到锁）
+        // 业务的等待时长由 BullMQ 的任务级 TTL 控制
+        handle = await WindowMutex.acquireWithBackoff(task.windowId, {
+          taskId: task.taskId,
+          taskType: 'reply',
+          traceId: getTraceId(),
+        });
+
+        // ★ 业务超时机制：5 分钟内必须完成，超时后业务被丢弃，但 finally 会主动释放锁
+        // 这样即使业务卡住，也不会因为锁的 TTL 提前过期而导致并发操作
+        await Promise.race([
+          executeReplyAction(task, task.replyData),
+          abortPromise(handle.signal),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`回复超时: 超过 ${REPLY_TIMEOUT_MS / 1000}s`)), REPLY_TIMEOUT_MS),
+          ),
+        ]);
         logger.info(`✅ 回复完成: ${task.taskId}`);
       } catch (err: any) {
         logger.error(`❌ 回复失败: ${task.taskId} - ${err.message}`);
         throw err;
       } finally {
-        if (lock) await WindowMutex.release(lock, task.windowId).catch(() => {});
+        // ★ 业务完成（成功/失败/超时）后立刻主动释放锁
+        if (handle) await handle.release().catch(() => {});
       }
       return;
     }
@@ -126,9 +144,13 @@ export const platformWorker = new Worker<PlatformTask>(
 
       logger.info(`📤 发布任务开始: ${task.taskId} → ${task.platform}`);
 
-      let lock: any = null;
+      let handle: MutexHandle | null = null;
       try {
-        lock = await WindowMutex.acquireWithBackoff(task.windowId);
+        handle = await WindowMutex.acquireWithBackoff(task.windowId, {
+          taskId: task.taskId,
+          taskType: 'publish',
+          traceId: getTraceId(),
+        });
 
         const { getPublisher } = await import('../platforms');
         const { prisma } = await import('../lib/prisma');
@@ -136,6 +158,7 @@ export const platformWorker = new Worker<PlatformTask>(
         const publisher = getPublisher(task.platform);
         const result = await Promise.race([
           publisher.publish(task.publishPayload, true), // skipLock=true: unifiedQueue 已持有锁
+          abortPromise(handle.signal),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`发布超时: 超过 ${PUBLISH_TIMEOUT_MS / 1000}s`)), PUBLISH_TIMEOUT_MS),
           ),
@@ -163,7 +186,7 @@ export const platformWorker = new Worker<PlatformTask>(
         logger.error(`❌ 发布失败: ${task.taskId} - ${err.message}`);
         throw err;
       } finally {
-        if (lock) await WindowMutex.release(lock, task.windowId).catch(() => {});
+        if (handle) await handle.release().catch(() => {});
       }
     }
 
@@ -186,11 +209,15 @@ export const platformWorker = new Worker<PlatformTask>(
         }
       };
 
-      let lock: any = null;
+      let handle: MutexHandle | null = null;
       try {
         checkCancelled();
         await job.updateProgress({ phase: '等待', step: '正在获取窗口锁', percent: 5 });
-        lock = await WindowMutex.acquireWithBackoff(task.windowId);
+        handle = await WindowMutex.acquireWithBackoff(task.windowId, {
+          taskId: task.taskId,
+          taskType: 'monitor',
+          traceId: getTraceId(),
+        });
 
         checkCancelled();
         const { executeMonitorCheck, reportMonitorComplete, sendMonitorNotification, generateSuggestionsForNewComments } = await import('./monitorService');
@@ -204,6 +231,7 @@ export const platformWorker = new Worker<PlatformTask>(
 
         const result = await Promise.race([
           executeMonitorCheck(task, onProgress, checkCancelled),
+          abortPromise(handle.signal),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`任务超时: 超过 ${MONITOR_TIMEOUT_MS / 1000}s`)), MONITOR_TIMEOUT_MS),
           ),
@@ -336,9 +364,9 @@ export const platformWorker = new Worker<PlatformTask>(
           await sendMonitorNotification(task.userId, task.platform, 'risk_detected').catch(() => {});
         }
       } finally {
-        if (lock) {
-          await WindowMutex.release(lock, task.windowId).catch((releaseErr) => {
-            logger.warn({ taskId: task.taskId, windowId: task.windowId, error: releaseErr.message }, '锁释放异常（将由TTL自动过期）');
+        if (handle) {
+          await handle.release().catch((releaseErr: any) => {
+            logger.warn({ taskId: task.taskId, windowId: task.windowId, error: releaseErr.message }, '锁释放异常');
           });
         }
       }
@@ -348,6 +376,11 @@ export const platformWorker = new Worker<PlatformTask>(
     connection: getRedis() as any,
     concurrency: 3,
     limiter: { max: 10, duration: 60_000 },
+    // BullMQ 任务锁（与窗口锁 WindowMutex 不同）
+    // 控制 Worker 多久没续约就把任务判定为 stalled 重新入队
+    // 浏览器自动化操作（滚动、展开评论等）可能持续数分钟不调用 updateProgress
+    // 设置 30 分钟匹配最长任务（兜底）
+    lockDuration: 30 * 60 * 1000,
     stalledInterval: 120_000,
   },
 );
