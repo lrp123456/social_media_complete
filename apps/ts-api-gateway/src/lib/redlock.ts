@@ -192,7 +192,12 @@ export class WindowMutex {
       attempt++;
       try {
         const lock = await WindowMutex.tryAcquire(windowId);
-        await WindowMutex.writeOwnerHash(windowId, owner);
+        try {
+          await WindowMutex.writeOwnerHash(windowId, owner);
+        } catch (writeErr) {
+          await lock.release().catch(() => {});
+          throw writeErr;
+        }
 
         const abortController = new AbortController();
         const heartbeat = WindowMutex.startHeartbeat(windowId, abortController);
@@ -268,28 +273,39 @@ export class WindowMutex {
     if (windowId) {
       keys = [WindowMutex.ownerKey(windowId)];
     } else {
-      keys = await redis.keys(`${WindowMutex.LOCK_PREFIX}*:owner`);
+      const pattern = `${WindowMutex.LOCK_PREFIX}*:owner`;
+      let cursor = '0';
+      keys = [];
+      do {
+        const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        keys.push(...batch);
+      } while (cursor !== '0');
     }
 
     const snapshots: LockOwnerSnapshot[] = [];
     for (const key of keys) {
-      const data = await redis.hgetall(key);
-      if (!data || Object.keys(data).length === 0) continue;
+      try {
+        const data = await redis.hgetall(key);
+        if (!data || Object.keys(data).length === 0) continue;
 
-      const wid = key.replace(WindowMutex.LOCK_PREFIX, '').replace(':owner', '');
-      const ttlRemainingMs = await redis.pttl(WindowMutex.lockKey(wid));
+        const wid = key.replace(WindowMutex.LOCK_PREFIX, '').replace(':owner', '');
+        const ttlRemainingMs = await redis.pttl(WindowMutex.lockKey(wid));
 
-      snapshots.push({
-        windowId: wid,
-        taskId: data.taskId,
-        taskType: data.taskType,
-        traceId: data.traceId,
-        host: data.host,
-        pid: Number(data.pid),
-        startedAt: Number(data.startedAt),
-        ageMs: now - Number(data.startedAt),
-        ttlRemainingMs,
-      });
+        snapshots.push({
+          windowId: wid,
+          taskId: data.taskId,
+          taskType: data.taskType,
+          traceId: data.traceId,
+          host: data.host,
+          pid: Number(data.pid),
+          startedAt: Number(data.startedAt),
+          ageMs: now - Number(data.startedAt),
+          ttlRemainingMs,
+        });
+      } catch {
+        // 跳过无法读取的 key（可能已过期或网络抖动）
+      }
     }
 
     return snapshots;

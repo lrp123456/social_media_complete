@@ -39,7 +39,6 @@ beforeEach(() => {
   jest.clearAllMocks();
   jest.useFakeTimers();
   // 每次 extend 返回一个新 mock lock（redlock.extend 返回新 Lock）
-  let extendCallCount = 0;
   mockRedis.expire.mockResolvedValue(1);
   mockRedis.hset.mockResolvedValue(1);
   mockRedis.del.mockResolvedValue(1);
