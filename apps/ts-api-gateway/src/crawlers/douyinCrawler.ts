@@ -1651,6 +1651,10 @@ export class DouyinCrawler {
           // 首次采集：保存快照 + isNew=0
           // ════════════════════════════════════════
 
+          // 查询作者 ID 用于 isAuthor 判断
+          const firstCrawlUser = await db.getUserById(item._userId!);
+          const firstCrawlAuthorId = firstCrawlUser?.platformAuthorId;
+
           logger.info({ awemeId: item.awemeId, snapshotCount: currentSnapshots.length }, '[Tree] Phase3a: saving root snapshots');
           await db.upsertRootCommentCounts(item.awemeId, currentSnapshots.map(s => ({
             cid: s.cid, replyCount: s.replyCount,
@@ -1671,24 +1675,33 @@ export class DouyinCrawler {
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
+            is_author?: boolean;
           }> = [];
 
           for (const root of rootComments) {
+            const rootUid = root.user?.uid || '';
+            const rootIsAuthor = (root.label_type === 1)
+              || (firstCrawlAuthorId ? String(rootUid) === String(firstCrawlAuthorId) : false);
             allFlat.push({
               cid: root.cid, text: root.text || '',
-              user_nickname: root.user?.nickname || '', user_uid: root.user?.uid || '',
+              user_nickname: root.user?.nickname || '', user_uid: rootUid,
               digg_count: root.digg_count || 0, create_time: root.create_time,
               reply_id: '0', level: 1,
+              is_author: rootIsAuthor,
             });
           }
           for (const sub of subReplies) {
             const replyId = String(sub.reply_id ?? '0');
+            const subUid = sub.user?.uid || '';
+            const subIsAuthor = (sub.label_type === 1)
+              || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
             allFlat.push({
               cid: sub.cid, text: sub.text || '',
-              user_nickname: sub.user?.nickname || '', user_uid: sub.user?.uid || '',
+              user_nickname: sub.user?.nickname || '', user_uid: subUid,
               digg_count: sub.digg_count || 0, create_time: sub.create_time,
               reply_id: replyId, rootId: replyId, parentId: replyId,
               level: 2, replyToName: sub.reply_to_username || '',
+              is_author: subIsAuthor,
             });
           }
 
@@ -1739,14 +1752,29 @@ export class DouyinCrawler {
               subComments: [],
             };
 
+            // 过滤作者评论（label_type 优先，UID 兜底）
+            const isRootAuthor = (root.label_type === 1)
+              || (firstCrawlAuthorId ? String(rootNode.userUid) === String(firstCrawlAuthorId) : false);
+            const nonAuthorSubs = groupSubs.filter(s => {
+              const subUid = s.userUid;
+              const subRaw = subReplies.find((r: any) => String(r.cid) === s.cid);
+              const subLabelType = subRaw?.label_type ?? 0;
+              const subIsAuthor = (subLabelType === 1)
+                || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
+              return !subIsAuthor;
+            });
+
             const groupNew: CommentNode[] = [
-              rootNode,
-              ...groupSubs,
+              ...(isRootAuthor ? [] : [rootNode]),
+              ...nonAuthorSubs,
             ];
+
+            // 如果整个 group 全是作者评论，跳过该 group
+            if (groupNew.length === 0) continue;
 
             firstCrawlGroups.push({
               rootComment: rootNode,
-              subReplies: groupSubs,
+              subReplies: nonAuthorSubs,
               newInGroup: groupNew,
             });
           }
