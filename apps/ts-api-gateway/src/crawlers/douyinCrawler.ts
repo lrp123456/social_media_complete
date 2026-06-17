@@ -3276,19 +3276,13 @@ export class DouyinCrawler {
         }, { x: sendBtn.x, y: sendBtn.y });
 
         if (isBlockedByService) {
-          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，通过 JS 隐藏');
+          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，滚动页面避开');
 
-          // ★ Bugfix: 之前用 ctx.mouse.clickAt(100, 300) 盲点关闭客服窗口，
-          // 但 (100, 300) 落在左侧边栏菜单上，击中"内容管理"导致页面从
-          // interactive/comment 导航到 content/manage，回复面板丢失，发送失败。
-          // 改为用 JS 直接隐藏 creator-help-bar 元素，不触发任何点击。
-          await page.evaluate(function() {
-            var els = document.querySelectorAll('[class*="creator-help-bar"]');
-            for (var i = 0; i < els.length; i++) {
-              (els[i] as HTMLElement).style.display = 'none';
-            }
+          // 客服按钮固定在右下角无法关闭，滚动一次让发送按钮移出遮挡区域
+          await HumanActions.withCDPContext(page, async (ctx) => {
+            await ctx.mouse.dispatchWheel(0, 200, 500, 400);
           });
-          await HumanActions.wait(page, 500, 1000);
+          await HumanActions.wait(page, 800, 1500);
 
           // 重新获取发送按钮坐标
           const newSendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
@@ -3336,9 +3330,9 @@ export class DouyinCrawler {
           if (newSendBtn) {
             sendBtn.x = newSendBtn.x;
             sendBtn.y = newSendBtn.y;
-            logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 隐藏客服窗口后重新定位发送按钮');
+            logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 滚动后重新定位发送按钮');
           } else {
-            // 隐藏客服窗口后仍找不到发送按钮 — 检查回复面板是否还在
+            // 滚动后仍找不到发送按钮 — 检查回复面板是否还在
             const panelExists = await page.evaluate(function() {
               var editables = document.querySelectorAll('[contenteditable="true"]');
               for (var i = 0; i < editables.length; i++) {
@@ -3353,7 +3347,7 @@ export class DouyinCrawler {
               return false;
             }
             // 回复面板还在但找不到发送按钮 — 放弃坐标点击，走选择器回退
-            logger.warn('[Reply] 隐藏客服窗口后仍无法定位发送按钮，改用选择器回退');
+            logger.warn('[Reply] 滚动后仍无法定位发送按钮，改用选择器回退');
             sendBtn = null;
           }
         }
