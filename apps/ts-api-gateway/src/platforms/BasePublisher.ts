@@ -6,12 +6,10 @@
 import { Browser, Page } from 'patchright';
 import { HumanActions, BrowserManager, SelectorReader } from '@social-media/browser-core';
 import type { PublishFlowRules } from '@social-media/browser-core';
-import { WindowMutex } from '../lib/redlock';
 import { uploadToOSS, ossKey } from '../lib/oss';
 import { createLogger } from '../lib/logger';
 import { getBrowserManager } from '../lib/browserManager';
 import { getSelectorReader } from '../lib/selectorStore';
-import type Redlock from 'redlock';
 import type {
   PublishTask,
   PublishResult,
@@ -39,7 +37,6 @@ export abstract class BasePublisher {
   protected state: PublisherState = 'idle';
   protected browser: Browser | null = null;
   protected page: Page | null = null;
-  protected lock: Redlock.Lock | null = null;
 
   // ============================================================
   // 抽象方法 - 子类必须实现
@@ -100,7 +97,7 @@ export abstract class BasePublisher {
       // Step 1: 获取窗口互斥锁（防止并发操控同一指纹浏览器）
       // 如果调用方（unifiedQueue）已持有锁，跳过
       if (!skipLock) {
-        this.lock = await WindowMutex.acquireWithBackoff(task.windowId);
+        throw new Error('BasePublisher must be called with skipLock=true from unifiedQueue. Direct lock management is not supported.');
       }
 
       // Step 2: 初始化浏览器
@@ -192,16 +189,6 @@ export abstract class BasePublisher {
     return this.state;
   }
 
-  /** 释放互斥锁 */
-  async releaseLock(): Promise<void> {
-    if (this.lock && this.page) {
-      // 获取 windowId 需要通过 browser context
-      const windowId = this.page.context(); // 简化处理
-      await WindowMutex.release(this.lock, windowId as any);
-      this.lock = null;
-    }
-  }
-
   // ============================================================
   // 内部方法
   // ============================================================
@@ -220,17 +207,8 @@ export abstract class BasePublisher {
 
   /** 清理资源 — 只释放锁，不关闭浏览器（窗口由指纹浏览器管理） */
   protected async cleanup(): Promise<void> {
-    // 释放锁
-    if (this.lock) {
-      try {
-        await this.lock.release();
-      } catch {
-        // 锁可能已过期
-      }
-      this.lock = null;
-    }
-
     // CDP 模式下不关闭浏览器 — 窗口属于 RoxyBrowser，保持打开供复用
+    // 锁的释放由调用方（unifiedQueue）在 finally 中统一处理
     this.browser = null;
     this.page = null;
     this.state = 'idle';
