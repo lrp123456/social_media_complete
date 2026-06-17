@@ -3333,22 +3333,115 @@ export class DouyinCrawler {
             logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 滚动后重新定位发送按钮');
           } else {
             // 滚动后仍找不到发送按钮 — 检查回复面板是否还在
-            const panelExists = await page.evaluate(function() {
+            const panelCheck = await page.evaluate(function() {
               var editables = document.querySelectorAll('[contenteditable="true"]');
+              var visibleEditable: Element | null = null;
               for (var i = 0; i < editables.length; i++) {
                 var r = editables[i].getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) return true;
+                if (r.width > 0 && r.height > 0) {
+                  visibleEditable = editables[i];
+                  break;
+                }
               }
-              return false;
+              if (!visibleEditable) return { exists: false };
+              var inputText = (visibleEditable.textContent || '').trim();
+              // 检查发送按钮是否存在但 disabled
+              var sendBtns = document.querySelectorAll('button');
+              var sendDisabled = false;
+              var sendExists = false;
+              for (var j = 0; j < sendBtns.length; j++) {
+                if ((sendBtns[j].textContent || '').trim() === '发送') {
+                  sendExists = true;
+                  if ((sendBtns[j] as any).disabled) sendDisabled = true;
+                }
+              }
+              return { exists: true, inputText: inputText, sendExists: sendExists, sendDisabled: sendDisabled, editable: visibleEditable };
             });
-            if (!panelExists) {
+
+            if (!panelCheck.exists) {
               logger.error('[Reply] 回复面板已关闭，无法发送');
               if (manifest) finishManifest(manifest, false);
               return false;
             }
-            // 回复面板还在但找不到发送按钮 — 放弃坐标点击，走选择器回退
-            logger.warn('[Reply] 滚动后仍无法定位发送按钮，改用选择器回退');
-            sendBtn = null;
+
+            // 发送按钮 disabled = React 状态没更新（CDP 打字没触发 onChange）
+            // dispatch input event 让 React 感知到文字
+            if (panelCheck.sendDisabled && panelCheck.inputText) {
+              logger.info({ inputText: panelCheck.inputText.slice(0, 20) }, '[Reply] 发送按钮 disabled，尝试触发 React input 事件');
+              await page.evaluate(function() {
+                var editables = document.querySelectorAll('[contenteditable="true"]');
+                for (var i = 0; i < editables.length; i++) {
+                  var r = editables[i].getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) {
+                    (editables[i] as HTMLElement).focus();
+                    editables[i].dispatchEvent(new Event('input', { bubbles: true }));
+                    editables[i].dispatchEvent(new Event('change', { bubbles: true }));
+                    break;
+                  }
+                }
+              });
+              await HumanActions.wait(page, 500, 1000);
+
+              // 重试查找发送按钮
+              const retrySendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
+                function findReplyBtn(): Element | null {
+                  var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+                  var best: Element | null = null, bestDist = Infinity;
+                  for (var i = 0; i < items.length; i++) {
+                    if ((items[i].textContent || '').trim() !== '回复') continue;
+                    var r = items[i].getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                    var d = Math.hypot(cx - params.btnX, cy - params.btnY);
+                    if (d < bestDist) { bestDist = d; best = items[i]; }
+                  }
+                  return best;
+                }
+                var replyBtn = findReplyBtn();
+                if (!replyBtn) return null;
+                var panels = document.querySelectorAll('[class*="reply-content-"]');
+                var targetPanel: Element | null = null;
+                for (var i = 0; i < panels.length; i++) {
+                  var p = panels[i];
+                  var r = p.getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  var rel = replyBtn.compareDocumentPosition(p);
+                  if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                  targetPanel = p;
+                  break;
+                }
+                if (!targetPanel) return null;
+                var btns = targetPanel.querySelectorAll('button');
+                for (var j = 0; j < btns.length; j++) {
+                  var t = (btns[j].textContent || '').trim();
+                  if (t === '发送' && !(btns[j] as any).disabled) {
+                    var br = btns[j].getBoundingClientRect();
+                    return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+                  }
+                }
+                return null;
+              }, { btnX: btnCoords.x, btnY: btnCoords.y });
+
+              if (retrySendBtn) {
+                sendBtn.x = retrySendBtn.x;
+                sendBtn.y = retrySendBtn.y;
+                logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 触发 input 事件后发送按钮已启用');
+              } else {
+                logger.error('[Reply] 触发 input 事件后发送按钮仍 disabled，回复失败');
+                if (manifest) finishManifest(manifest, false);
+                return false;
+              }
+            } else if (!panelCheck.inputText) {
+              // 文字丢失
+              logger.error('[Reply] 滚动后回复文字丢失，无法发送');
+              if (manifest) finishManifest(manifest, false);
+              return false;
+            } else {
+              // 其他原因找不到发送按钮
+              logger.error('[Reply] 滚动后无法定位发送按钮（未知原因），回复失败');
+              if (manifest) finishManifest(manifest, false);
+              return false;
+            }
           }
         }
       }
@@ -3363,18 +3456,33 @@ export class DouyinCrawler {
         submitClicked = true;
         logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 通过坐标点击了发送按钮');
       } else {
-        // 回退：用 selectors.json 的 reply_send_btn
-        const reader = getSelectorReader();
-        const sendSels = reader.getSelectorListWithFallback('douyin', 'buttons', 'reply_send_btn', [
-          '[class*="reply-content"] button:has-text("发送"):not([disabled])',
-        ]);
-        for (const s of sendSels) {
-          submitClicked = await HumanActions.cdpClick(page, s, { timeout: 3000 });
-          if (submitClicked) { logger.info({ selector: s }, '[Reply] Submit clicked via selector'); break; }
-        }
-        if (!submitClicked) {
-          submitClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
-          if (submitClicked) logger.info('[Reply] Submit clicked via text');
+        // 回退：用 evaluate 精确匹配文本为"发送"且未 disabled 的按钮
+        const fallbackBtn = await page.evaluate(function() {
+          var panels = document.querySelectorAll('[class*="reply-content-"]');
+          for (var i = 0; i < panels.length; i++) {
+            var r = panels[i].getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var btns = panels[i].querySelectorAll('button');
+            for (var j = 0; j < btns.length; j++) {
+              var t = (btns[j].textContent || '').trim();
+              if (t === '发送' && !(btns[j] as any).disabled) {
+                var br = btns[j].getBoundingClientRect();
+                if (br.width > 0 && br.height > 0) {
+                  return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+                }
+              }
+            }
+          }
+          return null;
+        });
+        if (fallbackBtn) {
+          await HumanActions.withCDPContext(page, async (ctx) => {
+            await ctx.mouse.moveTo({ x: fallbackBtn.x, y: fallbackBtn.y });
+            await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+            await ctx.mouse.clickAt(fallbackBtn.x, fallbackBtn.y);
+          });
+          submitClicked = true;
+          logger.info({ x: fallbackBtn.x, y: fallbackBtn.y }, '[Reply] 通过文本匹配点击了发送按钮');
         }
       }
       if (!submitClicked) logger.warn('[Reply] Submit not found, but text was typed');
