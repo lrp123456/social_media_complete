@@ -28,14 +28,10 @@ import {
   useMonitorTaskStatuses,
   useSchedulerStatus,
   useTriggerAllMonitor,
-  useActiveMonitorTasks,
-  useCancelMonitorTask,
-  useCancelAllMonitorTasks,
   type MonitorAccount,
   type MonitorAccountDetail,
   type NewCommentVideo,
   type MonitorTaskStatus,
-  type ActiveTasksData,
   usePinterestScrape,
   usePinterestStatus,
   useOperators,
@@ -816,7 +812,6 @@ function MonitorTab() {
   );
   const { data: taskStatusesData } = useMonitorTaskStatuses(monitorTaskIds);
   const { data: schedulerData } = useSchedulerStatus();
-  const { data: activeTasksData } = useActiveMonitorTasks();
 
   const triggerMonitor = useTriggerMonitor();
   const { data: videoCommentsData } = useVideoComments(selectedVideoId || '');
@@ -827,8 +822,6 @@ function MonitorTab() {
   const { data: debugModeData } = useDebugMode();
   const updateDebugMode = useUpdateDebugMode();
   const isDebugMode = debugModeData?.enabled ?? false;
-  const cancelTask = useCancelMonitorTask();
-  const cancelAllTasks = useCancelAllMonitorTasks();
 
   const accounts: MonitorAccount[] = useMemo(() => {
     if (Array.isArray(accountsData)) return accountsData;
@@ -1085,117 +1078,6 @@ function MonitorTab() {
               </div>
             </div>
           </div>
-
-          {/* ── Active Queue (常驻) ── */}
-          {(() => {
-            const ad = activeTasksData;
-            const hasTasks = ad && ad.total > 0;
-            if (!hasTasks) return null;
-
-            return (
-              <div className="mb-6 bg-surface border border-outline-variant rounded-xl overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-3 border-b border-outline-variant bg-surface-container">
-                  <MaterialIcon icon="play_circle" size="sm" className="text-primary" />
-                  <h3 className="text-label-lg text-on-surface font-semibold">执行队列</h3>
-                  <span className="text-label-sm text-on-surface-variant">({ad.running} 运行 / {ad.queued} 等待)</span>
-                  <span className="flex items-center gap-1 ml-auto">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
-                    </span>
-                    <span className="text-[10px] text-primary font-medium">实时</span>
-                  </span>
-                  <button
-                    onClick={async () => {
-                      if (!confirm('确定取消所有执行中的任务？')) return;
-                      try {
-                        const res = await cancelAllTasks.mutateAsync();
-                        addToast((res as any)?.message || '已取消所有任务', 'success');
-                      } catch (e: any) {
-                        addToast(e?.response?.data?.error || e?.message || '取消失败', 'error');
-                      }
-                    }}
-                    disabled={cancelAllTasks.isPending}
-                    className="ml-2 flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
-                  >
-                    <MaterialIcon icon="stop" size="xs" />
-                    {cancelAllTasks.isPending ? '取消中...' : '取消全部'}
-                  </button>
-                </div>
-
-                <div className="p-3 space-y-3">
-                  {ad.windows.map((win) => (
-                    <div key={win.windowId} className="border border-outline-variant/50 rounded-lg overflow-hidden">
-                      <div className="px-3 py-2 bg-surface-container-low border-b border-outline-variant/30 flex items-center gap-2">
-                        <MaterialIcon icon="open_in_new" size="sm" className="text-on-surface-variant" />
-                        <span className="text-label-sm text-on-surface-variant font-mono">
-                          窗口 {win.windowId.slice(0, 12)}
-                        </span>
-                        <span className="text-[10px] text-outline ml-auto">
-                          {win.tasks.length} 任务 · {win.tasks.filter(t => t.status === 'running').length} 执行中
-                        </span>
-                      </div>
-                      <div className="divide-y divide-outline-variant/30">
-                        {win.tasks.map((task) => {
-                          const platformConfig = MONITOR_PLATFORM_CONFIG[task.platform] || MONITOR_PLATFORM_FALLBACK;
-                          const progress = task.progress;
-                          return (
-                            <div key={task.taskId} className="px-3 py-2.5">
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <div className={cn('w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold', platformConfig.bg, platformConfig.text)}>
-                                    {(task.platform).charAt(0)}
-                                  </div>
-                                  <span className="text-label-sm text-on-surface font-medium">{task.platform}</span>
-                                  {task.status === 'running' && (
-                                    <span className="text-[10px] text-primary font-medium animate-pulse">运行中</span>
-                                  )}
-                                  {task.status === 'queued' && (
-                                    <span className="text-[10px] text-on-surface-variant">等待中</span>
-                                  )}
-                                </div>
-                                <button
-                                  onClick={async () => {
-                                    if (!confirm(`确定取消此${task.status === 'running' ? '运行中' : '等待中'}的任务？`)) return;
-                                    try {
-                                      const res = await cancelTask.mutateAsync(task.taskId);
-                                      addToast((res as any)?.message || '任务已取消', 'success');
-                                    } catch (e: any) {
-                                      addToast(e?.response?.data?.error || e?.message || '取消失败', 'error');
-                                    }
-                                  }}
-                                  disabled={cancelTask.isPending}
-                                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
-                                  title="取消此任务"
-                                >
-                                  <MaterialIcon icon="close" size="xs" />
-                                  取消
-                                </button>
-                              </div>
-                              {task.status === 'running' && progress && (
-                                <div className="mt-1.5 ml-8">
-                                  <div className="flex items-center gap-2 mb-0.5">
-                                    <span className="text-[10px] font-semibold text-primary bg-primary/10 px-1 py-0.5 rounded">{progress.phase}</span>
-                                    <span className="text-[10px] text-on-surface-variant">{progress.step}</span>
-                                  </div>
-                                  {progress.detail && (
-                                    <p className="text-[9px] text-on-surface-variant/70 mb-1">{progress.detail}</p>
-                                  )}
-                                  <div className="w-full bg-outline-variant/30 rounded-full h-1">
-                                    <div className="h-full bg-primary rounded-full transition-all duration-500 ease-out" style={{ width: `${progress.percent}%` }} />
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
 
           {/* ── Update Queue ── */}
           {showQueue && monitorTaskIds.length > 0 && (() => {

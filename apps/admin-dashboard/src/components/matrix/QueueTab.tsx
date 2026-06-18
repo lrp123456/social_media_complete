@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useActiveQueueTasks, useQueueHistory } from '../../hooks/useApi';
+import { useCancelMonitorTask, useCancelAllMonitorTasks } from '../../hooks/useApi';
 import {
   TASK_TYPE_CONFIG,
   type QueueTask,
@@ -23,6 +24,9 @@ export default function QueueTab() {
     taskType: historyTaskType || undefined,
     status: historyStatus || undefined,
   });
+
+  const cancelTask = useCancelMonitorTask();
+  const cancelAllTasks = useCancelAllMonitorTasks();
 
   if (selectedExecutionId) {
     return (
@@ -61,7 +65,23 @@ export default function QueueTab() {
       {/* 活跃任务 */}
       {activeTasks.length > 0 && (
         <div className="mb-6">
-          <h2 className="text-title-md font-semibold mb-3">实时活跃</h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-title-md font-semibold">实时活跃</h2>
+            <button
+              onClick={async () => {
+                if (!confirm('确定取消所有执行中的任务？')) return;
+                try {
+                  await cancelAllTasks.mutateAsync();
+                } catch (e: any) {
+                  alert(e?.response?.data?.error || e?.message || '取消失败');
+                }
+              }}
+              disabled={cancelAllTasks.isPending}
+              className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+            >
+              {cancelAllTasks.isPending ? '取消中...' : '取消全部'}
+            </button>
+          </div>
           <div className="space-y-2">
             {activeTasks.map((task: QueueTask) => {
               const config = TASK_TYPE_CONFIG[task.taskType];
@@ -84,9 +104,22 @@ export default function QueueTab() {
                       </span>
                       <span className="text-label-md font-semibold">{task.platform}</span>
                     </div>
-                    <span className="text-label-sm text-on-surface-variant">
-                      {task.status === 'running' ? '▶ 执行中' : '⏳ 排队中'}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-label-sm text-on-surface-variant">
+                        {task.status === 'running' ? '▶ 执行中' : '⏳ 排队中'}
+                      </span>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (!confirm(`确定取消此${task.status === 'running' ? '运行中' : '等待中'}的任务？`)) return;
+                          cancelTask.mutate(task.taskId);
+                        }}
+                        disabled={cancelTask.isPending}
+                        className="px-2 py-1 rounded text-[10px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+                      >
+                        取消
+                      </button>
+                    </div>
                   </div>
                   {percent > 0 && (
                     <div>
