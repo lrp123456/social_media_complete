@@ -9,7 +9,7 @@ import { submitPublishTask, publishQueue } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
 import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, markJobCancelled, cancelledJobIds } from '../services/monitorService';
-import { enqueueReply } from '../services/unifiedQueue';
+import { enqueueReply, platformQueue } from '../services/unifiedQueue';
 
 const router = Router();
 const logger = createLogger('routes:matrix');
@@ -1636,6 +1636,126 @@ router.get('/bgm', async (_req: Request, res: Response) => {
     res.json({ success: true, data: tracks });
   } catch (err) {
     handleError(res, logger, err, '获取 BGM 列表失败');
+  }
+});
+
+// ============================================================
+// 执行队列 API
+// ============================================================
+
+/** 获取活跃任务列表（统一三种任务类型） */
+router.get('/queue/active', async (_req: Request, res: Response) => {
+  try {
+    const [active, waiting, delayed] = await Promise.all([
+      platformQueue.getJobs(['active']),
+      platformQueue.getJobs(['waiting']),
+      platformQueue.getJobs(['delayed']),
+    ]);
+
+    const allJobs = [...active, ...waiting, ...delayed];
+    const seen = new Set<string>();
+    const tasks: any[] = [];
+
+    for (const job of allJobs) {
+      const bullJobId = job.id;
+      const data = job.data as any;
+      const taskId = data.taskId || bullJobId || '';
+      if (seen.has(taskId)) continue;
+      seen.add(taskId);
+
+      let progress: any = null;
+      try {
+        const p = await job.progress;
+        if (p && typeof p === 'object' && 'phase' in p) progress = p;
+      } catch {}
+
+      // 尝试从 DB 读取 execution 记录
+      let executionId: string | undefined;
+      let phaseIndex: number | undefined;
+      let totalPhases: number | undefined;
+      try {
+        const exec = await prisma.taskExecution.findFirst({
+          where: { taskId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, phaseIndex: true, totalPhases: true },
+        });
+        if (exec) {
+          executionId = exec.id;
+          phaseIndex = exec.phaseIndex ?? undefined;
+          totalPhases = exec.totalPhases ?? undefined;
+        }
+      } catch {}
+
+      tasks.push({
+        executionId,
+        taskId,
+        taskType: data.taskType || 'unknown',
+        platform: data.platform || 'unknown',
+        status: await job.isActive() ? 'running' : 'queued',
+        phaseIndex,
+        totalPhases,
+        progress,
+      });
+    }
+
+    const running = tasks.filter(t => t.status === 'running').length;
+    res.json({
+      success: true,
+      data: { total: tasks.length, running, queued: tasks.length - running, tasks },
+    });
+  } catch (err) {
+    handleError(res, logger, err, '获取队列活跃任务失败');
+  }
+});
+
+/** 获取历史执行记录 */
+router.get('/queue/history', async (req: Request, res: Response) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
+    const taskType = req.query.taskType as string | undefined;
+    const status = req.query.status as string | undefined;
+
+    const where: any = {};
+    if (taskType) where.taskType = taskType;
+    if (status) where.status = status;
+
+    const [items, total] = await Promise.all([
+      prisma.taskExecution.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        select: {
+          id: true, taskId: true, taskType: true, platform: true, userId: true,
+          status: true, currentPhase: true, phaseIndex: true, totalPhases: true,
+          progressPercent: true, startedAt: true, completedAt: true, durationMs: true,
+          errorMessage: true, isDebugMode: true, createdAt: true,
+        },
+      }),
+      prisma.taskExecution.count({ where }),
+    ]);
+
+    res.json({ success: true, data: { items, total, page, limit } });
+  } catch (err) {
+    handleError(res, logger, err, '获取队列历史失败');
+  }
+});
+
+/** 获取单个执行详情（含 steps） */
+router.get('/queue/executions/:id', async (req: Request, res: Response) => {
+  try {
+    const execution = await prisma.taskExecution.findUnique({
+      where: { id: req.params.id as string },
+      include: { steps: { orderBy: { stepIndex: 'asc' } } },
+    });
+    if (!execution) {
+      res.status(404).json({ success: false, error: '执行记录不存在' });
+      return;
+    }
+    res.json({ success: true, data: execution });
+  } catch (err) {
+    handleError(res, logger, err, '获取执行详情失败');
   }
 });
 
