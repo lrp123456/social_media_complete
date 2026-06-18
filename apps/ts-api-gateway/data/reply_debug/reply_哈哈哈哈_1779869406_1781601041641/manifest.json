@@ -1,0 +1,51 @@
+{
+  "sessionId": "reply_哈哈哈哈_1779869406_1781601041641",
+  "startTime": "2026-06-16T09:10:41.641Z",
+  "target": {
+    "text": "哈哈哈哈",
+    "level": 1,
+    "createTime": 1779869406
+  },
+  "steps": [
+    {
+      "step": 1,
+      "label": "reply_start",
+      "timestamp": "2026-06-16T09:10:42.679Z",
+      "htmlFile": "01_reply_start_1781601042528.html",
+      "screenshotFile": "01_reply_start_1781601042528.png",
+      "url": "https://creator.douyin.com/creator-micro/interactive/comment"
+    },
+    {
+      "step": 2,
+      "label": "scroll_to_top",
+      "timestamp": "2026-06-16T09:10:46.045Z",
+      "htmlFile": "02_scroll_to_top_1781601045916.html",
+      "screenshotFile": "02_scroll_to_top_1781601045916.png",
+      "url": "https://creator.douyin.com/creator-micro/interactive/comment"
+    },
+    {
+      "step": 3,
+      "label": "scroll_round_1",
+      "timestamp": "2026-06-16T09:10:46.173Z",
+      "htmlFile": "03_scroll_round_1_1781601046046.html",
+      "screenshotFile": "03_scroll_round_1_1781601046046.png",
+      "url": "https://creator.douyin.com/creator-micro/interactive/comment"
+    },
+    {
+      "step": 4,
+      "label": "error",
+      "timestamp": "2026-06-16T09:10:46.310Z",
+      "htmlFile": "04_error_1781601046178.html",
+      "screenshotFile": "04_error_1781601046178.png",
+      "url": "https://creator.douyin.com/creator-micro/interactive/comment",
+      "extra": {
+        "message": "page.evaluate: ReferenceError: __name is not defined\n    at eval (eval at evaluate (:302:30), <anonymous>:1:712)\n    at UtilityScript.evaluate (<anonymous>:304:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+      }
+    }
+  ],
+  "result": {
+    "success": false,
+    "totalSteps": 4,
+    "elapsedMs": 4669
+  }
+}

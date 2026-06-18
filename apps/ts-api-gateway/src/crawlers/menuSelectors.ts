@@ -422,6 +422,24 @@ export function getSelectorChain(
 }
 
 // ---------------------------------------------------------------------------
+// Key → (category, name) resolution for effectiveness tracking
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve a crawler-style dot key to its SelectorReader (category, name) tuple.
+ * Used by menuNavigator to pass correct identity to reportClickResult().
+ * Returns null if the key is not in CRAWLER_KEY_MAP for the given platform.
+ */
+export function resolveCrawlerKey(
+  key: string,
+  platform: Platform = 'douyin',
+): { category: SelectorCategory; name: string } | null {
+  const platformMap = CRAWLER_KEY_MAP[platform];
+  if (!platformMap) return null;
+  return platformMap[key] || null;
+}
+
+// ---------------------------------------------------------------------------
 // Legacy aliases (delegate to the new implementations)
 // ---------------------------------------------------------------------------
 

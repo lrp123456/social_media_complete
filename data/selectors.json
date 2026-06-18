@@ -1,6 +1,6 @@
 {
-  "version": "2.2.0",
-  "updatedAt": "2026-06-09T12:00:00.000000Z",
+  "version": "2.3.0",
+  "updatedAt": "2026-06-16T12:00:00.000000Z",
   "platforms": {
     "douyin": {
       "flowRules": {
@@ -670,6 +670,30 @@
           ],
           "selectorType": "css",
           "description": "抖音评论区--回复发送按钮（Semi Design 主按钮，空内容时带 disabled class）"
+        },
+        "comment_reply_btn": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"item-\"]:has-text(\"回复\")",
+          "fallbacks": [
+            "[role=\"button\"]:has-text(\"回复\")",
+            "div:text(\"回复\")"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理页面 — 评论下的「回复」按钮（page.evaluate 中按位置过滤找距离目标最近的）"
+        },
+        "reply_send_btn": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"reply-content\"] button.douyin-creator-interactive-button-primary:not([class*=\"disabled\"])",
+          "fallbacks": [
+            "[class*=\"reply-content\"] button:has-text(\"发送\"):not([disabled])",
+            "[class*=\"reply-content\"] [role=\"button\"]:has-text(\"发送\")"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论区 — 回复面板的发送按钮（仅未 disabled 时）"
         }
       },
       "regions": {
@@ -872,13 +896,13 @@
           "purposes": [
             "monitor"
           ],
-          "primary": "[class*='container-sXKyMs']",
+          "primary": "[class*='container-']",
           "fallbacks": [
-            "[class*='container-']",
+            "div:has([class*=\"avatar-\"]):has([class*=\"content-\"])",
             "[data-cid]"
           ],
           "selectorType": "css",
-          "description": "抖音评论区--评论容器（data-cid 已失效，优先使用 class 模糊匹配 + 文本匹配定位）"
+          "description": "抖音评论区--评论容器（用稳定前缀，data-cid 已失效）"
         },
         "region_reply_input": {
           "purposes": [
@@ -886,7 +910,7 @@
           ],
           "primary": "[class*=\"reply-content\"] div[contenteditable=\"true\"]",
           "fallbacks": [
-            "div[contenteditable=\"true\"].input-d24X73",
+            "[class*=\"input-\"][contenteditable=\"true\"]",
             "div[contenteditable=\"true\"]"
           ],
           "selectorType": "css",
@@ -903,6 +927,89 @@
           ],
           "selectorType": "css",
           "description": "抖音侧边栏滚动容器"
+        },
+        "comment_root_container": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"container-\"]",
+          "fallbacks": [
+            "div:has([class*=\"avatar-\"]):has([class*=\"content-\"])",
+            "[class*=\"comment-wrapper\"]",
+            "[class*=\"comment-item\"]"
+          ],
+          "selectorType": "css",
+          "description": "抖音评论管理页面 — 根评论/子评论容器（用稳定前缀 + 结构兜底）"
+        },
+        "comment_username": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"username-\"]",
+          "fallbacks": [
+            "[class*=\"user-name\"]"
+          ],
+          "selectorType": "css",
+          "description": "评论用户名（用稳定前缀 username-，不依赖 hash 后缀）"
+        },
+        "comment_time": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"time-\"]",
+          "fallbacks": [
+            "[class*='comment-time']"
+          ],
+          "selectorType": "css",
+          "description": "评论时间（仅日志用）"
+        },
+        "comment_content_text": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"comment-content-text\"]",
+          "fallbacks": [
+            "[class*=\"comment-text\"]",
+            "[class*=\"content-text\"]"
+          ],
+          "selectorType": "css",
+          "description": "评论正文（用稳定前缀）"
+        },
+        "comment_load_more": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "getByText(/^查看\\\\d+条回复$/)",
+          "fallbacks": [
+            "getByText('收起')",
+            "getByText(/^查看\\\\d+条回复$/)"
+          ],
+          "selectorType": "text",
+          "description": "查看N条回复 / 收起 按钮（纯文本匹配，不依赖 class）"
+        },
+        "reply_content_panel": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "[class*=\"reply-content-\"]",
+          "fallbacks": [
+            "div:has(> [class*=\"input-\"])",
+            "div:has(> div > [class*=\"input-\"])"
+          ],
+          "selectorType": "css",
+          "description": "回复面板（点击回复后出现的容器；用稳定前缀，page.evaluate 中再用位置过滤找到'回复按钮之后的第一个'）"
+        },
+        "reply_input": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": "div[class*=\"input-\"][contenteditable=\"true\"]",
+          "fallbacks": [
+            "[class*=\"reply-content\"] [contenteditable=\"true\"]",
+            "[contenteditable=\"true\"][placeholder^=\"回复\"]"
+          ],
+          "selectorType": "css",
+          "description": "回复输入框（contenteditable；用稳定前缀 + placeholder 兜底）"
         }
       },
       "textboxes": {

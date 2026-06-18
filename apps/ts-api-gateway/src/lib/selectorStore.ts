@@ -14,11 +14,51 @@ import { createLogger } from './logger';
 const logger = createLogger('selector-store');
 
 // Minimal embedded default — only used when data/selectors.json is missing or invalid
+// Contains at least the critical navigation selectors so the system stays functional
 const FALLBACK_CONFIG: SelectorConfig = {
   version: '2.1.0',
   updatedAt: new Date().toISOString(),
   platforms: {
-    douyin: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} },
+    douyin: {
+      menus: {
+        menu_interaction: {
+          purposes: ['monitor'],
+          primary: 'getByRole("menuitem", name="互动管理")',
+          fallbacks: ['#douyin-creator-master-menu-nav-interaction:visible'],
+          selectorType: 'role',
+        },
+        menu_comment_manage_new: {
+          purposes: ['monitor'],
+          primary: 'getByRole("menuitem", name="评论管理")',
+          fallbacks: ['#douyin-creator-master-menu-nav-comment_manage_new:visible'],
+          selectorType: 'role',
+        },
+      },
+      buttons: {
+        comment_reply_btn: {
+          purposes: ['monitor'],
+          primary: 'div[class*="item-"]:has-text("回复")',
+          fallbacks: ['[role="button"]:has-text("回复")', 'div:text("回复")'],
+          selectorType: 'css',
+        },
+        reply_send_btn: {
+          purposes: ['monitor'],
+          primary: '[class*="reply-content"] button.douyin-creator-interactive-button-primary:not([class*="disabled"])',
+          fallbacks: ['[class*="reply-content"] button:has-text("发送")'],
+          selectorType: 'css',
+        },
+      },
+      regions: {
+        comment_root_container: {
+          purposes: ['monitor'],
+          primary: 'div[class*="container-"]',
+          fallbacks: ['div[class*="comment-list"]'],
+          selectorType: 'css',
+        },
+      },
+      textboxes: {},
+      flowRules: {},
+    },
     kuaishou: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} },
     xiaohongshu: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} },
   },
@@ -126,6 +166,53 @@ function validateConfig(raw: unknown): ValidationIssue[] {
   return issues;
 }
 
+/**
+ * Check if a selector entry contains any purposes outside the valid set.
+ */
+function hasInvalidPurposes(entry: Record<string, unknown>): boolean {
+  if (!Array.isArray(entry.purposes)) return true;
+  return entry.purposes.some((p: unknown) => !VALID_PURPOSES.has(p as string));
+}
+
+/**
+ * Strip entries with invalid purposes from the config, keeping everything else intact.
+ * This is more resilient than hard-falling-back to FALLBACK_CONFIG when only a few
+ * entries have issues (e.g. a new purpose value not yet in the enum).
+ */
+function sanitizeConfig(raw: unknown): SelectorConfig {
+  const cfg = raw as Record<string, unknown>;
+  const platforms = cfg.platforms as Record<string, Record<string, Record<string, unknown>>>;
+  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown> }> = {};
+
+  let removedCount = 0;
+  for (const [plat, pVal] of Object.entries(platforms || {})) {
+    const p = pVal as Record<string, unknown>;
+    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} };
+    for (const cat of VALID_CATEGORIES) {
+      const entries = (p[cat] || {}) as Record<string, unknown>;
+      for (const [name, eVal] of Object.entries(entries)) {
+        const e = eVal as Record<string, unknown>;
+        if (hasInvalidPurposes(e)) {
+          logger.warn({ platform: plat, category: cat, name, purposes: e.purposes }, 'sanitizeConfig: removing entry with invalid purpose');
+          removedCount++;
+        } else {
+          out[cat][name] = eVal;
+        }
+      }
+    }
+    sanitized[plat] = out as any;
+  }
+
+  const result: SelectorConfig = {
+    version: (typeof cfg.version === 'string' ? cfg.version : FALLBACK_CONFIG.version) as any,
+    updatedAt: new Date().toISOString(),
+    platforms: sanitized as any,
+  };
+
+  logger.warn({ removedEntries: removedCount, validPlatforms: Object.keys(sanitized).length }, 'sanitizeConfig: removed entries with invalid purposes');
+  return result;
+}
+
 function loadFromDisk(): SelectorConfig {
   if (!existsSync(SELECTOR_FILE)) {
     logger.warn('selectors.json not found, using defaults');
@@ -147,11 +234,11 @@ function loadFromDisk(): SelectorConfig {
   }
   const issues = validateConfig(parsed);
   if (issues.length > 0) {
-    logger.error(
+    logger.warn(
       { issues: issues.slice(0, 20), totalIssues: issues.length, schemaFile: SCHEMA_FILE },
-      'selectors.json failed schema validation, falling back to defaults',
+      'selectors.json has validation issues — sanitising instead of falling back to empty defaults',
     );
-    return JSON.parse(JSON.stringify(FALLBACK_CONFIG));
+    return sanitizeConfig(parsed);
   }
   const config = parsed as SelectorConfig;
   logger.info(

@@ -3,7 +3,6 @@
 import { useState, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { MaterialIcon } from '@/components/ui/MaterialIcon';
-import api from '@/lib/api';
 import {
   useSelectorConfig,
   useSelectorEffectiveness,
@@ -11,6 +10,7 @@ import {
   useDeleteSelector,
 } from '@/hooks/useApi';
 import type { SelectorEntry, SelectorEffectivenessStats } from '@/hooks/useApi';
+import FlowView from './FlowView';
 
 // ─── 常量 ───
 
@@ -27,12 +27,6 @@ const SELECTOR_TYPE_LABELS: Record<string, string> = {
 };
 
 // ─── 辅助函数 ───
-
-function strategyLabel(strategy: string): string {
-  if (strategy === 'primary') return 'Primary';
-  if (strategy.startsWith('fallback-')) return strategy.replace('fallback-', '').toUpperCase();
-  return strategy;
-}
 
 function statusColor(stat: SelectorEffectivenessStats | null): { dot: string; text: string; bg: string } {
   if (!stat || stat.totalAttempts === 0) return { dot: 'bg-slate-400', text: 'text-slate-400', bg: 'bg-slate-50' };
@@ -60,6 +54,8 @@ export default function SelectorConfigPage() {
   } | null>(null);
   const [adding, setAdding] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' } | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'flow'>('list');
+  const [showDisabled, setShowDisabled] = useState(false);
 
   const showToast = (msg: string, type: 'success' | 'error') => {
     setToast({ msg, type });
@@ -89,7 +85,7 @@ export default function SelectorConfigPage() {
       const catData = plat[cat] as Record<string, SelectorEntry> | undefined;
       if (!catData) continue;
       for (const [name, entry] of Object.entries(catData)) {
-        if (!entry.enabled && entry.enabled !== undefined) continue;
+        if (!showDisabled && !entry.enabled && entry.enabled !== undefined) continue;
         if (purposeFilter !== 'all' && !entry.purposes.includes(purposeFilter)) continue;
         if (search) {
           const q = search.toLowerCase();
@@ -100,7 +96,7 @@ export default function SelectorConfigPage() {
       }
     }
     return result;
-  }, [config, platform, categoryFilter, purposeFilter, search]);
+  }, [config, platform, categoryFilter, purposeFilter, search, showDisabled]);
 
   // ── 统计 ──
   const failedCount = useMemo(() => {
@@ -115,6 +111,23 @@ export default function SelectorConfigPage() {
     }
     return c;
   }, [filteredEntries, effMap, platform]);
+
+  // ── 平台计数 (for tab badges) ──
+  const platformCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!config?.platforms) return counts;
+    for (const p of PLATFORMS) {
+      const plat = config.platforms[p];
+      if (!plat) { counts[p] = 0; continue; }
+      let total = 0;
+      for (const cat of CATEGORIES) {
+        const catData = plat[cat] as Record<string, SelectorEntry> | undefined;
+        if (catData) total += Object.keys(catData).length;
+      }
+      counts[p] = total;
+    }
+    return counts;
+  }, [config]);
 
   // ── 编辑弹窗 ──
   const handleSaveEdit = async () => {
@@ -228,15 +241,48 @@ export default function SelectorConfigPage() {
               key={p}
               onClick={() => setPlatform(p)}
               className={cn(
-                'px-3.5 py-2 rounded-lg text-label-md font-medium transition-all',
+                'px-3.5 py-2 rounded-lg text-label-md font-medium transition-all flex items-center gap-1.5',
                 platform === p
                   ? 'bg-primary text-on-primary shadow-sm'
                   : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high',
               )}
             >
               {PLATFORM_LABELS[p]}
+              <span className={cn(
+                'text-[10px] px-1 py-px rounded-full font-bold',
+                platform === p ? 'bg-white/20' : 'bg-outline-variant/40',
+              )}>
+                {platformCounts[p] || 0}
+              </span>
             </button>
           ))}
+        </div>
+        <div className="w-px h-8 bg-outline-variant/60" />
+
+        {/* 视图切换 */}
+        <div className="flex bg-surface-container rounded-xl p-1 gap-0.5">
+          <button
+            onClick={() => setViewMode('list')}
+            className={cn(
+              'px-3 py-2 rounded-lg text-label-md font-medium transition-all flex items-center gap-1',
+              viewMode === 'list'
+                ? 'bg-surface-container-high text-on-surface shadow-sm'
+                : 'text-on-surface-variant hover:text-on-surface',
+            )}
+          >
+            <MaterialIcon icon="menu" size="xs" />列表
+          </button>
+          <button
+            onClick={() => setViewMode('flow')}
+            className={cn(
+              'px-3 py-2 rounded-lg text-label-md font-medium transition-all flex items-center gap-1',
+              viewMode === 'flow'
+                ? 'bg-surface-container-high text-on-surface shadow-sm'
+                : 'text-on-surface-variant hover:text-on-surface',
+            )}
+          >
+            <MaterialIcon icon="monitoring" size="xs" />流程
+          </button>
         </div>
         <div className="w-px h-8 bg-outline-variant/60" />
 
@@ -274,6 +320,17 @@ export default function SelectorConfigPage() {
           />
         </div>
 
+        {/* 显示禁用 */}
+        <label className="flex items-center gap-1.5 cursor-pointer flex-shrink-0">
+          <input
+            type="checkbox"
+            checked={showDisabled}
+            onChange={(e) => setShowDisabled(e.target.checked)}
+            className="rounded"
+          />
+          <span className="text-label-sm text-on-surface-variant">显示禁用</span>
+        </label>
+
         {/* 新建按钮 */}
         <button
           onClick={() => {
@@ -292,7 +349,15 @@ export default function SelectorConfigPage() {
         </button>
       </div>
 
-      {/* ── 选择器列表 ── */}
+      {/* ── 选择器内容区 ── */}
+      {viewMode === 'flow' ? (
+        <FlowView
+          platform={platform}
+          entries={filteredEntries}
+          effMap={effMap}
+          onEdit={(e) => setEditing(e)}
+        />
+      ) : (
       <div className="space-y-3">
         {filteredEntries.length === 0 && (
           <div className="text-center py-16 text-on-surface-variant">
@@ -385,6 +450,7 @@ export default function SelectorConfigPage() {
           );
         })}
       </div>
+      )}
 
       {/* ── 编辑/新建弹窗 ── */}
       {editing && (

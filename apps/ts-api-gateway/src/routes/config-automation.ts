@@ -77,8 +77,11 @@ router.get('/selectors', (req: Request, res: Response) => {
       if (!data) return res.status(404).json({ success: false, error: `平台不存在: ${platform}` });
       return res.json({ success: true, data });
     }
+    // Query filters
+    const categoryFilter = String(req.query.category || '');
+    const purposeFilter = String(req.query.purpose || '');
     // 展平所有选择器为前端友好的列表格式
-    const flatResult: Array<{
+    let flatResult: Array<{
       platform: string; category: string; name: string;
       primary: string; fallbacks: string[]; purposes: string[];
       selectorType: string; description: string; enabled: boolean; updatedAt: string;
@@ -100,6 +103,8 @@ router.get('/selectors', (req: Request, res: Response) => {
         }
       }
     }
+    if (categoryFilter) flatResult = flatResult.filter((s) => s.category === categoryFilter);
+    if (purposeFilter) flatResult = flatResult.filter((s) => s.purposes.includes(purposeFilter));
     res.json({ success: true, data: flatResult });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -165,16 +170,28 @@ router.put('/selectors/flow-rules', (req: Request, res: Response) => {
   }
 });
 
-/** PUT — 新增或更新选择器 */
+/** PUT — 新增或更新选择器 (deprecated: use PUT /selectors/:platform/:categoryKey instead) */
 router.put('/selectors', (req: Request, res: Response) => {
+  res.set('X-Deprecated', 'true');
+  res.set('X-Successor', 'PUT /selectors/:platform/:categoryKey');
   try {
-    const { platform, category, name, purposes, primary, fallbacks, selectorType, description } = req.body;
-    if (!platform || !category || !name || !primary) {
-      return res.status(400).json({ success: false, error: '缺少必填字段: platform, category, name, primary' });
+    const { platform, category, name, purposes, primary, fallbacks, selectorType, description, enabled, filterTag, filterText, scopeKey } = req.body;
+    const errors: string[] = [];
+    if (!platform) errors.push('platform is required');
+    if (!category) errors.push('category is required');
+    if (!name) errors.push('name is required');
+    if (!primary) errors.push('primary is required');
+    const validCategories: SelectorCategory[] = ['menus', 'buttons', 'regions', 'textboxes'];
+    if (category && !validCategories.includes(category)) errors.push(`invalid category: ${category}`);
+    const validPurposes = ['publish', 'monitor'] as const;
+    if (Array.isArray(purposes)) {
+      const invalid = purposes.filter((p: string) => !(validPurposes as readonly string[]).includes(p));
+      if (invalid.length > 0) errors.push(`invalid purposes: ${invalid.join(', ')}`);
     }
-    const validCategories = ['menus', 'buttons', 'regions', 'textboxes'];
-    if (!validCategories.includes(category)) {
-      return res.status(400).json({ success: false, error: `无效类别: ${category}` });
+    const validTypes = ['css', 'role', 'text', 'placeholder', 'label'];
+    if (selectorType && !validTypes.includes(selectorType)) errors.push(`invalid selectorType: ${selectorType}`);
+    if (errors.length > 0) {
+      return res.status(400).json({ success: false, error: errors.join('; '), errors });
     }
     const reader = getSelectorReader();
     reader.upsertSelector(platform, category as SelectorCategory, name, {
@@ -183,6 +200,10 @@ router.put('/selectors', (req: Request, res: Response) => {
       fallbacks: fallbacks || [],
       selectorType: selectorType || 'css',
       description: description || '',
+      enabled: typeof enabled === 'boolean' ? enabled : true,
+      filterTag: filterTag || undefined,
+      filterText: filterText || undefined,
+      scopeKey: scopeKey || undefined,
     });
     saveSelectorConfig();
     res.json({ success: true, message: `选择器已更新: ${platform}/${category}/${name}` });
@@ -191,8 +212,10 @@ router.put('/selectors', (req: Request, res: Response) => {
   }
 });
 
-/** DELETE — 删除选择器 */
+/** DELETE — 删除选择器 (deprecated: use DELETE /selectors/:platform/:categoryKey instead) */
 router.delete('/selectors', (req: Request, res: Response) => {
+  res.set('X-Deprecated', 'true');
+  res.set('X-Successor', 'DELETE /selectors/:platform/:categoryKey');
   try {
     const { platform, category, name } = req.body;
     if (!platform || !category || !name) {

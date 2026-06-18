@@ -751,12 +751,12 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
         where: {
           fingerprintWindowId: window.externalId,
           platform,
-          status: 'login_required',
+          status: { in: ['login_required', 'risk_control'] },
         },
         data: { status: 'active' },
       });
       if (updatedUser.count > 0) {
-        logger.info({ operatorId: id, platform, updatedCount: updatedUser.count }, '用户状态已从 login_required 恢复为 active');
+        logger.info({ operatorId: id, platform, updatedCount: updatedUser.count }, '用户状态已从 login_required/risk_control 恢复为 active');
       }
     }
 
@@ -829,7 +829,7 @@ router.post('/verify-all', async (_req: Request, res: Response) => {
               where: {
                 fingerprintWindowId: window.externalId,
                 platform: plat.platform,
-                status: 'login_required',
+                status: { in: ['login_required', 'risk_control'] },
               },
               data: { status: 'active' },
             }).catch(() => {});

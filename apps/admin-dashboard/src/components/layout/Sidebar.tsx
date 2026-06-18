@@ -27,6 +27,23 @@ export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
 
+  // 最长前缀匹配：精确匹配 > 最长 startsWith 前缀 > 无匹配
+  // 避免 /settings/selectors 同时激活 /settings 和 /settings/selectors
+  const activeHref = (() => {
+    // 精确匹配优先
+    for (const item of navItems) {
+      if (pathname === item.href) return item.href;
+    }
+    // 最长前缀匹配（仅对子路径生效，排除根路径）
+    let best = '';
+    for (const item of navItems) {
+      if (item.href !== '/' && pathname.startsWith(item.href + '/') && item.href.length > best.length) {
+        best = item.href;
+      }
+    }
+    return best;
+  })();
+
   return (
     <aside
       className={cn(
@@ -53,7 +70,7 @@ export function Sidebar() {
       {/* 一级导航:图标列(始终可见) */}
       <nav className="flex-1 py-3 flex flex-col gap-1">
         {navItems.map((item) => {
-          const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+          const active = item.href === activeHref;
           return (
             <Link
               key={item.href}

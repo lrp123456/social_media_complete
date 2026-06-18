@@ -56,3 +56,6 @@ n8n_backup/
 stitch_ai_media_matrix_admin/
 \n# Git worktrees\n.worktrees/
 .worktrees
+
+# Superpowers brainstorming artifacts
+.superpowers/

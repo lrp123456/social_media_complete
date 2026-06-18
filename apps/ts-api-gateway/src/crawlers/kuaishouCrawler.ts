@@ -660,6 +660,7 @@ export class KuaishouCrawler {
 
       if (clicked) {
         await HumanActions.wait(page, 1500, 3000);
+        await this.dismissErrorDialog(page);
         logger.info('Navigated to kuaishou work management page');
         this.currentMenuSection = 'content';
         return;
@@ -684,6 +685,7 @@ export class KuaishouCrawler {
 
       if (clicked) {
         await HumanActions.wait(page, 2000, 3500);
+        await this.dismissErrorDialog(page);
         logger.info('Navigated to kuaishou photo analysis page');
         this.currentMenuSection = 'data_center';
         return;
@@ -1200,6 +1202,9 @@ export class KuaishouCrawler {
       };
     }
 
+    // 开始抓取前清除可能存在的前端错误弹窗
+    await this.dismissErrorDialog(page);
+
     logger.info({ userId }, '[Phase1] Fetching kuaishou video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
 
@@ -1366,6 +1371,7 @@ export class KuaishouCrawler {
       if (commentClicked) {
         logger.info('[Phase2] [评论管理] clicked, waiting for page load');
         await HumanActions.wait(page, 3000, 5000);
+        await this.dismissErrorDialog(page);
 
         const loaded = await this.waitForCommentManagePage(page);
         if (loaded) {
@@ -1467,6 +1473,9 @@ export class KuaishouCrawler {
           logger.error({ awemeId: item.awemeId, riskType: riskCheck.type }, '[Phase3] Kuaishou risk control detected — aborting');
           return { results, riskDetected: true, riskInfo: riskCheck };
         }
+
+        // 处理每个视频前清除可能存在的前端错误弹窗
+        await this.dismissErrorDialog(page);
 
         // ── Pre-check：检查 comment/home 响应判断当前视频 ──
         let needDrawer = true;

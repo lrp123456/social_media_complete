@@ -1,0 +1,117 @@
+{
+  "sessionId": "reply_1312_1780928642_1781621683157",
+  "startTime": "2026-06-16T14:54:43.157Z",
+  "target": {
+    "text": "1312",
+    "level": 1,
+    "createTime": 1780928642
+  },
+  "steps": [
+    {
+      "step": 1,
+      "label": "reply_start",
+      "timestamp": "2026-06-16T14:54:44.266Z",
+      "htmlFile": "01_reply_start_1781621684126.html",
+      "screenshotFile": "01_reply_start_1781621684126.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 2,
+      "label": "root_comment_found",
+      "timestamp": "2026-06-16T14:54:44.399Z",
+      "htmlFile": "02_root_comment_found_1781621684271.html",
+      "screenshotFile": "02_root_comment_found_1781621684271.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "method": "username-text-match-root",
+        "index": 1
+      }
+    },
+    {
+      "step": 3,
+      "label": "reply_button_found",
+      "timestamp": "2026-06-16T14:54:44.522Z",
+      "htmlFile": "03_reply_button_found_1781621684403.html",
+      "screenshotFile": "03_reply_button_found_1781621684403.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "method": "in-root-container",
+        "x": 349,
+        "y": 838
+      }
+    },
+    {
+      "step": 4,
+      "label": "clicked_reply_button",
+      "timestamp": "2026-06-16T14:54:47.752Z",
+      "htmlFile": "04_clicked_reply_button_1781621687618.html",
+      "screenshotFile": "04_clicked_reply_button_1781621687618.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 370,
+        "y": 846
+      }
+    },
+    {
+      "step": 5,
+      "label": "reply_input_found",
+      "timestamp": "2026-06-16T14:54:47.894Z",
+      "htmlFile": "05_reply_input_found_1781621687755.html",
+      "screenshotFile": "05_reply_input_found_1781621687755.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 306,
+        "y": 861
+      }
+    },
+    {
+      "step": 6,
+      "label": "clicked_reply_input",
+      "timestamp": "2026-06-16T14:54:50.089Z",
+      "htmlFile": "06_clicked_reply_input_1781621689958.html",
+      "screenshotFile": "06_clicked_reply_input_1781621689958.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 7,
+      "label": "typed_reply_text",
+      "timestamp": "2026-06-16T14:54:51.812Z",
+      "htmlFile": "07_typed_reply_text_1781621691674.html",
+      "screenshotFile": "07_typed_reply_text_1781621691674.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 8,
+      "label": "submit_button_found",
+      "timestamp": "2026-06-16T14:54:51.954Z",
+      "htmlFile": "08_submit_button_found_1781621691818.html",
+      "screenshotFile": "08_submit_button_found_1781621691818.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 2412,
+        "y": 907
+      }
+    },
+    {
+      "step": 9,
+      "label": "clicked_submit_button",
+      "timestamp": "2026-06-16T14:54:54.134Z",
+      "htmlFile": "09_clicked_submit_button_1781621694001.html",
+      "screenshotFile": "09_clicked_submit_button_1781621694001.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 10,
+      "label": "reply_completed",
+      "timestamp": "2026-06-16T14:54:56.918Z",
+      "htmlFile": "10_reply_completed_1781621696775.html",
+      "screenshotFile": "10_reply_completed_1781621696775.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    }
+  ],
+  "result": {
+    "success": true,
+    "totalSteps": 10,
+    "elapsedMs": 13761
+  }
+}

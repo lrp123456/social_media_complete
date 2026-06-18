@@ -265,9 +265,31 @@ export async function isUserInCooldown(userId: number): Promise<boolean> {
  * 获取所有活跃用户（未屏蔽且启用了监控，且浏览器窗口未被删除）
  */
 export async function getAllActiveUsers() {
-  // ★ Bugfix: 自动恢复 login_required 状态（30分钟后重试登录）
-  // 防止会话过期后监控永久停止
+  // ★ 自动恢复 login_required（30分钟后重试登录）和 risk_control（10分钟后重试）
+  // 防止会话过期或临时风控后监控永久停止
   const LOGIN_REQUIRED_COOLDOWN_MS = 30 * 60 * 1000; // 30 分钟
+  const RISK_CONTROL_COOLDOWN_MS = 10 * 60 * 1000;   // 10 分钟（风控通常是临时的）
+
+  // 恢复过期的 risk_control 状态
+  const riskControlThreshold = new Date(Date.now() - RISK_CONTROL_COOLDOWN_MS);
+  const staleRiskControl = await prisma.user.findMany({
+    where: {
+      status: 'risk_control',
+      monitoringEnabled: true,
+      updatedAt: { lt: riskControlThreshold },
+    },
+    select: { id: true, platform: true },
+  });
+  if (staleRiskControl.length > 0) {
+    const ids = staleRiskControl.map(u => u.id);
+    logger.info({ ids, platforms: staleRiskControl.map(u => u.platform) }, '[MonitorDB] 自动恢复 risk_control 状态');
+    await prisma.user.updateMany({
+      where: { id: { in: ids } },
+      data: { status: 'active' },
+    });
+  }
+
+  // 恢复过期的 login_required 状态
   const staleThreshold = new Date(Date.now() - LOGIN_REQUIRED_COOLDOWN_MS);
   const staleLoginRequired = await prisma.user.findMany({
     where: {
@@ -288,7 +310,7 @@ export async function getAllActiveUsers() {
 
   const users = await prisma.user.findMany({
     where: {
-      status: { notIn: ['blocked', 'login_required'] },
+      status: { notIn: ['blocked', 'login_required', 'risk_control'] },
       monitoringEnabled: true,
     },
   });

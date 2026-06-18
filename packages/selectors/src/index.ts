@@ -127,7 +127,7 @@ export class SelectorRegistry {
 
     await this.prisma.customSelector.upsert({
       where: {
-        platform_selectorKey: { platform, selectorKey: key },
+        idx_selector_platform_key: { platform, selectorKey: key },
       },
       create: {
         platform,

@@ -2,7 +2,7 @@ import type { Page } from 'patchright';
 import type { PlatformName } from '@social-media/shared-config';
 import { HumanActions } from '@social-media/browser-core';
 import type { SelectorDef } from './menuSelectors';
-import { getSelector, getSelectorChain } from './menuSelectors';
+import { getSelector, getSelectorChain, resolveCrawlerKey } from './menuSelectors';
 import { createLogger } from '../lib/logger';
 import { reportClickResult, type SelectorStrategy } from '../services/selectorEffectivenessService';
 
@@ -72,9 +72,12 @@ export async function resolveAndClick(
       }
       if (isExpanded === false) {
         logger.info({ parentKey }, 'Parent menu collapsed, expanding');
+        const parentMapping = resolveCrawlerKey(parentKey, platform);
         const expanded = await tryClickBySelector(page, parentDef, {
           timeout: options?.timeout ?? 8000,
           platform,
+          category: parentMapping?.category || 'menus',
+          name: parentMapping?.name || parentKey,
         });
         if (expanded) {
           await HumanActions.wait(page, 800, 1500);
@@ -87,9 +90,12 @@ export async function resolveAndClick(
 
     // Step 3: FALLTHROUGH — cannot determine parent state, attempt to expand anyway
     logger.info({ parentKey }, 'Cannot determine parent state, attempting to expand');
+    const parentMapping = resolveCrawlerKey(parentKey, platform);
     const expanded = await tryClickBySelector(page, parentDef, {
       timeout: options?.timeout ?? 8000,
       platform,
+      category: parentMapping?.category || 'menus',
+      name: parentMapping?.name || parentKey,
     });
     if (expanded) {
       await HumanActions.wait(page, 800, 1500);
@@ -101,9 +107,12 @@ export async function resolveAndClick(
   // Click the final target in the chain
   const targetKey = chain[chain.length - 1];
   const targetDef = getSelector(targetKey, platform);
+  const targetMapping = resolveCrawlerKey(targetKey, platform);
   return tryClickBySelector(page, targetDef, {
     timeout: options?.timeout,
     platform,
+    category: targetMapping?.category || 'menus',
+    name: targetMapping?.name || targetKey,
   });
 }
 

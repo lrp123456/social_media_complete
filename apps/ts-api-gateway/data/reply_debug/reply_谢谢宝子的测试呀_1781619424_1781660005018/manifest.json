@@ -1,0 +1,128 @@
+{
+  "sessionId": "reply_谢谢宝子的测试呀_1781619424_1781660005018",
+  "startTime": "2026-06-17T01:33:25.018Z",
+  "target": {
+    "text": "谢谢宝子的测试呀",
+    "level": 2,
+    "createTime": 1781619424
+  },
+  "steps": [
+    {
+      "step": 1,
+      "label": "reply_start",
+      "timestamp": "2026-06-17T01:33:27.141Z",
+      "htmlFile": "01_reply_start_1781660007004.html",
+      "screenshotFile": "01_reply_start_1781660007004.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 2,
+      "label": "root_comment_found",
+      "timestamp": "2026-06-17T01:33:27.271Z",
+      "htmlFile": "02_root_comment_found_1781660007144.html",
+      "screenshotFile": "02_root_comment_found_1781660007144.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "method": "root-found-for-sub",
+        "index": 0
+      }
+    },
+    {
+      "step": 3,
+      "label": "expanded_sub_comments_in_root",
+      "timestamp": "2026-06-17T01:33:34.836Z",
+      "htmlFile": "03_expanded_sub_comments_in_root_1781660014694.html",
+      "screenshotFile": "03_expanded_sub_comments_in_root_1781660014694.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "totalExpanded": 1
+      }
+    },
+    {
+      "step": 4,
+      "label": "reply_button_found",
+      "timestamp": "2026-06-17T01:33:34.998Z",
+      "htmlFile": "04_reply_button_found_1781660014840.html",
+      "screenshotFile": "04_reply_button_found_1781660014840.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "method": "in-root-container",
+        "x": 349,
+        "y": 664
+      }
+    },
+    {
+      "step": 5,
+      "label": "clicked_reply_button",
+      "timestamp": "2026-06-17T01:33:37.978Z",
+      "htmlFile": "05_clicked_reply_button_1781660017835.html",
+      "screenshotFile": "05_clicked_reply_button_1781660017835.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 370,
+        "y": 672
+      }
+    },
+    {
+      "step": 6,
+      "label": "reply_input_found",
+      "timestamp": "2026-06-17T01:33:38.119Z",
+      "htmlFile": "06_reply_input_found_1781660017982.html",
+      "screenshotFile": "06_reply_input_found_1781660017982.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 306,
+        "y": 687
+      }
+    },
+    {
+      "step": 7,
+      "label": "clicked_reply_input",
+      "timestamp": "2026-06-17T01:33:40.506Z",
+      "htmlFile": "07_clicked_reply_input_1781660020365.html",
+      "screenshotFile": "07_clicked_reply_input_1781660020365.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 8,
+      "label": "typed_reply_text",
+      "timestamp": "2026-06-17T01:33:42.062Z",
+      "htmlFile": "08_typed_reply_text_1781660021928.html",
+      "screenshotFile": "08_typed_reply_text_1781660021928.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 9,
+      "label": "submit_button_found",
+      "timestamp": "2026-06-17T01:33:42.203Z",
+      "htmlFile": "09_submit_button_found_1781660022065.html",
+      "screenshotFile": "09_submit_button_found_1781660022065.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "x": 2412,
+        "y": 733
+      }
+    },
+    {
+      "step": 10,
+      "label": "clicked_submit_button",
+      "timestamp": "2026-06-17T01:33:43.966Z",
+      "htmlFile": "10_clicked_submit_button_1781660023833.html",
+      "screenshotFile": "10_clicked_submit_button_1781660023833.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 11,
+      "label": "reply_completed",
+      "timestamp": "2026-06-17T01:33:47.140Z",
+      "htmlFile": "11_reply_completed_1781660026997.html",
+      "screenshotFile": "11_reply_completed_1781660026997.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    }
+  ],
+  "result": {
+    "success": true,
+    "totalSteps": 11,
+    "elapsedMs": 22123
+  }
+}

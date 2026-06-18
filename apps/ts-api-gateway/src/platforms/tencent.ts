@@ -111,6 +111,8 @@ export class TencentPublisher extends BasePublisher {
 
   /**
    * 截取二维码并通过企微发送（参照 tencentCrawler.captureAndSendQR）
+   * 视频号登录页是 iframe 结构，QR 码在 iframe 内部
+   * 每次截取前点击刷新 + 扩大截图区域（四周 padding，正方形裁剪）
    */
   private async captureAndSendQR(
     page: Page,
@@ -119,37 +121,98 @@ export class TencentPublisher extends BasePublisher {
     botManager: any,
   ): Promise<void> {
     try {
-      const selectors = [
-        'iframe[src*="login-for-iframe"]',
-        'img[src*="qrcode"]',
-        'img[src*="qr"]',
-        'canvas',
-        '[class*="qrcode"] img',
-      ];
-
       let buf: Buffer | undefined;
-      const PADDING = 40;
 
-      for (const sel of selectors) {
-        try {
-          const el = await page.$(sel);
-          if (el) {
-            await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
-            await page.waitForTimeout(500);
-            const box = await el.boundingBox();
-            if (box && box.width > 50 && box.height > 50) {
+      // ── 1. 穿透 iframe ──
+      const iframeEl = await page.$('iframe[src*="login-for-iframe"]').catch(() => null)
+        ?? await page.$('iframe.display').catch(() => null);
+      if (iframeEl) {
+        const frame = await iframeEl.contentFrame();
+        if (frame) {
+          await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+
+          // ── 1a. 点击刷新二维码 ──
+          await this.clickQRRefresh(frame, page);
+
+          // ── 1b. 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
+          const qrInfo = await frame.evaluate(() => {
+            const candidates: Array<{ x: number; y: number; w: number; h: number }> = [];
+            const els = document.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
+            els.forEach((el) => {
+              const r = el.getBoundingClientRect();
+              if (r.width < 60 || r.height < 60) return;
+              const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
+              if (ratio < 0.5) return;
+              candidates.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+            });
+            candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+            return candidates[0] || null;
+          }).catch(() => null);
+
+          if (qrInfo) {
+            const iframeBox = await iframeEl.boundingBox();
+            if (iframeBox) {
+              const absX = iframeBox.x + qrInfo.x;
+              const absY = iframeBox.y + qrInfo.y;
+              const maxDim = Math.max(qrInfo.w, qrInfo.h);
+              const PAD = Math.round(maxDim * 0.15);
+              const side = maxDim + PAD * 2;
+              const cx = absX + qrInfo.w / 2;
+              const cy = absY + qrInfo.h / 2;
               const clip = {
-                x: Math.max(0, box.x - PADDING),
-                y: Math.max(0, box.y - PADDING),
-                width: box.width + PADDING * 2,
-                height: box.height + PADDING * 2,
+                x: Math.max(0, cx - side / 2),
+                y: Math.max(0, cy - side / 2),
+                width: side,
+                height: side,
               };
               buf = await page.screenshot({ type: 'png', clip });
-              logger.info({ selector: sel, width: clip.width, height: clip.height }, '[腾讯视频号] 二维码截图已捕获');
-              break;
+              logger.info({ qrW: qrInfo.w, qrH: qrInfo.h, clipSide: side }, '[腾讯视频号] iframe 内二维码截图已捕获 (方形+padding)');
             }
           }
-        } catch {}
+
+          // iframe 内未找到 → 截取 iframe 元素 + padding
+          if (!buf) {
+            const iframeBox = await iframeEl.boundingBox();
+            if (iframeBox && iframeBox.width > 100 && iframeBox.height > 100) {
+              const PAD = 40;
+              const clip = {
+                x: Math.max(0, iframeBox.x - PAD),
+                y: Math.max(0, iframeBox.y - PAD),
+                width: iframeBox.width + PAD * 2,
+                height: iframeBox.height + PAD * 2,
+              };
+              buf = await page.screenshot({ type: 'png', clip });
+              logger.info({ width: clip.width, height: clip.height }, '[腾讯视频号] 回退: iframe 元素 + padding');
+            }
+          }
+        }
+      }
+
+      // ── 2. 非 iframe 结构 ──
+      if (!buf) {
+        const PADDING = 40;
+        const pageSelectors = ['img[src*="qrcode"]', 'img[src*="qr"]', 'canvas', '[class*="qrcode"] img'];
+        for (const sel of pageSelectors) {
+          try {
+            const el = await page.$(sel);
+            if (el) {
+              await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
+              await page.waitForTimeout(500);
+              const box = await el.boundingBox();
+              if (box && box.width > 50 && box.height > 50) {
+                const maxDim = Math.max(box.width, box.height);
+                const cx = box.x + box.width / 2;
+                const cy = box.y + box.height / 2;
+                const side = maxDim + PADDING * 2;
+                const clip = { x: Math.max(0, cx - side / 2), y: Math.max(0, cy - side / 2), width: side, height: side };
+                buf = await page.screenshot({ type: 'png', clip });
+                logger.info({ selector: sel, clipSide: side }, '[腾讯视频号] 主页面二维码截图已捕获 (方形+padding)');
+                break;
+              }
+            }
+          } catch {}
+        }
       }
 
       if (!buf) {
@@ -162,6 +225,46 @@ export class TencentPublisher extends BasePublisher {
       logger.warn({ err: (err as Error).message }, '[腾讯视频号] 截取/发送二维码失败');
       await botManager.sendLoginAlert(wechatUserid, 'tencent', userId).catch(() => {});
     }
+  }
+
+  /**
+   * 点击刷新二维码 — 在 iframe 内部查找刷新按钮并点击
+   */
+  private async clickQRRefresh(frame: any, page: Page): Promise<void> {
+    try {
+      const refreshSelectors = ['.qrcode-refresh-btn', '[class*="refresh"]', '[class*="Refresh"]'];
+      for (const sel of refreshSelectors) {
+        const btn = await frame.$(sel).catch(() => null);
+        if (btn) {
+          await btn.click().catch(() => {});
+          await page.waitForTimeout(2000);
+          logger.info({ selector: sel }, '[腾讯视频号] 二维码刷新按钮已点击');
+          return;
+        }
+      }
+      const refreshed = await frame.evaluate(() => {
+        const els = document.querySelectorAll('a, button, span, div, p');
+        for (const el of els) {
+          const text = el.textContent?.trim() || '';
+          if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+            (el as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }).catch(() => false);
+      if (refreshed) {
+        await page.waitForTimeout(2000);
+        logger.info('[腾讯视频号] 二维码已通过文字点击刷新');
+        return;
+      }
+      const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
+      if (qrEl) {
+        await qrEl.click().catch(() => {});
+        await page.waitForTimeout(2000);
+        logger.info('[腾讯视频号] 二维码区域已点击刷新');
+      }
+    } catch {}
   }
 
   // ============================================================

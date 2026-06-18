@@ -49,6 +49,11 @@ services:
     container_name: sm-litellm
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/litellm_db"
       LITELLM_MASTER_KEY: "your_litellm_master_key"
@@ -67,6 +72,12 @@ services:
     command: >
       --config /app/config.yaml
       --port 4000
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
 
   # ============================================================
   # TS API Gateway - 大脑与自动化执行官
@@ -78,6 +89,11 @@ services:
     container_name: sm-ts-api
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # Database (host 模式下用 localhost)
       DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/social_media"
@@ -104,6 +120,8 @@ services:
       # 企业微信机器人
       WECOM_BOT_ID: "your_wecom_bot_id"
       WECOM_BOT_SECRET: "your_wecom_bot_secret"
+    volumes:
+      - ts_api_data:/app/apps/ts-api-gateway/data
 
   # ============================================================
   # Python Worker - 肌肉与算力中心
@@ -115,6 +133,11 @@ services:
     container_name: sm-python-worker
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DATABASE_URL: "postgresql+asyncpg://sm_admin:your_postgres_password@localhost:5432/social_media"
       REDIS_URL: "redis://:your_redis_password@localhost:6379"
@@ -150,4 +173,6 @@ volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  ts_api_data:
     driver: local

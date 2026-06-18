@@ -1,0 +1,55 @@
+{
+  "sessionId": "reply_不客气呀_比心___1781614927_1781664572743",
+  "startTime": "2026-06-17T02:49:32.743Z",
+  "target": {
+    "text": "不客气呀，比心❤️",
+    "level": 2,
+    "createTime": 1781614927
+  },
+  "steps": [
+    {
+      "step": 1,
+      "label": "reply_start",
+      "timestamp": "2026-06-17T02:49:34.170Z",
+      "htmlFile": "01_reply_start_1781664573996.html",
+      "screenshotFile": "01_reply_start_1781664573996.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    },
+    {
+      "step": 2,
+      "label": "root_comment_found",
+      "timestamp": "2026-06-17T02:49:34.311Z",
+      "htmlFile": "02_root_comment_found_1781664574174.html",
+      "screenshotFile": "02_root_comment_found_1781664574174.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "method": "root-found-for-sub",
+        "index": 0
+      }
+    },
+    {
+      "step": 3,
+      "label": "expanded_sub_comments_in_root",
+      "timestamp": "2026-06-17T02:49:40.518Z",
+      "htmlFile": "03_expanded_sub_comments_in_root_1781664580388.html",
+      "screenshotFile": "03_expanded_sub_comments_in_root_1781664580388.png",
+      "url": "https://cp.kuaishou.com/article/comment",
+      "extra": {
+        "totalExpanded": 1
+      }
+    },
+    {
+      "step": 4,
+      "label": "reply_button_not_found",
+      "timestamp": "2026-06-17T02:49:40.663Z",
+      "htmlFile": "04_reply_button_not_found_1781664580521.html",
+      "screenshotFile": "04_reply_button_not_found_1781664580521.png",
+      "url": "https://cp.kuaishou.com/article/comment"
+    }
+  ],
+  "result": {
+    "success": false,
+    "totalSteps": 4,
+    "elapsedMs": 7920
+  }
+}
