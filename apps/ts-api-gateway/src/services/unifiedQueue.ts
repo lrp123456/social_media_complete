@@ -9,6 +9,7 @@ import { createLogger } from '../lib/logger';
 import { getTraceId } from '../middleware/trace';
 import type { PlatformName } from '@social-media/shared-config';
 import type { PublishTask } from '../platforms/types';
+import { startExecution, updatePhase, finishExecution } from '../lib/taskExecutionRecorder';
 
 const logger = createLogger('unified-queue');
 
@@ -105,7 +106,9 @@ export const platformWorker = new Worker<PlatformTask>(
       logger.info(`💬 回复任务开始: ${task.taskId} → ${task.platform}:${task.userId}`);
 
       let handle: MutexHandle | null = null;
+      let executionId: string | undefined;
       try {
+        executionId = await startExecution(task, job);
         // ★ 锁获取不超时，只会排队等待（无限重试直到拿到锁）
         // 业务的等待时长由 BullMQ 的任务级 TTL 控制
         handle = await WindowMutex.acquireWithBackoff(task.windowId, {
@@ -117,14 +120,16 @@ export const platformWorker = new Worker<PlatformTask>(
         // ★ 业务超时机制：5 分钟内必须完成，超时后业务被丢弃，但 finally 会主动释放锁
         // 这样即使业务卡住，也不会因为锁的 TTL 提前过期而导致并发操作
         await Promise.race([
-          executeReplyAction(task, task.replyData),
+          executeReplyAction(task, task.replyData, executionId),
           abortPromise(handle.signal),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error(`回复超时: 超过 ${REPLY_TIMEOUT_MS / 1000}s`)), REPLY_TIMEOUT_MS),
           ),
         ]);
+        if (executionId) await finishExecution(executionId, 'completed');
         logger.info(`✅ 回复完成: ${task.taskId}`);
       } catch (err: any) {
+        if (executionId) await finishExecution(executionId, 'failed', err.message).catch(() => {});
         logger.error(`❌ 回复失败: ${task.taskId} - ${err.message}`);
         throw err;
       } finally {
@@ -145,7 +150,10 @@ export const platformWorker = new Worker<PlatformTask>(
       logger.info(`📤 发布任务开始: ${task.taskId} → ${task.platform}`);
 
       let handle: MutexHandle | null = null;
+      let executionId: string | undefined;
       try {
+        executionId = await startExecution(task, job);
+        if (executionId) await updatePhase(executionId, 1, '登录', 10);
         handle = await WindowMutex.acquireWithBackoff(task.windowId, {
           taskId: task.taskId,
           taskType: 'publish',
@@ -156,6 +164,7 @@ export const platformWorker = new Worker<PlatformTask>(
         const { prisma } = await import('../lib/prisma');
 
         const publisher = getPublisher(task.platform);
+        if (executionId) await updatePhase(executionId, 2, '上传', 40);
         const result = await Promise.race([
           publisher.publish(task.publishPayload, true), // skipLock=true: unifiedQueue 已持有锁
           abortPromise(handle.signal),
@@ -163,6 +172,8 @@ export const platformWorker = new Worker<PlatformTask>(
             setTimeout(() => reject(new Error(`发布超时: 超过 ${PUBLISH_TIMEOUT_MS / 1000}s`)), PUBLISH_TIMEOUT_MS),
           ),
         ]);
+
+        if (executionId) await updatePhase(executionId, 3, '填写信息', 70);
 
         // 记录到数据库
         await prisma.operationLog.create({
@@ -176,13 +187,17 @@ export const platformWorker = new Worker<PlatformTask>(
           },
         });
 
+        if (executionId) await updatePhase(executionId, 4, '发布确认', 95);
+
         if (!result.success) {
           throw new Error(result.error || '发布失败');
         }
 
+        if (executionId) await finishExecution(executionId, 'completed');
         logger.info(`✅ 发布完成: ${task.taskId} → ${task.platform} (${result.duration}ms)`);
         return result;
       } catch (err: any) {
+        if (executionId) await finishExecution(executionId, 'failed', err.message).catch(() => {});
         logger.error(`❌ 发布失败: ${task.taskId} - ${err.message}`);
         throw err;
       } finally {
@@ -210,7 +225,9 @@ export const platformWorker = new Worker<PlatformTask>(
       };
 
       let handle: MutexHandle | null = null;
+      let executionId: string | undefined;
       try {
+        executionId = await startExecution(task, job);
         checkCancelled();
         await job.updateProgress({ phase: '等待', step: '正在获取窗口锁', percent: 5 });
         handle = await WindowMutex.acquireWithBackoff(task.windowId, {
@@ -346,7 +363,9 @@ export const platformWorker = new Worker<PlatformTask>(
         }
 
         reportMonitorComplete(task.windowId, task.platform, result.hasUpdate);
+        if (executionId) await finishExecution(executionId, 'completed');
       } catch (err: any) {
+        if (executionId) await finishExecution(executionId, 'failed', err.message).catch(() => {});
         logger.error(`❌ 监控失败: ${task.taskId} - ${err.message}`);
         const { reportMonitorComplete, sendMonitorNotification } = await import('./monitorService');
         const { prisma } = await import('../lib/prisma');
