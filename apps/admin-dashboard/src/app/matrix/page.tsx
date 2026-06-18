@@ -44,12 +44,14 @@ import {
   useRegenerateAiReply,
   useAcceptAiReply,
 } from '@/hooks/useApi';
-import { MaterialIcon, PlatformIcon, Avatar } from '@/components/ui/MaterialIcon';
+import { MaterialIcon, PlatformIcon, Avatar, type MaterialIconName } from '@/components/ui/MaterialIcon';
 import { BentoCard } from '@/components/ui/Bento';
 import { StatusPill, ToggleSwitch } from '@/components/ui/StatusPill';
 import { cn } from '@/lib/utils';
 import OperatorManagement from '@/components/matrix/OperatorManagement';
 import AiReplyCard from '@/components/matrix/AiReplyCard';
+import QueueBar from '@/components/matrix/QueueBar';
+import QueueTab from '@/components/matrix/QueueTab';
 
 // ─────────────────────────────────────────────
 //  Publish Tab Helpers & Types
@@ -132,7 +134,7 @@ type Comment = {
 // ─────────────────────────────────────────────
 
 export default function MatrixPage() {
-  const [activeTab, setActiveTab] = useState<'users' | 'publish' | 'monitor'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'publish' | 'monitor' | 'queue'>('users');
 
   return (
     <>
@@ -175,12 +177,28 @@ export default function MatrixPage() {
             <MaterialIcon icon="monitoring" size="sm" />
             数据监控
           </button>
+          <button
+            className={cn(
+              'flex items-center gap-2 px-5 py-2 rounded-lg text-label-md font-medium transition-all',
+              activeTab === 'queue'
+                ? 'bg-primary/10 text-primary shadow-sm'
+                : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high',
+            )}
+            onClick={() => setActiveTab('queue')}
+          >
+            <MaterialIcon icon={'list' as MaterialIconName} size="sm" />
+            执行队列
+          </button>
         </div>
       </div>
+
+      {/* 常驻执行队列简略条 */}
+      <QueueBar onClickViewAll={() => setActiveTab('queue')} />
 
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'publish' && <PublishTab />}
       {activeTab === 'monitor' && <MonitorTab />}
+      {activeTab === 'queue' && <QueueTab />}
     </>
   );
 }
@@ -1018,6 +1036,7 @@ function MonitorTab() {
               ))}
             </div>
 
+            <div className="flex flex-wrap items-center gap-2">
               {/* 统一立即更新按钮 */}
               <button
                 onClick={handleTriggerAll}
@@ -1064,6 +1083,7 @@ function MonitorTab() {
                   disabled={updateDebugMode.isPending}
                 />
               </div>
+            </div>
           </div>
 
           {/* ── Active Queue (常驻) ── */}
@@ -1389,9 +1409,10 @@ function MonitorTab() {
                   const totalVideos = group.accounts.reduce((s, a) => s + a.videoCount, 0);
                   const totalComments = group.accounts.reduce((s, a) => s + a.totalComments, 0);
                   const totalNewComments = group.accounts.reduce((s, a) => s + a.newComments, 0);
-                  const hasActive = group.accounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required');
+                  const hasActive = group.accounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required' && a.status !== 'risk_control');
                   const hasBlocked = group.accounts.some((a) => a.status === 'blocked');
                   const hasLoginRequired = group.accounts.some((a) => a.status === 'login_required');
+                  const hasRiskControl = group.accounts.some((a) => a.status === 'risk_control');
 
                   return (
                     <div
@@ -1423,6 +1444,11 @@ function MonitorTab() {
                               {hasLoginRequired && (
                                 <span className="text-[10px] text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded-full font-medium">
                                   需重新登录
+                                </span>
+                              )}
+                              {hasRiskControl && (
+                                <span className="text-[10px] text-amber-600 bg-amber-500/10 px-2 py-0.5 rounded-full font-medium">
+                                  风控冷却
                                 </span>
                               )}
                               {hasBlocked && (
@@ -1471,8 +1497,9 @@ function MonitorTab() {
                           const pc = MONITOR_PLATFORM_CONFIG[account.platform] || MONITOR_PLATFORM_FALLBACK;
                            const isBlocked = account.status === 'blocked';
                            const isLoginRequired = account.status === 'login_required';
+                           const isRiskControl = account.status === 'risk_control';
                            const isCooldown = account.cooldownUntil > Date.now();
-                           const isActive = account.monitoringEnabled && !isBlocked && !isLoginRequired;
+                           const isActive = account.monitoringEnabled && !isBlocked && !isLoginRequired && !isRiskControl;
 
                           return (
                             <div
@@ -1506,6 +1533,9 @@ function MonitorTab() {
                                      )}
                                      {isLoginRequired && (
                                        <span className="w-2 h-2 rounded-full bg-orange-500" title="需重新登录" />
+                                     )}
+                                     {isRiskControl && (
+                                       <span className="w-2 h-2 rounded-full bg-amber-500" title="风控冷却中" />
                                      )}
                                      {isBlocked && (
                                        <span className="w-2 h-2 rounded-full bg-red-500" title="已封禁" />
@@ -1677,6 +1707,12 @@ function MonitorTab() {
                                       {root.isNew && (
                                         <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
                                       )}
+                                      {root.isAuthor && (
+                                        <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                          <MaterialIcon icon="person" size="xs" />
+                                          作者
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
                                     <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
@@ -1697,6 +1733,12 @@ function MonitorTab() {
                                               <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
                                               {sub.isNew && (
                                                 <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                              )}
+                                              {sub.isAuthor && (
+                                                <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                                  <MaterialIcon icon="person" size="xs" />
+                                                  作者
+                                                </span>
                                               )}
                                               {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                             </div>
@@ -1757,7 +1799,8 @@ function MonitorTab() {
                 const pc = MONITOR_PLATFORM_CONFIG[detail.platform] || MONITOR_PLATFORM_FALLBACK;
                 const isBlocked = detail.status === 'blocked';
                 const isLoginRequired = detail.status === 'login_required';
-                const isActive = detail.monitoringEnabled && !isBlocked;
+                const isRiskControl = detail.status === 'risk_control';
+                const isActive = detail.monitoringEnabled && !isBlocked && !isRiskControl;
 
                 return (
                   <div className={cn('relative bg-surface border border-outline-variant rounded-xl overflow-hidden mb-6 border-l-3', pc.border)}>
@@ -1788,6 +1831,12 @@ function MonitorTab() {
                               )}
                               {isLoginRequired && (
                                 <span className="text-[11px] text-orange-400 bg-orange-500/10 px-2 py-0.5 rounded-full">需重新登录</span>
+                              )}
+                              {isRiskControl && (
+                                <span className="text-[11px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">风控冷却中</span>
+                              )}
+                              {isRiskControl && (
+                                <span className="text-[11px] text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full">风控冷却中</span>
                               )}
                               {!detail.monitoringEnabled && (
                                 <span className="text-[11px] text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full">已暂停</span>
@@ -1970,7 +2019,7 @@ function MonitorTab() {
 
                               <button
                                 onClick={() => handleTrigger(detail.id)}
-                                disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked' || detail.status === 'login_required'}
+                                disabled={triggerMonitor.isPending || !detail.monitoringEnabled || detail.status === 'blocked' || detail.status === 'login_required' || detail.status === 'risk_control'}
                                 className="shrink-0 flex items-center gap-1 px-3 py-2 rounded-lg text-label-md text-primary bg-primary/10 hover:bg-primary/20 transition-colors disabled:opacity-30"
                                 title="更新此用户的评论"
                               >
@@ -1993,6 +2042,12 @@ function MonitorTab() {
                                           {root.isNew && (
                                             <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
                                           )}
+                                          {root.isAuthor && (
+                                            <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                              <MaterialIcon icon="person" size="xs" />
+                                              作者
+                                            </span>
+                                          )}
                                         </div>
                                         <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
                                         <AiReplyCard
@@ -2012,6 +2067,12 @@ function MonitorTab() {
                                                   <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
                                                   {sub.isNew && (
                                                     <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                                  )}
+                                                  {sub.isAuthor && (
+                                                    <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                                      <MaterialIcon icon="person" size="xs" />
+                                                      作者
+                                                    </span>
                                                   )}
                                                   {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
                                                 </div>
