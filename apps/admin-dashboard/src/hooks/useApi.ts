@@ -1019,7 +1019,10 @@ export function useUpsertCustomSelector() {
         ...(input.originalPlatform ? { originalPlatform: input.originalPlatform } : {}),
         ...(input.originalCategoryKey ? { originalCategoryKey: input.originalCategoryKey } : {}),
       }).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
   });
 }
 
@@ -1028,7 +1031,10 @@ export function useDeleteCustomSelector() {
   return useMutation({
     mutationFn: (input: { platform: string; categoryKey: string }) =>
       api.delete(`/config-automation/selectors/${input.platform}/${input.categoryKey}`).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
   });
 }
 
@@ -1441,6 +1447,7 @@ export function useUpsertSelector() {
     }) => api.put('/config-automation/selectors', data).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['selectors'] });
+      qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] });
     },
   });
 }
@@ -1452,6 +1459,7 @@ export function useDeleteSelector() {
       api.delete('/config-automation/selectors', { data }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['selectors'] });
+      qc.invalidateQueries({ queryKey: ['config-automation', 'selectors'] });
     },
   });
 }
@@ -1473,5 +1481,45 @@ export function useUpdateDebugMode() {
   return useMutation({
     mutationFn: (enabled: boolean) => api.put('/system/debug-mode', { enabled }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['debug-mode'] }),
+  });
+}
+
+// ============================================================
+// 执行队列
+// ============================================================
+
+import type {
+  ActiveQueueData,
+  HistoryData,
+  ExecutionDetail,
+} from '../types/queue';
+
+export function useActiveQueueTasks() {
+  return useQuery<ActiveQueueData>({
+    queryKey: ['queue', 'active'],
+    queryFn: () =>
+      api.get('/matrix/queue/active').then((r) => r.data.data as ActiveQueueData),
+    refetchInterval: 3000,
+    retry: 2,
+    staleTime: 1000,
+  });
+}
+
+export function useQueueHistory(params?: { page?: number; limit?: number; taskType?: string; status?: string }) {
+  return useQuery<HistoryData>({
+    queryKey: ['queue', 'history', params],
+    queryFn: () =>
+      api.get('/matrix/queue/history', { params }).then((r) => r.data.data as HistoryData),
+    retry: 2,
+  });
+}
+
+export function useExecutionDetail(id: string | null) {
+  return useQuery<ExecutionDetail>({
+    queryKey: ['queue', 'execution', id],
+    queryFn: () =>
+      api.get(`/matrix/queue/executions/${id}`).then((r) => r.data.data as ExecutionDetail),
+    enabled: !!id,
+    retry: 1,
   });
 }
