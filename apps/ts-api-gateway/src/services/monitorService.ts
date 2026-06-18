@@ -24,6 +24,7 @@ import { TencentCrawler, TencentReplyTarget } from '../crawlers/tencentCrawler';
 import * as db from './monitorDatabaseService';
 import { botManager } from './wechatBotService';
 import type { CommentNode } from '../crawlers/douyinCrawler';
+import { updatePhase } from '../lib/taskExecutionRecorder';
 
 const logger = createLogger('monitor-service');
 
@@ -408,7 +409,12 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
             loginPageReady = true;
             break;
           }
-          // 检查是否有登录二维码元素
+          // 检查是否有登录二维码元素（含 iframe）
+          const iframeEl = await page.$('iframe[src*="login-for-iframe"]').catch(() => null);
+          if (iframeEl) {
+            loginPageReady = true;
+            break;
+          }
           for (const sel of selectors) {
             const el = await page.$(sel).catch(() => null);
             if (el) {
@@ -426,48 +432,150 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
         if (!loginPageReady) {
           logger.warn({ userId }, '[QR] Tencent login page did not render within 15s, trying fallback');
         }
+      } catch {}
+    }
 
-        // 点击二维码区域刷新（确保二维码是新的）
-        for (const sel of selectors) {
-          const el = await page.$(sel).catch(() => null);
-          if (el) {
-            const box = await el.boundingBox();
-            if (box && box.width > 50 && box.height > 50) {
-              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-              await page.waitForTimeout(2500);
-              logger.info({ platform, userId, selector: sel }, '已点击二维码区域刷新');
-              break;
+    // ── 穿透 iframe 获取 QR 码（视频号登录页 iframe 结构）──
+    // 每次截取前点击刷新 + 扩大截图区域（四周 padding，正方形裁剪）
+    if (platform === 'tencent') {
+      try {
+        const iframeEl = await page.$('iframe[src*="login-for-iframe"]').catch(() => null)
+          ?? await page.$('iframe.display').catch(() => null);
+        if (iframeEl) {
+          const frame = await iframeEl.contentFrame();
+          if (frame) {
+            await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+            await page.waitForTimeout(1500);
+
+            // ── 点击刷新二维码 ──
+            try {
+              // 方式1: 查找刷新按钮
+              const refreshSelectors = ['.qrcode-refresh-btn', '[class*="refresh"]', '[class*="Refresh"]'];
+              let refreshed = false;
+              for (const sel of refreshSelectors) {
+                const btn = await frame.$(sel).catch(() => null);
+                if (btn) {
+                  await btn.click().catch(() => {});
+                  await page.waitForTimeout(2000);
+                  logger.info({ platform, userId, selector: sel }, '已点击 iframe 内二维码刷新按钮');
+                  refreshed = true;
+                  break;
+                }
+              }
+              // 方式2: 查找包含"刷新"/"重新生成"文字的元素
+              if (!refreshed) {
+                refreshed = await frame.evaluate(() => {
+                  const els = document.querySelectorAll('a, button, span, div, p');
+                  for (const el of els) {
+                    const text = el.textContent?.trim() || '';
+                    if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+                      (el as HTMLElement).click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }).catch(() => false);
+                if (refreshed) {
+                  await page.waitForTimeout(2000);
+                  logger.info({ platform, userId }, '已通过文字点击刷新二维码');
+                }
+              }
+              // 方式3: 点击 QR 区域本身
+              if (!refreshed) {
+                const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
+                if (qrEl) {
+                  await qrEl.click().catch(() => {});
+                  await page.waitForTimeout(2000);
+                  logger.info({ platform, userId }, '已点击二维码区域刷新');
+                }
+              }
+            } catch {}
+
+            // ── 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
+            const qrInfo = await frame.evaluate(() => {
+              const candidates: Array<{ x: number; y: number; w: number; h: number }> = [];
+              const els = document.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
+              els.forEach((el) => {
+                const r = el.getBoundingClientRect();
+                if (r.width < 60 || r.height < 60) return;
+                const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
+                if (ratio < 0.5) return;
+                candidates.push({ x: r.left, y: r.top, w: r.width, h: r.height });
+              });
+              candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+              return candidates[0] || null;
+            }).catch(() => null);
+
+            if (qrInfo) {
+              const iframeBox = await iframeEl.boundingBox();
+              if (iframeBox) {
+                const absX = iframeBox.x + qrInfo.x;
+                const absY = iframeBox.y + qrInfo.y;
+                const maxDim = Math.max(qrInfo.w, qrInfo.h);
+                const PAD = Math.round(maxDim * 0.15);
+                const side = maxDim + PAD * 2;
+                const cx = absX + qrInfo.w / 2;
+                const cy = absY + qrInfo.h / 2;
+                const clip = {
+                  x: Math.max(0, cx - side / 2),
+                  y: Math.max(0, cy - side / 2),
+                  width: side,
+                  height: side,
+                };
+                buf = await page.screenshot({ type: 'png', clip });
+                logger.info({ platform, userId, qrW: qrInfo.w, qrH: qrInfo.h, clipSide: side }, '截取 iframe 内二维码 (方形+padding)');
+              }
+            }
+
+            // iframe 内未找到 → 截取 iframe 元素 + padding
+            if (!buf) {
+              const iframeBox = await iframeEl.boundingBox();
+              if (iframeBox && iframeBox.width > 100 && iframeBox.height > 100) {
+                const PAD = 40;
+                const clip = {
+                  x: Math.max(0, iframeBox.x - PAD),
+                  y: Math.max(0, iframeBox.y - PAD),
+                  width: iframeBox.width + PAD * 2,
+                  height: iframeBox.height + PAD * 2,
+                };
+                buf = await page.screenshot({ type: 'png', clip });
+                logger.info({ platform, userId, width: clip.width, height: clip.height }, '截取 iframe 元素 + padding');
+              }
             }
           }
         }
       } catch {}
     }
 
-    // 尝试找二维码元素并截图（带边距）
+    // 非 iframe 结构：尝试找二维码元素并截图（带边距，正方形）
+    if (!buf) {
+      for (const sel of selectors) {
+        try {
+          const el = await page.$(sel);
+          if (el) {
+            await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
+            await page.waitForTimeout(500);
 
-    // 尝试找二维码元素并截图（带边距）
-    for (const sel of selectors) {
-      try {
-        const el = await page.$(sel);
-        if (el) {
-          await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
-          await page.waitForTimeout(500);
-
-          const box = await el.boundingBox();
-          if (box && box.width > 50 && box.height > 50) {
-            // 扩大截图区域，确保二维码完整
-            const clip = {
-              x: Math.max(0, box.x - PADDING),
-              y: Math.max(0, box.y - PADDING),
-              width: box.width + PADDING * 2,
-              height: box.height + PADDING * 2,
-            };
-            buf = await page.screenshot({ type: 'png', clip });
-            logger.info({ platform, userId, selector: sel, width: clip.width, height: clip.height }, '截取二维码区域');
-            break;
+            const box = await el.boundingBox();
+            if (box && box.width > 50 && box.height > 50) {
+              // 正方形裁剪 + 四周扩大 padding
+              const maxDim = Math.max(box.width, box.height);
+              const cx = box.x + box.width / 2;
+              const cy = box.y + box.height / 2;
+              const side = maxDim + PADDING * 2;
+              const clip = {
+                x: Math.max(0, cx - side / 2),
+                y: Math.max(0, cy - side / 2),
+                width: side,
+                height: side,
+              };
+              buf = await page.screenshot({ type: 'png', clip });
+              logger.info({ platform, userId, selector: sel, clipSide: side }, '截取二维码区域 (方形+padding)');
+              break;
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
 
     // 没找到则截全页
@@ -941,11 +1049,16 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // 风控检测
   if (phase1Result.riskControlDetected) {
     const riskType = phase1Result.riskControlInfo?.type || 'unknown';
-    logger.error({ userId: task.userId, platform: 'tencent', riskType }, '视频号风控触发');
+    // 区分风控与登录过期：只有 session_expired/url_redirect 才需要重新登录
+    // risk_keyword/captcha 是临时风控，用 risk_control 状态（短冷却自动恢复）
+    const isLoginExpired = ['session_expired', 'login_redirect', 'url_redirect'].includes(riskType);
+    logger.error({ userId: task.userId, platform: 'tencent', riskType, isLoginExpired }, '视频号风控触发');
     await db.logRiskScene(task.userId, 'tencent', riskType, phase1Result.riskControlInfo?.evidence || '');
-    await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'tencent', user.wechatUserid);
+    await db.updateUserStatus(task.userId, isLoginExpired ? 'login_required' : 'risk_control');
+    if (isLoginExpired) {
+      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
+      if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'tencent', user.wechatUserid);
+    }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -1002,13 +1115,12 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 3: 处理评论队列');
   const phase3Result = await tencentCrawler.processCommentsQueue(page, queue, task.userId);
 
-  if (phase3Result.some(r => r.error?.includes('风险') || r.error?.includes('captcha'))) {
+  if (phase3Result.some(r => r.error?.includes('风险') || r.error?.includes('captcha') || r.error?.includes('Risk control'))) {
     const riskType = 'phase3_risk';
     logger.error({ userId: task.userId }, '视频号 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'tencent', riskType, JSON.stringify(phase3Result.filter(r => r.error)));
-    await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'tencent', user.wechatUserid);
+    // Phase 3 风控通常是临时性的，用 risk_control 状态（短冷却自动恢复），不强制重新登录
+    await db.updateUserStatus(task.userId, 'risk_control');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
 
@@ -1319,9 +1431,11 @@ function scheduleNext(windowId: string, platform: string, forceInterval?: number
 export async function executeReplyAction(
   task: MonitorTask,
   replyData: { videoId: string; commentCid: string; text: string },
+  executionId?: string,
 ): Promise<void> {
   const bm = getBrowserManager();
   const { page } = await bm.connect(String(task.windowId), '', task.platform);
+  if (executionId) await updatePhase(executionId, 1, '准备', 5, '连接浏览器');
 
   // 查找评论的数字 ID 以便更新回复状态
   const { prisma } = await import('../lib/prisma');
@@ -1391,6 +1505,7 @@ export async function executeReplyAction(
 
       // 导航到评论管理页面
       const navSuccess = await douyinCrawler.navigateToCommentManage(page);
+      if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1404,6 +1519,7 @@ export async function executeReplyAction(
       const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
       if (drawerOpened) {
         const videoClicked = await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
+        if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoClicked) {
           logger.warn({ videoId: replyData.videoId }, '[Reply] 无法在抽屉中点击目标视频');
         }
@@ -1420,6 +1536,7 @@ export async function executeReplyAction(
       }
 
       // 等待评论列表加载（最多 20 秒）
+      if (executionId) await updatePhase(executionId, 4, '等待评论', 50, '等待评论列表加载');
       let commentListLoaded = false;
       for (let w = 0; w < 10; w++) {
         await HumanActions.wait(page, 1500, 2500);
@@ -1472,10 +1589,12 @@ export async function executeReplyAction(
         rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
         createTime: commentCreateTime,
       };
+      if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
       const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+        if (executionId) await updatePhase(executionId, 6, '完成', 100, '回复执行完成');
       } else {
         logger.error({ commentCid: replyData.commentCid }, '抖音回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1491,6 +1610,7 @@ export async function executeReplyAction(
       }
 
       const navSuccess = await kuaishouCrawler.navigateToCommentPageDirect(page);
+      if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理页面');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1502,6 +1622,7 @@ export async function executeReplyAction(
       // 选择目标视频（评论管理页面默认显示第一个视频的评论，需切换到目标视频）
       if (videoDescription) {
         const videoSwitched = await kuaishouCrawler.selectVideoForReply(page, replyData.videoId, videoDescription);
+        if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoSwitched) {
           logger.warn({ videoDescription }, '快手切换到目标视频失败，将尝试在当前视频下回复');
         }
@@ -1520,10 +1641,12 @@ export async function executeReplyAction(
         rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
         createTime: commentCreateTime,
       };
+      if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
       const replied = await kuaishouCrawler.replyToComment(page, kuaishouTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+        if (executionId) await updatePhase(executionId, 6, '完成', 100, '回复执行完成');
       } else {
         logger.error({ commentCid: replyData.commentCid }, '快手回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1541,6 +1664,7 @@ export async function executeReplyAction(
       }
 
       const navSuccess = await tencentCrawler.navigateToCommentManage(page);
+      if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1564,6 +1688,7 @@ export async function executeReplyAction(
       // 切换到目标视频（通过 wujie shadow DOM 内的视频列表点击）
       if (videoTitle) {
         const videoSwitched = await (tencentCrawler as any).switchToVideoForReply(page, videoTitle);
+        if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoSwitched) {
           logger.warn({ videoTitle }, '视频号切换到目标视频失败，将尝试在当前视频下回复');
         }
@@ -1581,10 +1706,12 @@ export async function executeReplyAction(
         rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
         createTime: commentCreateTime,
       };
+      if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
       const replied = await tencentCrawler.replyToComment(page, tencentTarget, replyData.text);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+        if (executionId) await updatePhase(executionId, 6, '完成', 100, '回复执行完成');
       } else {
         logger.error({ commentCid: replyData.commentCid }, '视频号回复执行失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
