@@ -1590,7 +1590,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text);
+      const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1642,7 +1642,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await kuaishouCrawler.replyToComment(page, kuaishouTarget, replyData.text);
+      const replied = await kuaishouCrawler.replyToComment(page, kuaishouTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1707,7 +1707,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await tencentCrawler.replyToComment(page, tencentTarget, replyData.text);
+      const replied = await tencentCrawler.replyToComment(page, tencentTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');

@@ -6,6 +6,9 @@ import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import { getSelectorReader } from '../lib/selectorStore';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
+import { recordSelectorTry } from '../lib/taskExecutionRecorder';
+import * as fs from 'fs';
+import * as path from 'path';
 
 const logger = createLogger('crawler:tencent');
 
@@ -115,7 +118,9 @@ const COMMENT_LIST_PATTERN = '/mmfinderassistant-bin/comment/comment_list';
 // 注：子回复不需要单独 API，已内嵌在 comment_list 的 levelTwoComment 数组中
 // 评论回复 API（暂未使用，留作参考）: /mmfinderassistant-bin/comment/create_comment
 
-const RISK_CONTROL_KEYWORDS = ['captcha', '验证', '安全', '限制', '封禁', '操作频繁', 'login'];
+// 收紧关键词：移除 '验证'/'安全'/'限制'/'login' 等正常平台页面必然出现的通用词
+// 对齐抖音/快手的关键词策略，只保留风控页面特有的多字短语
+const RISK_CONTROL_KEYWORDS = ['captcha', '安全验证', '验证码', '账号异常', '封禁', '操作频繁', '操作受限'];
 const RISK_CONTROL_URLS = ['/login', '/verify', '/captcha'];
 
 const SESSION_HEARTBEAT = 15 * 60 * 1000; // 15分钟
@@ -419,6 +424,8 @@ export class TencentCrawler {
 
   /**
    * 截取二维码并通过企微发送
+   * 视频号登录页是 iframe 结构，QR 码在 iframe 内部
+   * 每次截取前点击刷新 + 扩大截图区域（四周 padding，正方形裁剪）
    */
   private async captureAndSendQR(
     page: Page,
@@ -428,39 +435,118 @@ export class TencentCrawler {
     botManager: any,
   ): Promise<void> {
     try {
-      const selectors = [
-        'iframe[src*="login-for-iframe"]',
-        'img[src*="qrcode"]',
-        'img[src*="qr"]',
-        'canvas',
-        '[class*="qrcode"] img',
-      ];
-
       let buf: Buffer | undefined;
-      const PADDING = 40;
 
-      for (const sel of selectors) {
-        try {
-          const el = await page.$(sel);
-          if (el) {
-            await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
-            await page.waitForTimeout(500);
-            const box = await el.boundingBox();
-            if (box && box.width > 50 && box.height > 50) {
+      // ── 1. 穿透 iframe ──
+      // 视频号登录页: iframe[src*="login-for-iframe"] 内含 QR 码
+      const iframeEl = await page.$('iframe[src*="login-for-iframe"]').catch(() => null)
+        ?? await page.$('iframe.display').catch(() => null);
+      if (iframeEl) {
+        const frame = await iframeEl.contentFrame();
+        if (frame) {
+          await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+          await page.waitForTimeout(1500);
+
+          // ── 1a. 点击刷新二维码（每次截取前都刷新）──
+          await this.clickQRRefresh(frame, page);
+
+          // ── 1b. 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
+          const qrInfo = await frame.evaluate(() => {
+            const candidates: Array<{ sel: string; x: number; y: number; w: number; h: number }> = [];
+            // 搜索所有 img 和 canvas，找面积最大且接近正方形的
+            const els = document.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
+            els.forEach((el, idx) => {
+              const r = el.getBoundingClientRect();
+              if (r.width < 60 || r.height < 60) return;
+              const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
+              if (ratio < 0.5) return; // 太扁的不是二维码
+              candidates.push({ sel: `idx_${idx}_${el.tagName}`, x: r.left, y: r.top, w: r.width, h: r.height });
+            });
+            // 按面积排序，取最大
+            candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+            return candidates[0] || null;
+          }).catch(() => null);
+
+          if (qrInfo) {
+            // boundingBox 返回的是相对于页面的坐标（包含 iframe 偏移）
+            const iframeBox = await iframeEl.boundingBox();
+            if (iframeBox) {
+              // qrInfo 的坐标是相对于 iframe 内部的，需要加上 iframe 在页面中的偏移
+              const absX = iframeBox.x + qrInfo.x;
+              const absY = iframeBox.y + qrInfo.y;
+
+              // 正方形裁剪 + 四周扩大 padding
+              const maxDim = Math.max(qrInfo.w, qrInfo.h);
+              const PAD = Math.round(maxDim * 0.15); // 15% padding
+              const side = maxDim + PAD * 2;
+              const cx = absX + qrInfo.w / 2;
+              const cy = absY + qrInfo.h / 2;
               const clip = {
-                x: Math.max(0, box.x - PADDING),
-                y: Math.max(0, box.y - PADDING),
-                width: box.width + PADDING * 2,
-                height: box.height + PADDING * 2,
+                x: Math.max(0, cx - side / 2),
+                y: Math.max(0, cy - side / 2),
+                width: side,
+                height: side,
               };
               buf = await page.screenshot({ type: 'png', clip });
-              logger.info({ selector: sel, width: clip.width, height: clip.height }, '[Login] QR screenshot captured');
-              break;
+              logger.info({ qrW: qrInfo.w, qrH: qrInfo.h, clipSide: side, pad: PAD }, '[Login] QR captured inside iframe (square + padding)');
             }
           }
-        } catch {}
+
+          // iframe 内未找到 QR 元素 → 截取 iframe 元素本身 + padding
+          if (!buf) {
+            const iframeBox = await iframeEl.boundingBox();
+            if (iframeBox && iframeBox.width > 100 && iframeBox.height > 100) {
+              const PAD = 40;
+              const clip = {
+                x: Math.max(0, iframeBox.x - PAD),
+                y: Math.max(0, iframeBox.y - PAD),
+                width: iframeBox.width + PAD * 2,
+                height: iframeBox.height + PAD * 2,
+              };
+              buf = await page.screenshot({ type: 'png', clip });
+              logger.info({ width: clip.width, height: clip.height }, '[Login] QR fallback: iframe element + padding');
+            }
+          }
+        }
       }
 
+      // ── 2. 非 iframe 结构：直接在主页面搜索 ──
+      if (!buf) {
+        const PADDING = 40;
+        const pageSelectors = [
+          'img[src*="qrcode"]',
+          'img[src*="qr"]',
+          'canvas',
+          '[class*="qrcode"] img',
+        ];
+        for (const sel of pageSelectors) {
+          try {
+            const el = await page.$(sel);
+            if (el) {
+              await el.waitForElementState('visible', { timeout: 3000 }).catch(() => {});
+              await page.waitForTimeout(500);
+              const box = await el.boundingBox();
+              if (box && box.width > 50 && box.height > 50) {
+                const maxDim = Math.max(box.width, box.height);
+                const cx = box.x + box.width / 2;
+                const cy = box.y + box.height / 2;
+                const side = maxDim + PADDING * 2;
+                const clip = {
+                  x: Math.max(0, cx - side / 2),
+                  y: Math.max(0, cy - side / 2),
+                  width: side,
+                  height: side,
+                };
+                buf = await page.screenshot({ type: 'png', clip });
+                logger.info({ selector: sel, clipSide: side }, '[Login] QR screenshot captured (main page, square + padding)');
+                break;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      // ── 3. 最终兜底 ──
       if (!buf) {
         buf = await page.screenshot({ type: 'png' });
         logger.info('[Login] Fallback: full page screenshot');
@@ -472,23 +558,116 @@ export class TencentCrawler {
     }
   }
 
+  /**
+   * 点击刷新二维码 — 在 iframe 内部查找刷新按钮并点击
+   */
+  private async clickQRRefresh(frame: any, page: Page): Promise<void> {
+    try {
+      // 方式1: 查找刷新按钮（常见 class/text）
+      const refreshSelectors = [
+        '.qrcode-refresh-btn',
+        '[class*="refresh"]',
+        '[class*="Refresh"]',
+        'a[class*="refresh"]',
+        'span[class*="refresh"]',
+      ];
+      for (const sel of refreshSelectors) {
+        const btn = await frame.$(sel).catch(() => null);
+        if (btn) {
+          await btn.click().catch(() => {});
+          await page.waitForTimeout(2000);
+          logger.info({ selector: sel }, '[Login] QR refresh button clicked');
+          return;
+        }
+      }
+
+      // 方式2: 查找包含"刷新"/"重新生成"文字的可点击元素
+      const refreshed = await frame.evaluate(() => {
+        const els = document.querySelectorAll('a, button, span, div, p');
+        for (const el of els) {
+          const text = el.textContent?.trim() || '';
+          if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+            (el as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }).catch(() => false);
+      if (refreshed) {
+        await page.waitForTimeout(2000);
+        logger.info('[Login] QR refreshed via text click');
+        return;
+      }
+
+      // 方式3: 点击二维码区域本身（有些平台点击 QR 刷新）
+      const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
+      if (qrEl) {
+        await qrEl.click().catch(() => {});
+        await page.waitForTimeout(2000);
+        logger.info('[Login] QR area clicked for refresh');
+      }
+    } catch {}
+  }
+
   // ════════════════════════════════════════
   // 风控检测
   // ════════════════════════════════════════
 
+  /**
+   * 保存风控场景截图和页面文本（用于事后排查）
+   * 与抖音/快手实现对齐
+   */
+  async captureRiskScene(page: Page, userId: number, riskType: string): Promise<{ screenshotPath: string | null; htmlPath: string | null }> {
+    const sceneDir = path.resolve(process.cwd(), 'data', 'risk_scenes');
+    if (!fs.existsSync(sceneDir)) {
+      fs.mkdirSync(sceneDir, { recursive: true });
+    }
+
+    const timestamp = Date.now();
+    const baseName = `risk_${userId}_tencent_${riskType}_${timestamp}`;
+    let screenshotPath: string | null = null;
+    let htmlPath: string | null = null;
+
+    try {
+      const screenshotBuffer = await page.screenshot({ fullPage: true, type: 'png' });
+      screenshotPath = path.join(sceneDir, `${baseName}.png`);
+      fs.writeFileSync(screenshotPath, screenshotBuffer);
+      logger.info({ screenshotPath, sizeKB: Math.round(screenshotBuffer.length / 1024) }, '[RiskScene] 截图已保存');
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[RiskScene] 截图保存失败');
+    }
+
+    try {
+      const html = await HumanActions.cdpGetBodyText(page);
+      htmlPath = path.join(sceneDir, `${baseName}.html.txt`);
+      fs.writeFileSync(htmlPath, html);
+      logger.info({ htmlPath, length: html.length }, '[RiskScene] 页面文本已保存');
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[RiskScene] 页面文本保存失败');
+    }
+
+    return { screenshotPath, htmlPath };
+  }
+
   async detectRiskControl(page: Page): Promise<RiskControlDetection> {
     try {
       const url = page.url();
+
+      // URL 重定向检测（始终执行）
       for (const riskUrl of RISK_CONTROL_URLS) {
         if (url.includes(riskUrl) && !url.includes('/platform')) {
           return { detected: true, type: 'url_redirect', evidence: `Redirected: ${url}` };
         }
       }
 
-      const bodyText = await HumanActions.cdpGetBodyText(page);
-      for (const keyword of RISK_CONTROL_KEYWORDS) {
-        if (bodyText.includes(keyword)) {
-          return { detected: true, type: 'risk_keyword', evidence: `Found: "${keyword}"` };
+      // Body 关键词检测 — 仅在不在 /platform 时执行
+      // 在 /platform 页面时用户已登录，body 中的"安全验证"等词是正常导航文本，不是风控
+      if (!url.includes('/platform')) {
+        const bodyText = await HumanActions.cdpGetBodyText(page);
+        for (const keyword of RISK_CONTROL_KEYWORDS) {
+          if (bodyText.includes(keyword.toLowerCase())) {
+            return { detected: true, type: 'risk_keyword', evidence: `Found: "${keyword}"` };
+          }
         }
       }
 
@@ -577,13 +756,27 @@ export class TencentCrawler {
     // 风控检测
     const riskCheck = await this.detectRiskControl(page);
     if (riskCheck.detected) {
-      return {
-        hasUpdate: false,
-        commentsQueue: [],
-        updatedVideos: [],
-        riskControlDetected: true,
-        riskControlInfo: riskCheck,
-      };
+      // 二次确认：导航到首页后重新检查 URL，排除误报
+      logger.warn({ userId, riskType: riskCheck.type, evidence: riskCheck.evidence }, '[Phase1] Risk detected, doing secondary confirmation');
+      await this.clickHomeMenu(page);
+      const confirmUrl = page.url();
+      const stillRisk = !confirmUrl.includes('/platform') || confirmUrl.includes('/login');
+
+      if (stillRisk) {
+        // 确认风控 — 保存场景截图用于排查
+        await this.captureRiskScene(page, userId, riskCheck.type);
+        logger.error({ userId, riskType: riskCheck.type, url: confirmUrl }, '[Phase1] Risk control confirmed after secondary check');
+        return {
+          hasUpdate: false,
+          commentsQueue: [],
+          updatedVideos: [],
+          riskControlDetected: true,
+          riskControlInfo: riskCheck,
+        };
+      }
+
+      // 二次确认排除误报 — 继续正常流程
+      logger.info({ userId, riskType: riskCheck.type }, '[Phase1] Risk flag cleared after secondary confirmation (false positive)');
     }
 
     // 如果已经在视频列表页，先导航到其他页面（如首页），再导航回来，确保触发 API 请求
@@ -634,9 +827,12 @@ export class TencentCrawler {
         logger.warn({ userId, dbVideoCount: dbVideosForCheck.length, intercepted: !!intercepted }, '[Phase1] Possible session expired — no API data captured');
         // 检查页面内容
         const bodyText = await HumanActions.cdpGetBodyText(page);
-        if (bodyText.includes('登录') || bodyText.includes('已过期') || bodyText.includes('已退出')
-          || bodyText.includes('二维码') || bodyText.includes('javascript enabled')) {
+        // 收紧关键词：'登录' 太宽泛（正常平台页面也有），改为更具体的短语
+        if (bodyText.includes('扫码登录') || bodyText.includes('重新登录') || bodyText.includes('已过期')
+          || bodyText.includes('已退出') || bodyText.includes('二维码')) {
           logger.error('[Phase1] Session expired detected from page content');
+          // 保存场景截图用于排查
+          await this.captureRiskScene(page, userId, 'session_expired');
           // 强制导航到 platform 首页触发登录重定向
           await page.goto('https://channels.weixin.qq.com/platform', { waitUntil: 'domcontentloaded' });
           await HumanActions.wait(page, 3000, 5000);
@@ -1418,6 +1614,8 @@ export class TencentCrawler {
         const riskCheck = await this.detectRiskControl(page);
         if (riskCheck.detected) {
           logger.error({ exportId: item.exportId, riskType: riskCheck.type }, '[Phase3] Risk control detected');
+          // 保存场景截图用于排查
+          await this.captureRiskScene(page, userId, riskCheck.type);
           results.push({ exportId: item.exportId, success: false, comments: [], error: 'Risk control detected' });
           break;
         }
@@ -1481,14 +1679,18 @@ export class TencentCrawler {
   ): Promise<boolean> {
     logger.info({ videoTitle }, '[Reply:SwitchVideo] Starting video switch');
 
-    // 先检查目标视频是否已经选中
+    // 先检查目标视频是否已经选中（遍历所有 wujie-app）
     const alreadyActive = await page.evaluate((title: string) => {
-      const sr = document.querySelector('wujie-app')?.shadowRoot;
-      if (!sr) return false;
-      const activeFeed = sr.querySelector('.comment-feed-wrap.active-feed');
-      if (!activeFeed) return false;
-      const activeTitle = activeFeed.querySelector('.feed-title')?.textContent?.trim() || '';
-      return activeTitle === title || activeTitle.includes(title.slice(0, 8));
+      const apps = document.querySelectorAll('wujie-app');
+      for (const app of apps) {
+        const sr = app.shadowRoot;
+        if (!sr) continue;
+        const activeFeed = sr.querySelector('.comment-feed-wrap.active-feed');
+        if (!activeFeed) continue;
+        const activeTitle = activeFeed.querySelector('.feed-title')?.textContent?.trim() || '';
+        if (activeTitle === title || activeTitle.includes(title.slice(0, 8))) return true;
+      }
+      return false;
     }, videoTitle);
 
     if (alreadyActive) {
@@ -1496,47 +1698,54 @@ export class TencentCrawler {
       return true;
     }
 
-    // 滚动视频列表找到目标视频
+    // 滚动视频列表找到目标视频（遍历所有 wujie-app）
     const MAX_SCROLLS = 15;
     for (let i = 0; i < MAX_SCROLLS; i++) {
-      // 在 shadow DOM 中查找目标视频并获取其坐标
       const rect = await page.evaluate((title: string) => {
-        const sr = document.querySelector('wujie-app')?.shadowRoot;
-        if (!sr) return null;
-        const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-        const target = feeds.find(f => {
-          const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
-          return t === title || t.includes(title.slice(0, 8));
-        });
-        if (target) return target.getBoundingClientRect();
+        const apps = document.querySelectorAll('wujie-app');
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) continue;
+          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
+          const target = (feeds as Element[]).find((f: Element) => {
+            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+            return t === title || t.includes(title.slice(0, 8));
+          });
+          if (target) return (target as Element).getBoundingClientRect();
+        }
         return null;
       }, videoTitle);
 
       if (rect) {
-        // 找到视频，先 scrollIntoView 确保完全可见，再用 CDP 坐标点击
-        // 先 scrollIntoView（page.evaluate 内执行）
+        // scrollIntoView 确保完全可见
         await page.evaluate((title: string) => {
-          const sr = document.querySelector('wujie-app')?.shadowRoot;
-          if (!sr) return;
-          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-          const target = feeds.find(f => {
-            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
-            return t === title || t.includes(title.slice(0, 8));
-          });
-          if (target) (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+          const apps = document.querySelectorAll('wujie-app');
+          for (const app of apps) {
+            const sr = app.shadowRoot;
+            if (!sr) continue;
+            const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap')) as Element[];
+            const target = feeds.find((f) => {
+              const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+              return t === title || t.includes(title.slice(0, 8));
+            });
+            if (target) { (target as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' }); return; }
+          }
         }, videoTitle);
         await HumanActions.wait(page, 500, 1000);
 
         // 重新获取滚动后的坐标
         const newRect = await page.evaluate((title: string) => {
-          const sr = document.querySelector('wujie-app')?.shadowRoot;
-          if (!sr) return null;
-          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-          const target = feeds.find(f => {
-            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
-            return t === title || t.includes(title.slice(0, 8));
-          });
-          if (target) return target.getBoundingClientRect();
+          const apps = document.querySelectorAll('wujie-app');
+          for (const app of apps) {
+            const sr = app.shadowRoot;
+            if (!sr) continue;
+            const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap')) as Element[];
+            const target = feeds.find((f) => {
+              const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+              return t === title || t.includes(title.slice(0, 8));
+            });
+            if (target) return (target as Element).getBoundingClientRect();
+          }
           return null;
         }, videoTitle);
 
@@ -1547,17 +1756,20 @@ export class TencentCrawler {
         await HumanActions.wait(page, 200, 400);
         await HumanActions.clickAtCoordinates(page, cx, cy);
 
-        // 等待评论列表加载（点击视频后需要时间渲染）
         await HumanActions.wait(page, 3000, 5000);
 
-        // 验证是否切换成功（检查评论列表是否变化）
+        // 验证是否切换成功
         const commentListChanged = await page.evaluate((title: string) => {
-          const sr = document.querySelector('wujie-app')?.shadowRoot;
-          if (!sr) return false;
-          const activeFeed = sr.querySelector('.comment-feed-wrap.active-feed');
-          if (!activeFeed) return false;
-          const activeTitle = activeFeed.querySelector('.feed-title')?.textContent?.trim() || '';
-          return activeTitle === title || activeTitle.includes(title.slice(0, 8));
+          const apps = document.querySelectorAll('wujie-app');
+          for (const app of apps) {
+            const sr = app.shadowRoot;
+            if (!sr) continue;
+            const activeFeed = sr.querySelector('.comment-feed-wrap.active-feed');
+            if (!activeFeed) continue;
+            const activeTitle = activeFeed.querySelector('.feed-title')?.textContent?.trim() || '';
+            if (activeTitle === title || activeTitle.includes(title.slice(0, 8))) return true;
+          }
+          return false;
         }, videoTitle);
 
         if (commentListChanged) {
@@ -1565,17 +1777,20 @@ export class TencentCrawler {
           return true;
         }
 
-        // 回退：如果 CDP 点击没生效，用 page.evaluate 直接点击
+        // 回退：evaluate 直接点击
         logger.warn({ videoTitle }, '[Reply:SwitchVideo] CDP click did not trigger switch, falling back to evaluate click');
         await page.evaluate((title: string) => {
-          const sr = document.querySelector('wujie-app')?.shadowRoot;
-          if (!sr) return;
-          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-          const target = feeds.find(f => {
-            const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
-            return t === title || t.includes(title.slice(0, 8));
-          });
-          if (target) (target as HTMLElement).click();
+          const apps = document.querySelectorAll('wujie-app');
+          for (const app of apps) {
+            const sr = app.shadowRoot;
+            if (!sr) continue;
+            const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap')) as Element[];
+            const target = feeds.find((f) => {
+              const t = f.querySelector('.feed-title')?.textContent?.trim() || '';
+              return t === title || t.includes(title.slice(0, 8));
+            });
+            if (target) { (target as HTMLElement).click(); return; }
+          }
         }, videoTitle);
 
         await HumanActions.wait(page, 3000, 5000);
@@ -1628,12 +1843,36 @@ export class TencentCrawler {
     username: string,
     text: string,
   ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    // 诊断：dump 当前 DOM 中的评论列表
+    try {
+      const comments = await page.evaluate(() => {
+        const apps = document.querySelectorAll('wujie-app');
+        const list: any[] = [];
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) continue;
+          const scrollList = sr.querySelector('.feed-comment__wrp .scroll-list');
+          if (!scrollList) continue;
+          const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+          for (const item of rootItems) {
+            const main = item.querySelector(':scope > .comment-item-main');
+            if (!main) continue;
+            const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+            const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+            list.push({ username: uname, text: content.slice(0, 50) });
+          }
+        }
+        return list;
+      });
+      logger.info({ commentCount: comments.length, first5: comments.slice(0, 5) }, '[Reply] DOM diagnostic: root comments in DOM');
+    } catch {}
+
     const rect = await page.evaluate((params: { username: string; text: string }) => {
       const apps = document.querySelectorAll('wujie-app');
       for (const app of apps) {
         const sr = app.shadowRoot;
         if (!sr) continue;
-        const scrollList = sr.querySelector('.scroll-list');
+        const scrollList = sr.querySelector('.feed-comment__wrp .scroll-list');
         if (!scrollList) continue;
         const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
         for (const item of rootItems) {
@@ -1686,16 +1925,75 @@ export class TencentCrawler {
     // Step 2: 展开子评论（点击"展开更多回复"）
     await this.expandSubRepliesForReply(page, rootUsername, rootText);
 
+    // Step 2.5: 诊断 — dump 根评论的完整 DOM 结构（看子评论容器到底叫什么）
+    try {
+      const rootDomInfo = await page.evaluate((params: { username: string; text: string }) => {
+        const apps = document.querySelectorAll('wujie-app');
+        for (const app of apps) {
+          const sr = app.shadowRoot;
+          if (!sr) continue;
+          const scrollList = sr.querySelector('.feed-comment__wrp .scroll-list');
+          if (!scrollList) continue;
+          const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
+          for (const item of rootItems) {
+            const main = item.querySelector(':scope > .comment-item-main');
+            if (!main) continue;
+            const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
+            const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
+            if (uname !== params.username || content !== params.text) continue;
+
+            // 找到根评论，dump 所有子元素信息
+            const children: any[] = [];
+            const childArr = Array.from(item.children) as Element[];
+            for (const child of childArr) {
+              const cls = (child.className || '').toString();
+              const tag = child.tagName;
+              const text = (child.textContent || '').trim().slice(0, 80);
+              children.push({ tag, cls: cls.slice(0, 80), text });
+            }
+            // 也 dump main 的兄弟元素
+            const siblings: any[] = [];
+            let sib = main.nextElementSibling;
+            while (sib) {
+              const cls = (sib.className || '').toString();
+              const tag = sib.tagName;
+              const text = (sib.textContent || '').trim().slice(0, 80);
+              siblings.push({ tag, cls: cls.slice(0, 80), text });
+              sib = sib.nextElementSibling;
+            }
+            // dump main 内的按钮/可点击元素
+            const buttons: any[] = [];
+            const btns = item.querySelectorAll('button, [class*="load"], [class*="more"], [class*="expand"], [class*="reply"]');
+            const btnArr = Array.from(btns) as Element[];
+            for (const btn of btnArr) {
+              const cls = (btn.className || '').toString();
+              const text = (btn.textContent || '').trim().slice(0, 60);
+              const r = btn.getBoundingClientRect();
+              buttons.push({ tag: btn.tagName, cls: cls.slice(0, 60), text, visible: r.width > 0 && r.height > 0 });
+            }
+            return { children, siblings, buttons, itemOuterHTML: item.outerHTML.slice(0, 500) };
+          }
+        }
+        return null;
+      }, { username: rootUsername, text: rootText });
+
+      logger.info({ rootDomInfo }, '[Reply] Root comment DOM structure diagnostic');
+    } catch (e) {
+      logger.warn({ error: String(e) }, '[Reply] DOM structure diagnostic failed');
+    }
+
     // Step 3: 在子评论中定位目标（遍历所有 wujie-app）
-    const rect = await page.evaluate((params: {
+    // 先 dump 所有子评论用于诊断，再用模糊匹配定位
+    const result = await page.evaluate((params: {
       rootUsername: string; rootText: string;
       subUsername: string; subText: string;
     }) => {
       const apps = document.querySelectorAll('wujie-app');
+      const diag: any[] = [];  // 诊断信息
       for (const app of apps) {
         const sr = app.shadowRoot;
         if (!sr) continue;
-        const scrollList = sr.querySelector('.scroll-list');
+          const scrollList = sr.querySelector('.feed-comment__wrp .scroll-list');
         if (!scrollList) continue;
         const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
         for (const item of rootItems) {
@@ -1706,35 +2004,60 @@ export class TencentCrawler {
           if (uname !== params.rootUsername || content !== params.rootText) continue;
 
           // 找到根评论，在 .comment-reply-list 中找子评论
-          const replyList = item.querySelector(':scope > .comment-reply-list');
-          if (!replyList) continue;
-          const subItems = replyList.querySelectorAll(':scope > .comment-item');
+          // ★ .comment-reply-list 不是 .comment-item 的直接子元素，嵌套在 .comment-item-main 内部
+          // 所以不能用 :scope > .comment-reply-list，要搜索所有后代并找可见的那个
+          const allReplyLists = item.querySelectorAll('.comment-reply-list');
+          let replyList: Element | null = null;
+          for (const rl of Array.from(allReplyLists) as Element[]) {
+            const r = rl.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) { replyList = rl; break; }
+          }
+          if (!replyList) { diag.push({ rootFound: true, hasReplyList: false, totalReplyLists: allReplyLists.length }); continue; }
+          // 子评论也是 .comment-item，但可能在 .comment-reply-list 下不同层级
+          const subItems = replyList.querySelectorAll('.comment-item');
+          diag.push({ rootFound: true, hasReplyList: true, subCount: subItems.length });
+
           for (const subItem of subItems) {
-            const subMain = subItem.querySelector(':scope > .comment-item-main');
-            if (!subMain) continue;
+            // 子评论的 .comment-item-main 可能也不是直接子元素
+            const subMain = subItem.querySelector('.comment-item-main') || subItem;
             const subUname = subMain.querySelector('.comment-user-name')?.textContent?.trim() || '';
-            const subContent = subMain.querySelector('.comment-content')?.textContent?.trim() || '';
-            if (subUname === params.subUsername && subContent === params.subText) {
+            const rawContent = subMain.querySelector('.comment-content')?.textContent?.trim() || '';
+            // 子评论可能带 "回复 @xxx: " 前缀，去掉后再匹配
+            const stripped = rawContent.replace(/^回复\s*@\S+[:：]\s*/, '').trim();
+            diag.push({ subUname, rawContent: rawContent.slice(0, 60), stripped: stripped.slice(0, 60) });
+
+            // 匹配策略：精确 → 去前缀 → includes
+            const unameMatch = subUname === params.subUsername;
+            const exactMatch = unameMatch && rawContent === params.subText;
+            const strippedMatch = unameMatch && stripped === params.subText;
+            const includesMatch = unameMatch && (rawContent.includes(params.subText) || stripped.includes(params.subText));
+
+            if (exactMatch || strippedMatch || includesMatch) {
               const replyIcon = subMain.querySelector('.action-icon.weui-icon-outlined-comment');
               if (replyIcon) {
+                // ★ 子评论可能在视口外（长列表），先滚动到可见区域
+                (subMain as HTMLElement).scrollIntoView({ behavior: 'instant', block: 'center' });
                 const r = replyIcon.getBoundingClientRect();
                 if (r.width > 0 && r.height > 0) {
-                  return { x: r.x, y: r.y, width: r.width, height: r.height };
+                  return { rect: { x: r.x, y: r.y, width: r.width, height: r.height }, diag };
                 }
               }
             }
           }
         }
       }
-      return null;
+      return { rect: null, diag };
     }, { rootUsername, rootText, subUsername, subText });
 
-    if (rect) {
-      logger.info({ x: rect.x, y: rect.y, subUsername, subText: subText.slice(0, 30) }, '[Reply] Found reply icon in sub-comment');
+    // 输出诊断日志
+    logger.info({ subComments: result.diag }, '[Reply] Sub-comment DOM diagnostic');
+
+    if (result.rect) {
+      logger.info({ x: result.rect.x, y: result.rect.y, subUsername, subText: subText.slice(0, 30) }, '[Reply] Found reply icon in sub-comment');
     } else {
-      logger.warn({ subUsername, subText: subText.slice(0, 30) }, '[Reply] Sub-comment not found');
+      logger.warn({ subUsername, subText: subText.slice(0, 30), diag: result.diag }, '[Reply] Sub-comment not found');
     }
-    return rect;
+    return result.rect;
   }
 
   /**
@@ -1753,7 +2076,7 @@ export class TencentCrawler {
         for (const app of apps) {
           const sr = app.shadowRoot;
           if (!sr) { info.push({ hasShadow: false }); continue; }
-          const sl = sr.querySelector('.scroll-list');
+          const sl = sr.querySelector('.feed-comment__wrp .scroll-list');
           if (!sl) { info.push({ hasShadow: true, hasScrollList: false }); continue; }
           const items = sl.querySelectorAll(':scope > div > .comment-item');
           const firstMain = sl.querySelector('.comment-item-main');
@@ -1777,7 +2100,7 @@ export class TencentCrawler {
         for (const app of apps) {
           const sr = app.shadowRoot;
           if (!sr) continue;
-          const scrollList = sr.querySelector('.scroll-list');
+          const scrollList = sr.querySelector('.feed-comment__wrp .scroll-list');
           if (!scrollList) continue;
           const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
           for (const item of rootItems) {
@@ -1812,56 +2135,85 @@ export class TencentCrawler {
 
   /**
    * 展开根评论的所有子评论（点击"展开更多回复"直到没有更多）
-   * 在根评论的 .comment-reply-list 内找 .load-more 按钮
+   * 复用 Phase3 采集的策略：cdpClickByText → iframe → shadow DOM evaluate
+   * 不需要先定位根评论，因为 scrollRootCommentIntoView 已经把根评论滚到可见区域
    */
   private async expandSubRepliesForReply(
     page: Page,
-    rootUsername: string,
-    rootText: string,
+    _rootUsername: string,
+    _rootText: string,
   ): Promise<void> {
     const MAX_EXPAND = 10;
-    for (let i = 0; i < MAX_EXPAND; i++) {
-      const btnRect = await page.evaluate((params: { username: string; text: string }) => {
-        const apps = document.querySelectorAll('wujie-app');
-        for (const app of apps) {
-          const sr = app.shadowRoot;
-          if (!sr) continue;
-          const scrollList = sr.querySelector('.scroll-list');
-          if (!scrollList) continue;
-          const rootItems = scrollList.querySelectorAll(':scope > div > .comment-item');
-          for (const item of rootItems) {
-            const main = item.querySelector(':scope > .comment-item-main');
-            if (!main) continue;
-            const uname = main.querySelector('.comment-user-name')?.textContent?.trim() || '';
-            const content = main.querySelector('.comment-content')?.textContent?.trim() || '';
-            if (uname === params.username && content === params.text) {
-              // 找到根评论，在 .comment-reply-list 中找展开按钮
-              const replyList = item.querySelector(':scope > .comment-reply-list');
-              if (!replyList) return null;
-              const loadMore = replyList.querySelector('.load-more');
-              if (loadMore) {
-                const r = loadMore.getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) {
-                  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-                }
-              }
-              return null; // 没有展开按钮
-            }
-          }
-        }
-        return null;
-      }, { username: rootUsername, text: rootText });
+    let consecutiveNoExpand = 0;
 
-      if (!btnRect) {
-        logger.info({ expandRound: i }, '[Reply] No more expand buttons');
-        break;
+    for (let i = 0; i < MAX_EXPAND; i++) {
+      // 每 3 轮滚动一下评论区，让未渲染的展开按钮进入视口
+      if (i > 0 && i % 3 === 0) {
+        await this.scrollShadowContainer(page, '.feed-comment__wrp', 200, 2);
+        await HumanActions.wait(page, 800, 1200);
       }
 
-      // CDP 坐标点击展开按钮
-      await HumanActions.cdpIdleMove(page, btnRect.x, btnRect.y);
-      await HumanActions.wait(page, 200, 400);
-      await HumanActions.clickAtCoordinates(page, btnRect.x, btnRect.y);
-      logger.info({ expandRound: i, x: btnRect.x, y: btnRect.y }, '[Reply] Clicked expand button');
+      // 策略1: CDP 坐标点击"展开更多回复"文字
+      const clicked = await HumanActions.cdpClickByText(page, '展开更多回复', { timeout: 3000 });
+
+      if (!clicked) {
+        if (consecutiveNoExpand === 0) {
+          // 第一次失败：滚动后重试 CDP
+          await this.scrollShadowContainer(page, '.feed-comment__wrp', 300, 3);
+          await HumanActions.wait(page, 1000, 2000);
+          const retryClicked = await HumanActions.cdpClickByText(page, '展开更多回复', { timeout: 3000 });
+          if (retryClicked) {
+            consecutiveNoExpand = 0;
+            logger.info({ expandRound: i }, '[Reply] Clicked expand via CDP retry');
+            await HumanActions.wait(page, 2000, 3500);
+            continue;
+          }
+
+          // 策略2: iframe fallback
+          const frameClicked = await HumanActions.cdpClickByTextInFrame(
+            page, 'interaction', '展开更多回复', { timeout: 3000 }
+          );
+          if (frameClicked) {
+            consecutiveNoExpand = 0;
+            logger.info({ expandRound: i }, '[Reply] Clicked expand via iframe fallback');
+            await HumanActions.wait(page, 2000, 3500);
+            continue;
+          }
+
+          // 策略3: shadow DOM evaluate fallback（遍历所有 wujie-app）
+          const shadowClicked = await page.evaluate(() => {
+            const apps = document.querySelectorAll('wujie-app');
+            for (const app of Array.from(apps)) {
+              const sr = (app as HTMLElement).shadowRoot;
+              if (!sr) continue;
+              const allEls = sr.querySelectorAll('*');
+              for (const el of Array.from(allEls)) {
+                if (el.children.length === 0 && el.textContent?.trim() === '展开更多回复') {
+                  (el as HTMLElement).click();
+                  return true;
+                }
+              }
+            }
+            return false;
+          });
+          if (shadowClicked) {
+            consecutiveNoExpand = 0;
+            logger.info({ expandRound: i }, '[Reply] Clicked expand via shadow DOM fallback');
+            await HumanActions.wait(page, 2000, 3500);
+            continue;
+          }
+        }
+        consecutiveNoExpand++;
+        if (consecutiveNoExpand >= 2) {
+          logger.info({ expandRound: i }, '[Reply] No more expand buttons');
+          break;
+        }
+        await HumanActions.wait(page, 1500, 2500);
+        continue;
+      }
+
+      consecutiveNoExpand = 0;
+      logger.info({ expandRound: i }, '[Reply] Clicked expand button');
       await HumanActions.wait(page, 2000, 3500);
     }
   }
@@ -1884,6 +2236,7 @@ export class TencentCrawler {
     page: Page,
     target: TencentReplyTarget,
     replyText: string,
+    executionId?: string,
   ): Promise<boolean> {
     const { commentCid, level, username, text } = target;
     logger.info({ commentCid, level, username, textLength: replyText.length }, '[Reply] Starting reply');
@@ -1908,16 +2261,26 @@ export class TencentCrawler {
       logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
     }
 
+    let currentPhase = '';
     const snap = async (label: string, extra?: Record<string, any>) => {
       if (manifest) {
         stepIdx++;
         await saveDebugSnapshot({ page, stepLabel: label, sessionId, stepIndex: stepIdx, manifest, extra });
+        if (executionId) {
+          await recordSelectorTry(executionId, label, {
+            phase: currentPhase,
+            selectors: extra?.selectors || [],
+            mouseAction: extra?.mouseAction,
+            extra: extra?.context,
+          }).catch(() => {});
+        }
       }
     };
 
     try {
       // ★ Bugfix: 注入 esbuild __name polyfill（tsx keepNames:true 会在 evaluate 函数体内注入 __name）
       await this.injectEsbuildPolyfill(page);
+      currentPhase = '准备';
       await snap('reply_start');
 
       // ★ Bugfix: 等待评论列表加载完成（shadow DOM 内的 .comment-item-main）
@@ -1956,7 +2319,13 @@ export class TencentCrawler {
       let replyIconRect: { x: number; y: number; width: number; height: number } | null = null;
 
       if (level === 1) {
-        replyIconRect = await this.findReplyIconInRootComment(page, username, text);
+        // level=1：先滚动找到根评论（评论可能不在当前视口），再定位回复图标
+        const rootFound = await this.scrollRootCommentIntoView(page, username, text);
+        if (rootFound) {
+          replyIconRect = await this.findReplyIconInRootComment(page, username, text);
+        } else {
+          logger.warn({ username, text: text.slice(0, 30) }, '[Reply] Root comment not found after scrolling (level=1)');
+        }
       } else {
         replyIconRect = await this.findReplyIconInSubComment(page, target);
       }
@@ -1987,6 +2356,7 @@ export class TencentCrawler {
         return false;
       }
 
+      currentPhase = '定位评论';
       await snap('reply_icon_found', { x: Math.round(replyIconRect.x), y: Math.round(replyIconRect.y) });
 
       // CDP 点击回复图标（shadow DOM 内的元素需用坐标点击）
@@ -2067,6 +2437,7 @@ export class TencentCrawler {
         await HumanActions.wait(page, 200, 400);
       }
 
+      currentPhase = '输入回复';
       await snap('input_focused', { inputFound: !!inputRect });
 
       // 拟人化输入（safeCDPType 使用 CDP keyboard 事件，可穿透 shadow DOM）
@@ -2144,6 +2515,7 @@ export class TencentCrawler {
         submitted = true;
       }
 
+      currentPhase = '提交回复';
       await snap('submit_clicked', { submitted });
 
       // 等待发送完成

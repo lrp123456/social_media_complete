@@ -7,6 +7,7 @@ import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
+import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import fs from 'fs';
 import path from 'path';
 
@@ -1846,7 +1847,8 @@ export class DouyinCrawler {
           let newRootsFrom3a = 0;
           for (const snapshot of currentSnapshots) {
             if (!dbRootCids.has(snapshot.cid)) {
-              const isAuthor = platformAuthorId ? snapshot.userUid === platformAuthorId : false;
+              const isAuthor = (snapshot.labelType === 1)
+                || (platformAuthorId ? snapshot.userUid === platformAuthorId : false);
               newRootsFrom3a++;
               newCommentsToUpsert.push({
                 cid: snapshot.cid,
@@ -1879,7 +1881,8 @@ export class DouyinCrawler {
             const cid = String(c.cid || '');
             if (!cid || dbAllCids.has(cid)) continue; // 已在 DB 中，跳过
             const createTime = c.create_time || 0;
-            const isAuthor = platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false;
+            const isAuthor = (c.label_type === 1)
+              || (platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false);
             newSubsFromTrulyNew++;
             newCommentsToUpsert.push({
               cid,
@@ -1930,7 +1933,8 @@ export class DouyinCrawler {
                     : createTime * 1000 > lastCheckTime;
 
                   if (isNewComment) {
-                    const isAuthor = platformAuthorId ? userUid === platformAuthorId : false;
+                    const isAuthor = (apiMatch?.label_type === 1)
+                      || (platformAuthorId ? userUid === platformAuthorId : false);
                     newSubsFrom3b++;
                     newCommentsToUpsert.push({
                       cid,
@@ -3030,6 +3034,7 @@ export class DouyinCrawler {
     page: Page,
     target: ReplyTarget,
     replyText: string,
+    executionId?: string,
   ): Promise<boolean> {
     logger.info({
       text: target.text.slice(0, 30),
@@ -3059,10 +3064,19 @@ export class DouyinCrawler {
       logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
     }
 
+    let currentPhase = '';
     const snap = async (label: string, extra?: Record<string, any>) => {
       if (manifest) {
         stepIdx++;
         await saveDebugSnapshot({ page, stepLabel: label, sessionId, stepIndex: stepIdx, manifest, extra });
+        if (executionId) {
+          await recordSelectorTry(executionId, label, {
+            phase: currentPhase,
+            selectors: extra?.selectors || [],
+            mouseAction: extra?.mouseAction,
+            extra: extra?.context,
+          }).catch(() => {});
+        }
       }
     };
 
@@ -3070,6 +3084,7 @@ export class DouyinCrawler {
       // ★ Bugfix: 注入 esbuild __name polyfill（tsx keepNames:true 会在 evaluate 函数体内注入 __name）
       await this.injectEsbuildPolyfill(page);
       await HumanActions.thinkingPause(page, 800, 2000);
+      currentPhase = '准备';
       await snap('reply_start');
 
       // ── 1. 找到目标坐标（来自 scrollExpandAndFindTarget）──
@@ -3081,6 +3096,7 @@ export class DouyinCrawler {
         return false;
       }
 
+      currentPhase = '定位视频';
       await snap('target_found', { x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) });
       logger.info({ x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) }, '[Reply] Target located, clicking reply');
 
@@ -3090,6 +3106,7 @@ export class DouyinCrawler {
         await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
       });
       await HumanActions.wait(page, 300, 600);
+      currentPhase = '执行回复';
       await snap('hover_target', { x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) });
 
       // ── 3. 点击"回复"按钮（用 page.evaluate 找到距离 foundCoords 最近的文本为"回复"的按钮）──
@@ -3206,6 +3223,7 @@ export class DouyinCrawler {
         if (manifest) finishManifest(manifest, false);
         return false;
       }
+      currentPhase = '输入回复';
       await snap('input_focused');
 
       // ── 5. 拟人化输入 ──
@@ -3259,6 +3277,7 @@ export class DouyinCrawler {
       }, { btnX: btnCoords.x, btnY: btnCoords.y });
 
       // ★ 检测并处理客服悬浮窗遮挡发送按钮
+      let submitClicked = false;
       if (sendBtn) {
         const isBlockedByService = await page.evaluate(function(coords: {x: number; y: number}) {
           const el = document.elementFromPoint(coords.x, coords.y);
@@ -3276,178 +3295,127 @@ export class DouyinCrawler {
         }, { x: sendBtn.x, y: sendBtn.y });
 
         if (isBlockedByService) {
-          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，滚动页面避开');
+          logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，尝试隐藏悬浮窗');
 
-          // 客服按钮固定在右下角无法关闭，滚动一次让发送按钮移出遮挡区域
-          await HumanActions.withCDPContext(page, async (ctx) => {
-            await ctx.mouse.dispatchWheel(0, 200, 500, 400);
-          });
-          await HumanActions.wait(page, 800, 1500);
-
-          // 重新获取发送按钮坐标
-          const newSendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
-            function findReplyBtn(): Element | null {
-              var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-              var best: Element | null = null, bestDist = Infinity;
-              for (var i = 0; i < items.length; i++) {
-                if ((items[i].textContent || '').trim() !== '回复') continue;
-                var r = items[i].getBoundingClientRect();
-                if (r.width === 0 || r.height === 0) continue;
-                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-                var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-                if (d < bestDist) { bestDist = d; best = items[i]; }
-              }
-              return best;
-            }
-
-            var replyBtn = findReplyBtn();
-            if (!replyBtn) return null;
-
-            var panels = document.querySelectorAll('[class*="reply-content-"]');
-            var targetPanel: Element | null = null;
-            for (var i = 0; i < panels.length; i++) {
-              var p = panels[i];
-              var r = p.getBoundingClientRect();
-              if (r.width === 0 || r.height === 0) continue;
-              var rel = replyBtn.compareDocumentPosition(p);
-              if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-              targetPanel = p;
-              break;
-            }
-            if (!targetPanel) return null;
-
-            var btns = targetPanel.querySelectorAll('button');
-            for (var j = 0; j < btns.length; j++) {
-              var t = (btns[j].textContent || '').trim();
-              if (t === '发送' && !(btns[j] as any).disabled) {
-                var br = btns[j].getBoundingClientRect();
-                return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
-              }
-            }
-            return null;
-          }, { btnX: btnCoords.x, btnY: btnCoords.y });
-
-          if (newSendBtn) {
-            sendBtn.x = newSendBtn.x;
-            sendBtn.y = newSendBtn.y;
-            logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 滚动后重新定位发送按钮');
-          } else {
-            // 滚动后仍找不到发送按钮 — 检查回复面板是否还在
-            const panelCheck = await page.evaluate(function() {
-              var editables = document.querySelectorAll('[contenteditable="true"]');
-              var visibleEditable: Element | null = null;
-              for (var i = 0; i < editables.length; i++) {
-                var r = editables[i].getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) {
-                  visibleEditable = editables[i];
-                  break;
+          // ★ 不滚动页面（滚动会导致回复面板失焦、文字丢失）
+          // 改为隐藏客服悬浮窗元素
+          const hidden = await page.evaluate(function() {
+            const selectors = [
+              '.creator-help-bar', '.online-service', '.service-popup',
+              '[class*="help-bar"]', '[class*="online-service"]', '[class*="service-popup"]',
+              '[class*="creator-help"]'
+            ];
+            let hiddenCount = 0;
+            for (const sel of selectors) {
+              const els = document.querySelectorAll(sel);
+              for (let i = 0; i < els.length; i++) {
+                const r = els[i].getBoundingClientRect();
+                if (r.width > 0 || r.height > 0) {
+                  (els[i] as HTMLElement).style.display = 'none';
+                  hiddenCount++;
                 }
               }
-              if (!visibleEditable) return { exists: false };
-              var inputText = (visibleEditable.textContent || '').trim();
-              // 检查发送按钮是否存在但 disabled
-              var sendBtns = document.querySelectorAll('button');
-              var sendDisabled = false;
-              var sendExists = false;
-              for (var j = 0; j < sendBtns.length; j++) {
-                if ((sendBtns[j].textContent || '').trim() === '发送') {
-                  sendExists = true;
-                  if ((sendBtns[j] as any).disabled) sendDisabled = true;
-                }
-              }
-              return { exists: true, inputText: inputText, sendExists: sendExists, sendDisabled: sendDisabled, editable: visibleEditable };
-            });
-
-            if (!panelCheck.exists) {
-              logger.error('[Reply] 回复面板已关闭，无法发送');
-              if (manifest) finishManifest(manifest, false);
-              return false;
             }
-
-            // 发送按钮 disabled = React 状态没更新（CDP 打字没触发 onChange）
-            // dispatch input event 让 React 感知到文字
-            if (panelCheck.sendDisabled && panelCheck.inputText) {
-              logger.info({ inputText: panelCheck.inputText.slice(0, 20) }, '[Reply] 发送按钮 disabled，尝试触发 React input 事件');
-              await page.evaluate(function() {
-                var editables = document.querySelectorAll('[contenteditable="true"]');
-                for (var i = 0; i < editables.length; i++) {
-                  var r = editables[i].getBoundingClientRect();
-                  if (r.width > 0 && r.height > 0) {
-                    (editables[i] as HTMLElement).focus();
-                    editables[i].dispatchEvent(new Event('input', { bubbles: true }));
-                    editables[i].dispatchEvent(new Event('change', { bubbles: true }));
+            // 也尝试隐藏包含"在线客服"文字的浮窗
+            const allEls = document.querySelectorAll('div, span, iframe');
+            for (let i = 0; i < allEls.length; i++) {
+              const el = allEls[i] as HTMLElement;
+              if (el.children.length > 3) continue; // 跳过容器
+              const text = (el.textContent || '').trim();
+              if (text === '在线客服' || text.includes('在线客服')) {
+                // 向上找最近的 fixed/absolute 定位的祖先并隐藏
+                let cur: Element | null = el;
+                while (cur) {
+                  const style = window.getComputedStyle(cur);
+                  if (style.position === 'fixed' || style.position === 'absolute') {
+                    (cur as HTMLElement).style.display = 'none';
+                    hiddenCount++;
                     break;
                   }
+                  cur = cur.parentElement;
                 }
-              });
-              await HumanActions.wait(page, 500, 1000);
-
-              // 重试查找发送按钮
-              const retrySendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
-                function findReplyBtn(): Element | null {
-                  var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-                  var best: Element | null = null, bestDist = Infinity;
-                  for (var i = 0; i < items.length; i++) {
-                    if ((items[i].textContent || '').trim() !== '回复') continue;
-                    var r = items[i].getBoundingClientRect();
-                    if (r.width === 0 || r.height === 0) continue;
-                    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-                    var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-                    if (d < bestDist) { bestDist = d; best = items[i]; }
-                  }
-                  return best;
-                }
-                var replyBtn = findReplyBtn();
-                if (!replyBtn) return null;
-                var panels = document.querySelectorAll('[class*="reply-content-"]');
-                var targetPanel: Element | null = null;
-                for (var i = 0; i < panels.length; i++) {
-                  var p = panels[i];
-                  var r = p.getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  var rel = replyBtn.compareDocumentPosition(p);
-                  if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-                  targetPanel = p;
-                  break;
-                }
-                if (!targetPanel) return null;
-                var btns = targetPanel.querySelectorAll('button');
-                for (var j = 0; j < btns.length; j++) {
-                  var t = (btns[j].textContent || '').trim();
-                  if (t === '发送' && !(btns[j] as any).disabled) {
-                    var br = btns[j].getBoundingClientRect();
-                    return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
-                  }
-                }
-                return null;
-              }, { btnX: btnCoords.x, btnY: btnCoords.y });
-
-              if (retrySendBtn) {
-                sendBtn.x = retrySendBtn.x;
-                sendBtn.y = retrySendBtn.y;
-                logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 触发 input 事件后发送按钮已启用');
-              } else {
-                logger.error('[Reply] 触发 input 事件后发送按钮仍 disabled，回复失败');
-                if (manifest) finishManifest(manifest, false);
-                return false;
               }
-            } else if (!panelCheck.inputText) {
-              // 文字丢失
-              logger.error('[Reply] 滚动后回复文字丢失，无法发送');
-              if (manifest) finishManifest(manifest, false);
+            }
+            return hiddenCount;
+          });
+
+          if (hidden > 0) {
+            logger.info({ hiddenCount: hidden }, '[Reply] 客服悬浮窗已隐藏');
+            await HumanActions.wait(page, 300, 600);
+          }
+
+          // 重新检查发送按钮是否仍被遮挡
+          const stillBlocked = await page.evaluate(function(coords: {x: number; y: number}) {
+            const el = document.elementFromPoint(coords.x, coords.y);
+            if (!el) return false;
+            let cur: Element | null = el as Element;
+            while (cur) {
+              const text = (cur.textContent || '').trim();
+              const cls = (cur.className || '').toLowerCase();
+              if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
+                return true;
+              }
+              cur = cur.parentElement;
+            }
+            return false;
+          }, { x: sendBtn.x, y: sendBtn.y });
+
+          if (stillBlocked) {
+            logger.warn('[Reply] 隐藏后发送按钮仍被遮挡，使用 evaluate 直接点击');
+            // 悬浮窗无法隐藏，用 evaluate 直接 click 发送按钮（合理回退）
+            const evalClicked = await page.evaluate(function(params: {btnX: number; btnY: number}) {
+              function findReplyBtn(): Element | null {
+                var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+                var best: Element | null = null, bestDist = Infinity;
+                for (var i = 0; i < items.length; i++) {
+                  if ((items[i].textContent || '').trim() !== '回复') continue;
+                  var r = items[i].getBoundingClientRect();
+                  if (r.width === 0 || r.height === 0) continue;
+                  var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                  var d = Math.hypot(cx - params.btnX, cy - params.btnY);
+                  if (d < bestDist) { bestDist = d; best = items[i]; }
+                }
+                return best;
+              }
+              var replyBtn = findReplyBtn();
+              if (!replyBtn) return false;
+              var panels = document.querySelectorAll('[class*="reply-content-"]');
+              var targetPanel: Element | null = null;
+              for (var i = 0; i < panels.length; i++) {
+                var p = panels[i];
+                var r = p.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var rel = replyBtn.compareDocumentPosition(p);
+                if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                targetPanel = p;
+                break;
+              }
+              if (!targetPanel) return false;
+              var btns = targetPanel.querySelectorAll('button');
+              for (var j = 0; j < btns.length; j++) {
+                var t = (btns[j].textContent || '').trim();
+                if (t === '发送' && !(btns[j] as any).disabled) {
+                  (btns[j] as HTMLElement).click();
+                  return true;
+                }
+              }
               return false;
+            }, { btnX: btnCoords.x, btnY: btnCoords.y });
+
+            if (evalClicked) {
+              logger.info('[Reply] evaluate 直接点击发送按钮成功');
+              submitClicked = true;
             } else {
-              // 其他原因找不到发送按钮
-              logger.error('[Reply] 滚动后无法定位发送按钮（未知原因），回复失败');
+              logger.error('[Reply] 发送按钮被遮挡且 evaluate 点击也失败');
               if (manifest) finishManifest(manifest, false);
               return false;
             }
           }
+          // 如果不再被遮挡，sendBtn 坐标仍有效，继续走正常 CDP 点击流程
         }
       }
 
-      let submitClicked = false;
-      if (sendBtn) {
+      if (sendBtn && !submitClicked) {
         await HumanActions.withCDPContext(page, async (ctx) => {
           await ctx.mouse.moveTo({ x: sendBtn.x, y: sendBtn.y });
           await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
@@ -3455,7 +3423,7 @@ export class DouyinCrawler {
         });
         submitClicked = true;
         logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 通过坐标点击了发送按钮');
-      } else {
+      } else if (!submitClicked) {
         // 回退：用 evaluate 精确匹配文本为"发送"且未 disabled 的按钮
         const fallbackBtn = await page.evaluate(function() {
           var panels = document.querySelectorAll('[class*="reply-content-"]');
@@ -3486,6 +3454,7 @@ export class DouyinCrawler {
         }
       }
       if (!submitClicked) logger.warn('[Reply] Submit not found, but text was typed');
+      currentPhase = '提交回复';
       await snap('submit_clicked', { clicked: submitClicked });
 
       // ── 7. 等待 + 验证 ──

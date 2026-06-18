@@ -9,6 +9,7 @@ import { BrowserManager } from '@social-media/browser-core';
 import { createLogger } from '../lib/logger';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
+import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import fs from 'fs';
 import path from 'path';
 
@@ -520,15 +521,32 @@ export class KuaishouCrawler {
 
     logger.info({ source, step: 'AFTER_NAVIGATE', existingResponses: this.interceptor.getResponseCount(pattern) }, 'Navigation complete, waiting for target response');
 
+    // 导航后检测前端错误弹窗（快手 API 超时会弹出 "出错了" 对话框，阻塞页面）
+    if (await this.dismissErrorDialog(page)) {
+      logger.info({ source }, '导航后检测到错误弹窗并已刷新清除，重新等待响应');
+    }
+
     let initialResponse = await this.interceptor.waitForResponse(pattern, 25000);
 
     if (!initialResponse) {
-      logger.info({ source }, 'No target response after 25s, compensating with menu re-click');
-      this.currentMenuSection = 'unknown';
-      if (source === 'work_list') {
-        await this.navigateToWorkManage(page);
+      // 优先检测前端错误弹窗 — 若存在则刷新清除（用户要求刷新解决而非跳过）
+      const dialogHandled = await this.dismissErrorDialog(page);
+      if (dialogHandled) {
+        logger.info({ source }, '无响应时检测到错误弹窗，已刷新清除，重新导航到目标页面');
+        this.currentMenuSection = 'unknown';
+        if (source === 'work_list') {
+          await this.navigateToWorkManage(page);
+        } else {
+          await this.navigateToPhotoAnalysis(page);
+        }
       } else {
-        await this.navigateToPhotoAnalysis(page);
+        logger.info({ source }, 'No target response after 25s, compensating with menu re-click');
+        this.currentMenuSection = 'unknown';
+        if (source === 'work_list') {
+          await this.navigateToWorkManage(page);
+        } else {
+          await this.navigateToPhotoAnalysis(page);
+        }
       }
       logger.info({ source, step: 'AFTER_COMPENSATION', existingResponses: this.interceptor.getResponseCount(pattern) }, 'Compensation complete, waiting again');
       initialResponse = await this.interceptor.waitForResponse(pattern, 20000);
@@ -1049,6 +1067,86 @@ export class KuaishouCrawler {
         evidence: '',
       };
     }
+  }
+
+  // ════════════════════════════════════════
+  // 前端错误弹窗处理 (cp-dialog-wrapper)
+  // 快手自身 API 请求超时 (30s) 时前端弹出 "出错了"/"timeout of 30000ms exceeded" 对话框，
+  // 该弹窗会阻塞页面交互，导致爬虫无法获取数据。用户反馈该弹窗有时无法正常关闭，
+  // 因此检测到后优先刷新页面清除卡死状态，而非跳过。
+  // ════════════════════════════════════════
+
+  /**
+   * 检测快手前端错误弹窗 (.cp-dialog-wrapper)
+   * @returns detected=是否可见; content=弹窗内容摘要（用于日志）
+   */
+  private async detectErrorDialog(page: Page): Promise<{ detected: boolean; content?: string }> {
+    try {
+      const visible = await HumanActions.cdpIsElementVisible(page, '.cp-dialog-wrapper');
+      if (!visible) return { detected: false };
+
+      let content = '出错了';
+      try {
+        const bodyText = await HumanActions.cdpGetBodyText(page);
+        const timeoutMatch = bodyText.match(/timeout of \d+ms exceeded/i);
+        if (timeoutMatch) {
+          content = timeoutMatch[0];
+        } else if (bodyText.includes('出错了')) {
+          content = '出错了';
+        }
+      } catch {}
+
+      return { detected: true, content };
+    } catch {
+      return { detected: false };
+    }
+  }
+
+  /**
+   * 处理快手前端错误弹窗 — 先尝试点击"确认"关闭，再刷新页面清除卡死状态。
+   * 刷新是关键步骤：用户反馈该弹窗有时无法正常关闭，刷新页面是更可靠的方案。
+   * @returns 是否检测并处理了错误弹窗（即是否刷新了页面）
+   */
+  private async dismissErrorDialog(page: Page): Promise<boolean> {
+    const detected = await this.detectErrorDialog(page);
+    if (!detected.detected) return false;
+
+    logger.warn({ content: detected.content }, '[ErrorDialog] 快手前端错误弹窗已检测到，刷新页面清除卡死状态');
+
+    // 先尝试点击"确认"按钮关闭弹窗（可能失败，但无害）
+    const confirmSelectors = [
+      '.cp-dialog__btns button',
+      '.cp-dialog .el-button--primary',
+      '.cp-dialog-wrapper button',
+    ];
+    for (const sel of confirmSelectors) {
+      try {
+        const clicked = await HumanActions.cdpClick(page, sel, { timeout: 3000 });
+        if (clicked) {
+          logger.info({ selector: sel }, '[ErrorDialog] 已点击确认按钮');
+          break;
+        }
+      } catch {}
+    }
+
+    await HumanActions.wait(page, 500, 1000);
+
+    // 关键：刷新页面清除卡死状态（用户要求：刷新页面解决，而非跳过）
+    await HumanActions.cdpF5Refresh(page);
+    HumanActions.clearCDPContext(page);
+    this.currentMenuSection = 'unknown';
+    await HumanActions.wait(page, 2000, 4000);
+    await HumanActions.pageLoadBehavior(page);
+
+    // 验证弹窗是否已消失
+    const stillThere = await this.detectErrorDialog(page);
+    if (stillThere.detected) {
+      logger.warn({ content: stillThere.content }, '[ErrorDialog] 刷新后弹窗仍存在，将在下次检查时重试');
+    } else {
+      logger.info('[ErrorDialog] 刷新页面后错误弹窗已清除');
+    }
+
+    return true;
   }
 
   async captureRiskScene(page: Page, userId: number, riskType: string): Promise<{ screenshotPath: string | null; htmlPath: string | null }> {
@@ -1816,10 +1914,11 @@ export class KuaishouCrawler {
     description: string
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS_DRAWER = 20;
-    const descLower = description.toLowerCase().trim();
+    // 规范化：将 \u00a0 (non-breaking space) 替换为普通空格，避免 DOM 中的 &nbsp; 导致匹配失败
+    const descLower = description.toLowerCase().trim().replace(/\u00a0/g, ' ');
     const descPrefix = descLower.substring(0, Math.min(descLower.length, 20));
 
-    logger.info({ awemeId, descPrefix }, '[Drawer] Searching for target video in kuaishou drawer');
+    logger.info({ awemeId, descPrefix, rawLength: description.length }, '[Drawer] Searching for target video in kuaishou drawer');
 
     const SCROLL_CONTAINER = '.auto-load-list';
 
@@ -1832,7 +1931,8 @@ export class KuaishouCrawler {
         for (const item of items) {
           const titleEl = item.querySelector('.video-info__content__title') as HTMLElement;
           if (!titleEl) continue;
-          const titleText = (titleEl.textContent || '').toLowerCase().trim();
+          // 规范化：将 \u00a0 (non-breaking space / &nbsp;) 替换为普通空格，与 descPrefix 保持一致
+          const titleText = (titleEl.textContent || '').toLowerCase().trim().replace(/\u00a0/g, ' ');
           if (!titleText) continue;
           // 匹配标题
           if (titleText.includes(prefix) || prefix.includes(titleText)) {
@@ -2066,7 +2166,7 @@ export class KuaishouCrawler {
    * 通过 commentCid 或 commentText 定位目标评论后点击该评论的回复按钮，
    * 然后在同一个评论容器内查找输入框和发送按钮，避免误操作其他评论。
    */
-  async replyToComment(page: Page, target: KuaishouReplyTarget, replyText: string): Promise<boolean> {
+  async replyToComment(page: Page, target: KuaishouReplyTarget, replyText: string, executionId?: string): Promise<boolean> {
     logger.info({ 
       commentCid: target.commentCid, 
       text: target.text?.slice(0, 30), 
@@ -2095,10 +2195,19 @@ export class KuaishouCrawler {
       logger.info({ sessionId }, '[Reply] Debug mode enabled, snapshots will be saved');
     }
 
+    let currentPhase = '';
     const snap = async (label: string, extra?: Record<string, any>) => {
       if (manifest) {
         stepIdx++;
         await saveDebugSnapshot({ page, stepLabel: label, sessionId, stepIndex: stepIdx, manifest, extra });
+        if (executionId) {
+          await recordSelectorTry(executionId, label, {
+            phase: currentPhase,
+            selectors: extra?.selectors || [],
+            mouseAction: extra?.mouseAction,
+            extra: extra?.context,
+          }).catch(() => {});
+        }
       }
     };
 
@@ -2106,6 +2215,7 @@ export class KuaishouCrawler {
       // 注入 esbuild polyfill，防止 __name is not defined 错误
       await this.injectEsbuildPolyfill(page);
       await HumanActions.thinkingPause(page, 800, 2000);
+      currentPhase = '准备';
       await snap('reply_start');
 
       // ── Step 0: 定位根评论容器并展开子评论 ──
@@ -2293,6 +2403,7 @@ export class KuaishouCrawler {
       logger.info({ scrollResult }, '[Reply] Scrolled root comment into view');
       await HumanActions.wait(page, 1000, 1500);
       
+      currentPhase = '定位评论';
       await snap('root_comment_found', { method: rootCommentInfo.method, index: rootCommentInfo.index, scroll: scrollResult });
 
       // 在目标根评论容器内展开子评论
@@ -2390,7 +2501,8 @@ export class KuaishouCrawler {
         }
 
         if (totalExpanded > 0) {
-          await snap('expanded_sub_comments_in_root', { totalExpanded });
+          currentPhase = '展开子评论';
+      await snap('expanded_sub_comments_in_root', { totalExpanded });
           logger.info({ totalExpanded }, '[Reply] Expanded sub-comments in target root comment');
         }
       }
@@ -2614,6 +2726,7 @@ export class KuaishouCrawler {
       }, { target: target as any, rootIndex: rootCommentInfo.index });
 
       const finalRect = freshRect || locateResult;
+      currentPhase = '执行回复';
       await snap('reply_button_found', { 
         method: 'in-root-container', 
         level: target.level,
@@ -2664,6 +2777,7 @@ export class KuaishouCrawler {
         return false;
       }
 
+      currentPhase = '输入回复';
       await snap('reply_input_found', { x: Math.round(inputRect.x), y: Math.round(inputRect.y) });
       await HumanActions.clickAtCoordinates(page, inputRect.x + inputRect.width / 2, inputRect.y + inputRect.height / 2);
       await HumanActions.wait(page, 300, 600);
@@ -2708,7 +2822,8 @@ export class KuaishouCrawler {
       });
 
       if (submitRect) {
-        await snap('submit_button_found', { x: Math.round(submitRect.x), y: Math.round(submitRect.y) });
+        currentPhase = '提交回复';
+      await snap('submit_button_found', { x: Math.round(submitRect.x), y: Math.round(submitRect.y) });
         await HumanActions.clickAtCoordinates(page, submitRect.x + submitRect.width / 2, submitRect.y + submitRect.height / 2);
         await snap('clicked_submit_button');
       } else {
