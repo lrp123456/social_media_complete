@@ -502,7 +502,7 @@ router.post('/monitor/tasks/:taskId/cancel', async (req: Request, res: Response)
     // Step 2: 从 Redis 强制删除任务及其锁
     try {
       const redis = monitorQueue.client;
-      const queueName = 'monitor';
+      const queueName = 'platform';
 
       // 删除任务相关的所有 Redis key
       const keysToDelete = [
@@ -569,7 +569,7 @@ router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Respo
 
     const allJobs = [...active, ...waiting, ...delayed];
     const redis = monitorQueue.client;
-    const queueName = 'monitor';
+    const queueName = 'platform';
     let cancelled = 0;
 
     for (const job of allJobs) {
@@ -625,36 +625,6 @@ router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Respo
     });
   } catch (err) {
     handleError(res, logger, err, '强制取消所有任务失败');
-  }
-});
-
-/** POST /api/v1/matrix/monitor/active-tasks/cancel-all — 取消所有活跃任务 */
-router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Response) => {
-  try {
-    const [active, waiting, delayed] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
-      monitorQueue.getJobs(['delayed']),
-    ]);
-
-    const allJobs = [...active, ...waiting, ...delayed];
-    let cancelled = 0;
-
-    for (const job of allJobs) {
-      try {
-        await job.remove();
-        cancelled++;
-      } catch {}
-    }
-
-    logger.info({ cancelled, total: allJobs.length }, '已取消所有任务');
-
-    res.json({
-      success: true,
-      message: `已取消 ${cancelled} 个任务`,
-    });
-  } catch (err) {
-    handleError(res, logger, err, '取消所有任务失败');
   }
 });
 
