@@ -629,6 +629,7 @@ export function useCancelMonitorTask() {
       api.post(`/matrix/monitor/tasks/${taskId}/cancel`).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['monitor', 'active-tasks'] });
+      qc.invalidateQueries({ queryKey: ['queue', 'active'] });
     },
   });
 }
@@ -640,6 +641,7 @@ export function useCancelAllMonitorTasks() {
       api.post('/matrix/monitor/active-tasks/cancel-all').then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['monitor', 'active-tasks'] });
+      qc.invalidateQueries({ queryKey: ['queue', 'active'] });
     },
   });
 }
@@ -1498,7 +1500,7 @@ export function useActiveQueueTasks() {
   return useQuery<ActiveQueueData>({
     queryKey: ['queue', 'active'],
     queryFn: () =>
-      api.get('/matrix/queue/active').then((r) => r.data.data as ActiveQueueData),
+      api.get('/matrix/queue/active').then((r) => r.data as ActiveQueueData),
     refetchInterval: 3000,
     retry: 2,
     staleTime: 1000,
@@ -1509,7 +1511,7 @@ export function useQueueHistory(params?: { page?: number; limit?: number; taskTy
   return useQuery<HistoryData>({
     queryKey: ['queue', 'history', params],
     queryFn: () =>
-      api.get('/matrix/queue/history', { params }).then((r) => r.data.data as HistoryData),
+      api.get('/matrix/queue/history', { params }).then((r) => r.data as HistoryData),
     retry: 2,
   });
 }
@@ -1518,7 +1520,7 @@ export function useExecutionDetail(id: string | null) {
   return useQuery<ExecutionDetail>({
     queryKey: ['queue', 'execution', id],
     queryFn: () =>
-      api.get(`/matrix/queue/executions/${id}`).then((r) => r.data.data as ExecutionDetail),
+      api.get(`/matrix/queue/executions/${id}`).then((r) => r.data as ExecutionDetail),
     enabled: !!id,
     retry: 1,
   });
