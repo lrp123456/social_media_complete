@@ -1,0 +1,77 @@
+import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+
+const mockPrisma = {
+  systemStatus: { findFirst: jest.fn() },
+  taskExecution: {
+    create: jest.fn(),
+    update: jest.fn(),
+    findUnique: jest.fn(),
+  },
+  taskExecutionStep: { create: jest.fn() },
+};
+
+jest.mock('./prisma', () => ({ prisma: mockPrisma }));
+jest.mock('./logger', () => ({
+  createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }),
+}));
+
+import { startExecution, updatePhase, recordSelectorTry, finishExecution } from './taskExecutionRecorder';
+import type { ReplyTaskData } from '../services/unifiedQueue';
+
+describe('taskExecutionRecorder', () => {
+  beforeEach(() => { jest.clearAllMocks(); });
+
+  const mockTask: ReplyTaskData = {
+    taskType: 'reply', taskId: 'task-123', userId: 1, platform: 'douyin',
+    windowId: 'win-1', fingerprintWindowId: 'fp-1',
+    replyData: { videoId: 'v1', commentCid: 'c1', text: 'hi' },
+  };
+  const mockJob = { updateProgress: jest.fn() };
+
+  it('startExecution creates record with isDebugMode from SystemStatus', async () => {
+    mockPrisma.systemStatus.findFirst.mockResolvedValue({ isDebugMode: true });
+    mockPrisma.taskExecution.create.mockResolvedValue({ id: 'exec-1' });
+    const execId = await startExecution(mockTask, mockJob as any);
+    expect(execId).toBe('exec-1');
+    expect(mockPrisma.taskExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ taskId: 'task-123', taskType: 'reply', isDebugMode: true, status: 'running' }),
+    });
+  });
+
+  it('updatePhase updates DB and calls job.updateProgress', async () => {
+    await updatePhase('exec-1', 3, '定位视频', 30, '选择目标视频中');
+    expect(mockPrisma.taskExecution.update).toHaveBeenCalled();
+    expect(mockJob.updateProgress).toHaveBeenCalledWith({
+      phase: '定位视频', step: '第 3 阶段', percent: 30, detail: '选择目标视频中',
+    });
+  });
+
+  it('recordSelectorTry is no-op when debug disabled', async () => {
+    mockPrisma.taskExecution.findUnique.mockResolvedValue({ isDebugMode: false });
+    await recordSelectorTry('exec-1', 'label', { phase: 'test', selectors: [] });
+    expect(mockPrisma.taskExecutionStep.create).not.toHaveBeenCalled();
+  });
+
+  it('recordSelectorTry writes step when debug enabled', async () => {
+    mockPrisma.taskExecution.findUnique.mockResolvedValue({ isDebugMode: true });
+    await recordSelectorTry('exec-1', 'click-btn', {
+      phase: '执行回复',
+      selectors: [{ selector: '.primary', hit: false, isPrimary: true }, { selector: '.fallback', hit: true, isPrimary: false }],
+      mouseAction: 'click(412,287)',
+    });
+    expect(mockPrisma.taskExecutionStep.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        executionId: 'exec-1', label: 'click-btn', status: 'fallback',
+        selectorTries: [{ selector: '.primary', hit: false, isPrimary: true }, { selector: '.fallback', hit: true, isPrimary: false }],
+      }),
+    });
+  });
+
+  it('finishExecution updates status and computes durationMs', async () => {
+    await finishExecution('exec-1', 'completed');
+    expect(mockPrisma.taskExecution.update).toHaveBeenCalledWith({
+      where: { id: 'exec-1' },
+      data: expect.objectContaining({ status: 'completed', completedAt: expect.any(Date), durationMs: expect.any(Number) }),
+    });
+  });
+});
