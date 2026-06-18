@@ -66,6 +66,7 @@ model Comment {
   parentId     String?  @map("parent_id")
   level        Int      @default(1) @map("level")
   replyToName  String?  @map("reply_to_name")
+  isAuthor     Boolean  @default(false) @map("is_author")
   createdAt    DateTime @default(now()) @map("created_at")
 
   // AI 客服建议字段
@@ -372,4 +373,55 @@ model LoginVerification {
 
   @@index([operatorId, platform], name: "idx_verification_operator_platform")
   @@map("login_verifications")
+}
+
+// ============================================================
+// 任务执行追踪（阶段进度 + debug 步骤记录）
+// ============================================================
+
+model TaskExecution {
+  id              String   @id @default(cuid())
+  taskId          String   // 对应 BullMQ jobId
+  taskType        String   @db.VarChar(16) // 'monitor' | 'publish' | 'reply'
+  platform        String   @db.VarChar(32)
+  userId          Int?
+  windowId        String   @db.VarChar(128)
+  status          String   @default("running") @db.VarChar(16)
+  currentPhase    String?  @db.VarChar(64)
+  phaseIndex      Int?
+  totalPhases     Int?
+  progressPercent Int?
+  startedAt       DateTime @default(now()) @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+  durationMs      Int?     @map("duration_ms")
+  errorMessage    String?  @map("error_message") @db.Text
+  isDebugMode     Boolean  @default(false) @map("is_debug_mode")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  steps           TaskExecutionStep[]
+
+  @@index([taskType, createdAt], name: "idx_task_exec_type_created")
+  @@index([status, createdAt], name: "idx_task_exec_status_created")
+  @@index([userId, createdAt], name: "idx_task_exec_user_created")
+  @@map("task_executions")
+}
+
+model TaskExecutionStep {
+  id              String   @id @default(cuid())
+  executionId     String   @map("execution_id")
+  phase           String   @db.VarChar(64)
+  stepIndex       Int      @map("step_index")
+  label           String   @db.VarChar(128)
+  status          String   @db.VarChar(16) // 'success' | 'failed' | 'fallback'
+  durationMs      Int?     @map("duration_ms")
+  selectorTries   Json?    @map("selector_tries")
+  mouseAction     String?  @map("mouse_action") @db.VarChar(128)
+  extra           Json?
+  snapshotPath    String?  @map("snapshot_path") @db.VarChar(512)
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  execution       TaskExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId, stepIndex], name: "idx_task_step_exec_index")
+  @@map("task_execution_steps")
 }
