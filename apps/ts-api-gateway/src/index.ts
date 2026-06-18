@@ -37,6 +37,7 @@ import llmReplyRouter from './routes/llmReply';
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
 import { startMonitorScheduler } from './services/monitorService';
+import { startCleanupScheduler } from './services/cleanupService';
 
 // ============================================================
 // 初始化
@@ -129,6 +130,9 @@ app.listen(PORT, () => {
 
   // 启动监控调度器（定时评论检查）
   startMonitorScheduler();
+
+  // 启动每日清理定时器（过期记录 & 快照）
+  startCleanupScheduler();
 });
 
 // 全局未捕获异常处理 — 防止 patchright "Frame was detached" 等错误导致进程崩溃
