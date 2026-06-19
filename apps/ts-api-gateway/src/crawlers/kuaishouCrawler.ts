@@ -148,6 +148,7 @@ export class KuaishouCrawler {
   private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'interact' | 'unknown' = 'unknown';
   private page?: Page;
+  private awemeIdToPhotoStatus: Map<string, number> = new Map();
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -646,7 +647,7 @@ export class KuaishouCrawler {
       awemeIds: filtered.map(i => i.aweme_id),
     }, 'Kuaishou video list fetch completed');
 
-    (this as any)._awemeIdToPhotoStatus = awemeIdToPhotoStatus;
+    this.awemeIdToPhotoStatus = awemeIdToPhotoStatus;
     return filtered;
   }
 
@@ -1199,6 +1200,7 @@ export class KuaishouCrawler {
   async checkForUpdates(
     page: Page,
     userId: number,
+    windowId: string,
     source: KuaishouQuerySource
   ): Promise<KuaishouCheckResult> {
     logger.info({ userId, source }, '[Phase1] Starting kuaishou update check — collection only mode');

@@ -871,7 +871,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   // Phase 1 — 随机选择数据源
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
   const source: 'work_list' | 'photo_analysis' = Math.random() < 0.5 ? 'work_list' : 'photo_analysis';
-  const phase1Result = await kuaishouCrawler.checkForUpdates(page, task.userId, source);
+  const phase1Result = await kuaishouCrawler.checkForUpdates(page, task.userId, task.windowId, source);
 
   kuaishouCrawler.unregisterListener();
 
