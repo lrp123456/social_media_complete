@@ -1950,7 +1950,37 @@ export function restartMonitorScheduler(): void {
   startMonitorScheduler();
 }
 
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * 调度器看门狗：每 30 秒检查所有调度状态
+ * 如果某窗口的定时器已过期（remainingMs=0）且无任务运行中，
+ * 自动重新调度，防止定时器丢失导致窗口卡死
+ */
+function startSchedulerWatchdog(): void {
+  if (watchdogTimer) clearInterval(watchdogTimer);
+  watchdogTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, st] of schedulerStates.entries()) {
+      if (st.pendingTaskCount > 0 || st.scheduleAfterCompletion) continue;
+      if (!st.timer) continue;
+      // 定时器已过期超过 30 秒，说明 timer 回调丢失
+      if (st.nextRunAt > 0 && now > st.nextRunAt + 30_000) {
+        // key = "windowId_platform"，platform 是最后一节（may contain underscores in windowId）
+        const lastUnderscore = key.lastIndexOf('_');
+        const windowId = key.substring(0, lastUnderscore);
+        const platform = key.substring(lastUnderscore + 1);
+        logger.warn({ windowId, platform, nextRunAt: st.nextRunAt, now, deadSeconds: Math.round((now - st.nextRunAt) / 1000) }, '🐕 调度器看门狗：检测到定时器丢失，自动重新调度');
+        scheduleNext(windowId, platform, 5000); // 5 秒后立即重试
+      }
+    }
+  }, 30_000);
+}
+
 export function startMonitorScheduler(): void {
+  // 启动看门狗
+  startSchedulerWatchdog();
+
   // 扫描所有活跃用户，为每个 (windowId, platform) 创建独立定时器
   db.getAllActiveUsers().then((users: any[]) => {
     const pairs = new Set<string>();

@@ -119,9 +119,13 @@ export class BrowserManager {
             logger.warn({ windowId, platform, error: bringError.message }, 'Failed to bring reused tab to front');
           }
 
-          // 检测复用页面是否卡在加载状态
+          // 检测复用页面是否卡死（loading 状态 或 CDP 连接无响应）
+          const CDP_HEALTH_CHECK_MS = 8_000; // CDP 健康检查超时
           const PAGE_LOADING_TIMEOUT_MS = 30_000; // 30秒加载超时
+          let pageHealthy = true;
+
           try {
+            // 快速检测 1：readyState
             const loadState = await Promise.race([
               platformPage.evaluate(() => document.readyState),
               new Promise<string>((_, reject) =>
@@ -141,14 +145,28 @@ export class BrowserManager {
 
               logger.info({ windowId, platform }, 'Reused page loading completed after wait');
             }
-          } catch (loadErr: any) {
-            logger.warn({ windowId, platform, error: loadErr.message }, 'Reused page loading failed, closing and recreating tab');
 
-            // 关闭卡死的页面并创建新标签页
-            try {
-              await platformPage.close();
-            } catch (closeErr: any) {
-              logger.warn({ windowId, error: closeErr.message }, 'Failed to close stuck reused page');
+            // 快速检测 2：CDP 连接响应性（即使 readyState 正常，CDP 也可能卡死）
+            const cdpAlive = await Promise.race([
+              platformPage.evaluate(() => true),
+              new Promise<boolean>((_, reject) =>
+                setTimeout(() => reject(new Error('CDP connection unresponsive')), CDP_HEALTH_CHECK_MS)
+              ),
+            ]);
+
+            if (!cdpAlive) {
+              pageHealthy = false;
+              logger.warn({ windowId, platform, url: platformPage.url() }, 'CDP connection unresponsive — page is stuck');
+            }
+          } catch (loadErr: any) {
+            pageHealthy = false;
+            logger.warn({ windowId, platform, error: loadErr.message }, 'Reused page health check failed');
+          }
+
+          if (!pageHealthy) {
+            logger.warn({ windowId, platform }, 'Closing stuck page and recreating tab');
+            try { await platformPage.close(); } catch (closeErr: any) {
+              logger.warn({ windowId, error: closeErr.message }, 'Failed to close stuck page');
             }
 
             const defaultContext = existingSession.browser.contexts()[0];
