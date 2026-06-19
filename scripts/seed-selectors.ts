@@ -32,6 +32,7 @@ interface PlatformSelectors {
   regions: Record<string, SelectorEntry>;
   textboxes: Record<string, SelectorEntry>;
   flowRules?: Record<string, unknown>;
+  urlMonitors?: Record<string, unknown>;
 }
 
 interface SelectorConfig {

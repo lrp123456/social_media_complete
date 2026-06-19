@@ -36,7 +36,13 @@
         "menus":     { "type": "object", "additionalProperties": { "$ref": "#/$defs/selectorEntry" } },
         "buttons":   { "type": "object", "additionalProperties": { "$ref": "#/$defs/selectorEntry" } },
         "regions":   { "type": "object", "additionalProperties": { "$ref": "#/$defs/selectorEntry" } },
-        "textboxes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/selectorEntry" } }
+        "textboxes": { "type": "object", "additionalProperties": { "$ref": "#/$defs/selectorEntry" } },
+        "flowRules": { "type": "object", "description": "Publish flow control rules" },
+        "urlMonitors": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/urlMonitorEntry" },
+          "description": "URL monitoring entries for API interception (v2.4+)"
+        }
       }
     },
     "selectorEntry": {
@@ -70,6 +76,52 @@
         "description": {
           "type": "string",
           "description": "Human-readable purpose/location hint."
+        }
+      }
+    },
+    "responseExtraction": {
+      "type": "object",
+      "required": ["itemsPath", "idField"],
+      "additionalProperties": false,
+      "properties": {
+        "itemsPath": { "type": "string", "description": "JSON path to the data list (e.g. data.list)" },
+        "idField": { "type": "string", "description": "Unique ID field path (e.g. exportId)" },
+        "fieldMap": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Alias to JSON path mapping" }
+      }
+    },
+    "paginationRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hasMorePath": { "type": "string" },
+        "hasMoreValue": {},
+        "hasMoreFalseValue": {},
+        "cursorPath": { "type": "string" },
+        "cursorParamName": { "type": "string" }
+      }
+    },
+    "urlMonitorEntry": {
+      "type": "object",
+      "required": ["urlPatterns", "method", "extraction"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "urlPatterns": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "method": { "type": "string", "enum": ["GET", "POST"] },
+        "extraction": { "$ref": "#/$defs/responseExtraction" },
+        "pagination": { "$ref": "#/$defs/paginationRule" },
+        "flowPhase": { "type": "string", "description": "Associated business flow phase (e.g. monitor:scan)" },
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "expectedPageUrls": { "type": "array", "items": { "type": "string" } },
+            "requiredItemFields": { "type": "array", "items": { "type": "string" } },
+            "minItems": { "type": "number" },
+            "requiredUrlParams": { "type": "array", "items": { "type": "string" } }
+          }
         }
       }
     }

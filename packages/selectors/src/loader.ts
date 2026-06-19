@@ -190,6 +190,10 @@ export function toSelectorConfig(cfg: ExtractedConfig): SelectorConfig {
         mapPlatform[cat][k] = toSelectorEntry(v);
       }
     }
+    // 透传 urlMonitors（如果存在）
+    if ((cats as any).urlMonitors) {
+      mapPlatform.urlMonitors = (cats as any).urlMonitors;
+    }
     platforms[platform] = mapPlatform;
   }
   return {

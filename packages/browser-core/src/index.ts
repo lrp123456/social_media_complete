@@ -26,6 +26,10 @@ export type {
   PublishFlowRules,
   DisabledCheckMethod,
   VisibilityCheckMethod,
+  UrlMonitorEntry,
+  ResponseExtraction,
+  PaginationRule,
+  HttpMethod,
 } from './selectorConfig';
 export { PageStateManager } from './pageStateManager';
 export { RequestInterceptor } from './interceptor';
