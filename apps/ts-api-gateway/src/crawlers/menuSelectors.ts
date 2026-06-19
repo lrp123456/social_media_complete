@@ -114,6 +114,27 @@ const CRAWLER_KEY_MAP: Record<string, Record<string, { category: SelectorCategor
     // 笔记列表相关选择器
     'region.note-list': { category: 'regions', name: 'region_note_list' },
     'region.note-list-scroll': { category: 'regions', name: 'region_note_list_scroll' },
+    // 笔记卡片/主站/评论选择器
+    'region.note-card-by-id': { category: 'regions', name: 'region_note_card_by_id' },
+    'region.note-card-cover': { category: 'regions', name: 'region_note_card_cover' },
+    'region.note-card-private-marker': { category: 'regions', name: 'region_note_card_private_marker' },
+    'region.mainsite-user-avatar': { category: 'regions', name: 'region_mainsite_user_avatar' },
+    'region.mainsite-login-modal': { category: 'regions', name: 'region_mainsite_login_modal' },
+    'region.mainsite-qr-code': { category: 'regions', name: 'region_mainsite_qr_code' },
+    'region.comments-container': { category: 'regions', name: 'region_comments_container' },
+    'region.comment-scroller': { category: 'regions', name: 'region_comment_scroller' },
+    'region.comment-total': { category: 'regions', name: 'region_comment_total' },
+    'region.comment-root-container': { category: 'regions', name: 'region_comment_root_container' },
+    'region.comment-sub-container': { category: 'regions', name: 'region_comment_sub_container' },
+    'region.comment-author-name': { category: 'regions', name: 'region_comment_author_name' },
+    'region.comment-content-text': { category: 'regions', name: 'region_comment_content_text' },
+    'region.comment-author-tag': { category: 'regions', name: 'region_comment_author_tag' },
+    'region.reply-input-area': { category: 'regions', name: 'region_reply_input_area' },
+    'btn.expand-sub-comments': { category: 'buttons', name: 'btn_expand_sub_comments' },
+    'btn.reply-comment': { category: 'buttons', name: 'btn_reply_comment' },
+    'btn.reply-submit': { category: 'buttons', name: 'btn_reply_submit' },
+    'btn.reply-cancel': { category: 'buttons', name: 'btn_reply_cancel' },
+    'tb.reply-input': { category: 'textboxes', name: 'tb_reply_input' },
   },
   tencent: {
     // 导航

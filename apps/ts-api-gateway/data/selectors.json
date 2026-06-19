@@ -1,5 +1,5 @@
 {
-  "version": "2.3.0",
+  "version": "2.4.0",
   "updatedAt": "2026-06-16T12:00:00.000000Z",
   "platforms": {
     "douyin": {
@@ -2353,6 +2353,26 @@
           ],
           "selectorType": "text",
           "description": "小红书创作者中心-【发布笔记】按钮"
+        },
+        "btn_expand_sub_comments": {
+          "purposes": ["monitor"],
+          "primary": "getByText(\"展开\")",
+          "fallbacks": ["[class*=\"expand-reply\"]"]
+        },
+        "btn_reply_comment": {
+          "purposes": ["reply"],
+          "primary": "getByText(\"回复\", exact=True)",
+          "fallbacks": ["[class*=\"icon-reply\"]"]
+        },
+        "btn_reply_submit": {
+          "purposes": ["reply"],
+          "primary": "getByText(\"发送\", exact=True)",
+          "fallbacks": ["[class*=\"send-btn\"]"]
+        },
+        "btn_reply_cancel": {
+          "purposes": ["reply"],
+          "primary": "getByText(\"取消\", exact=True)",
+          "fallbacks": ["[class*=\"cancel-btn\"]"]
         }
       },
       "regions": {
@@ -2429,6 +2449,81 @@
           ],
           "selectorType": "text",
           "description": "小红书发布成功提示"
+        },
+        "region_note_card_by_id": {
+          "purposes": ["monitor"],
+          "primary": ".note-card[data-impression*=\"{noteId}\"]",
+          "fallbacks": [".note-card__cover"]
+        },
+        "region_note_card_cover": {
+          "purposes": ["monitor"],
+          "primary": ".note-card__cover .media-body",
+          "fallbacks": [".note-card__cover img"]
+        },
+        "region_note_card_private_marker": {
+          "purposes": ["monitor"],
+          "primary": "getByText(\"仅自己可见\", exact=True)",
+          "fallbacks": ["[class*=\"private\"]:visible"]
+        },
+        "region_mainsite_user_avatar": {
+          "purposes": ["monitor"],
+          "primary": ".user.side-bar-component",
+          "fallbacks": [".user-avatar", "[class*=\"user-sidebar\"]"]
+        },
+        "region_mainsite_login_modal": {
+          "purposes": ["monitor"],
+          "primary": "getByText(\"登录\", exact=True)",
+          "fallbacks": ["[class*=\"login-modal\"]:visible"]
+        },
+        "region_mainsite_qr_code": {
+          "purposes": ["monitor"],
+          "primary": ".qrcode-img",
+          "fallbacks": ["img[alt*=\"二维码\"]"]
+        },
+        "region_comments_container": {
+          "purposes": ["monitor"],
+          "primary": ".comments-el",
+          "fallbacks": ["[class*=\"comment-list\"]"]
+        },
+        "region_comment_scroller": {
+          "purposes": ["monitor"],
+          "primary": ".note-scroller",
+          "fallbacks": ["[class*=\"scroller\"]"]
+        },
+        "region_comment_total": {
+          "purposes": ["monitor"],
+          "primary": ".comments-container .total",
+          "fallbacks": ["getByText(/条评论/)"]
+        },
+        "region_comment_root_container": {
+          "purposes": ["monitor"],
+          "primary": ".comment-item:not(.comment-item-sub)",
+          "fallbacks": ["[class*=\"comment-item\"]:not([class*=\"sub\"])"]
+        },
+        "region_comment_sub_container": {
+          "purposes": ["monitor"],
+          "primary": ".comment-item.comment-item-sub",
+          "fallbacks": ["[class*=\"comment-item\"][class*=\"sub\"]"]
+        },
+        "region_comment_author_name": {
+          "purposes": ["monitor"],
+          "primary": ".author .name",
+          "fallbacks": ["[class*=\"author-name\"]"]
+        },
+        "region_comment_content_text": {
+          "purposes": ["monitor"],
+          "primary": ".content .note-text",
+          "fallbacks": ["[class*=\"comment-content\"]"]
+        },
+        "region_comment_author_tag": {
+          "purposes": ["monitor"],
+          "primary": "getByText(\"作者\", exact=True)",
+          "fallbacks": ["[class*=\"author-tag\"]"]
+        },
+        "region_reply_input_area": {
+          "purposes": ["reply"],
+          "primary": ".bottom-container [contenteditable=\"true\"]",
+          "fallbacks": ["[class*=\"reply-input-area\"]"]
         }
       },
       "textboxes": {
@@ -2469,6 +2564,11 @@
           ],
           "selectorType": "placeholder",
           "description": "小红书话题标签输入框"
+        },
+        "tb_reply_input": {
+          "purposes": ["reply"],
+          "primary": ".bottom-container [contenteditable=\"true\"]",
+          "fallbacks": ["[contenteditable=\"true\"]:visible"]
         }
       }
     },
@@ -2773,7 +2873,55 @@
           "selectorType": "css"
         }
       },
-      "textboxes": {}
+      "textboxes": {},
+      "urlMonitors": {
+        "api_video_list": {
+          "enabled": true,
+          "description": "视频号作品列表 API — 拦截 post_list 接口获取视频数据",
+          "tags": ["核心", "作品"],
+          "urlPatterns": ["post/post_list"],
+          "method": "POST",
+          "extraction": {
+            "itemsPath": "data.list",
+            "idField": "exportId",
+            "fieldMap": {
+              "title": "desc.description",
+              "createTime": "desc.createTime"
+            }
+          },
+          "pagination": {
+            "hasMorePath": "data.downContinueFlag",
+            "hasMoreValue": 1,
+            "hasMoreFalseValue": 0,
+            "cursorParamName": "lastBuff"
+          },
+          "flowPhase": "monitor:scan"
+        },
+        "api_comment_list": {
+          "enabled": true,
+          "description": "评论列表 API — 拦截 comment_list 接口获取评论数据",
+          "tags": ["核心", "评论"],
+          "urlPatterns": ["comment/comment_list"],
+          "method": "POST",
+          "extraction": {
+            "itemsPath": "data.comment",
+            "idField": "commentId",
+            "fieldMap": {
+              "content": "content",
+              "nickName": "nickName",
+              "createTime": "createTime"
+            }
+          },
+          "pagination": {
+            "hasMorePath": "data.downContinueFlag",
+            "hasMoreValue": 1,
+            "hasMoreFalseValue": 0,
+            "cursorPath": "data.lastBuff",
+            "cursorParamName": "lastBuff"
+          },
+          "flowPhase": "monitor:collect"
+        }
+      }
     }
   }
 }
