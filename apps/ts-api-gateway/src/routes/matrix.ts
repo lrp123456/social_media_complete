@@ -1534,7 +1534,7 @@ router.get('/platforms/capabilities', async (_req: Request, res: Response) => {
         platformName: '小红书',
         canPublish: true,
         canMonitor: true,
-        canDeepCrawl: false, // 强制light
+        canDeepCrawl: true,
         canLightNotify: true,
       },
       {

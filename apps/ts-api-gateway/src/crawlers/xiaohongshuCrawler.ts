@@ -204,7 +204,7 @@ export class XiaohongshuCrawler {
       if (permissionCode !== undefined && permissionCode !== null) {
         const isPublic = Number(permissionCode) === 0;
         if (!isPublic) {
-          logger.info({ awemeId: item.id || item.note_id }, '[XHS-fetch] 过滤私密笔记（permission_code=%s）', permissionCode);
+          logger.info({ noteId: item.id || item.note_id }, '[XHS-fetch] 过滤私密笔记（permission_code=%s）', permissionCode);
         }
         return isPublic;
       }
