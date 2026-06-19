@@ -62,9 +62,11 @@ const FALLBACK_CONFIG: SelectorConfig = {
       apiPatterns: {},
       dataSources: {},
       navigationFlows: {},
+      frameworks: {},
     },
-    kuaishou: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} },
-    xiaohongshu: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} },
+    kuaishou: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {} },
+    xiaohongshu: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {} },
+    tencent: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {} },
   },
 };
 
@@ -81,7 +83,7 @@ let instance: SelectorReader | null = null;
 // ============================================================
 
 const VALID_PURPOSES = new Set(['publish', 'monitor']);
-const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes', 'apiPatterns', 'dataSources', 'navigationFlows'];
+const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes', 'apiPatterns', 'dataSources', 'navigationFlows', 'frameworks'];
 const VALID_TYPES = new Set(['css', 'role', 'text', 'placeholder', 'label']);
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
@@ -218,12 +220,12 @@ function hasInvalidPurposes(entry: Record<string, unknown>): boolean {
 function sanitizeConfig(raw: unknown): SelectorConfig {
   const cfg = raw as Record<string, unknown>;
   const platforms = cfg.platforms as Record<string, Record<string, Record<string, unknown>>>;
-  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown>; urlMonitors: Record<string, unknown>; apiPatterns: Record<string, unknown>; dataSources: Record<string, unknown>; navigationFlows: Record<string, unknown> }> = {};
+  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown>; urlMonitors: Record<string, unknown>; apiPatterns: Record<string, unknown>; dataSources: Record<string, unknown>; navigationFlows: Record<string, unknown>; frameworks: Record<string, unknown> }> = {};
 
   let removedCount = 0;
   for (const [plat, pVal] of Object.entries(platforms || {})) {
     const p = pVal as Record<string, unknown>;
-    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} };
+    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {} };
     for (const cat of VALID_CATEGORIES) {
       const entries = (p[cat] || {}) as Record<string, unknown>;
       for (const [name, eVal] of Object.entries(entries)) {
@@ -242,6 +244,7 @@ function sanitizeConfig(raw: unknown): SelectorConfig {
     out.apiPatterns = (p.apiPatterns || {}) as Record<string, unknown>;
     out.dataSources = (p.dataSources || {}) as Record<string, unknown>;
     out.navigationFlows = (p.navigationFlows || {}) as Record<string, unknown>;
+    out.frameworks = (p.frameworks || {}) as Record<string, unknown>;
     sanitized[plat] = out as any;
   }
 
@@ -319,8 +322,11 @@ export function getSelectorReader(): SelectorReader {
   return instance;
 }
 
-export function saveSelectorConfig(): void {
-  if (instance) {
+export function saveSelectorConfig(config?: SelectorConfig): void {
+  if (config) {
+    saveToDisk(config);
+    instance = new SelectorReader(config);
+  } else if (instance) {
     saveToDisk(instance.getConfig());
   }
 }
@@ -383,4 +389,25 @@ export function getNavigationFlow(platform: string, flowName: string): Record<st
   const p = (config.platforms as any)?.[platform];
   if (!p?.navigationFlows?.[flowName]) return undefined;
   return p.navigationFlows[flowName];
+}
+
+/**
+ * 从 selectors.json 读取所有 frameworks 配置
+ */
+export function getFrameworks(platform: string): Record<string, Record<string, any>> {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  return p?.frameworks || {};
+}
+
+/**
+ * 从 selectors.json 读取单个 framework 配置
+ */
+export function getFramework(platform: string, key: string): Record<string, any> | undefined {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  if (!p?.frameworks?.[key]) return undefined;
+  return p.frameworks[key];
 }
