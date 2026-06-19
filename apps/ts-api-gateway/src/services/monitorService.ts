@@ -975,12 +975,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 // ============================================================
 
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
-  // 小红书强制 Light 模式
-  let crawlMode = await db.getCrawlMode('xiaohongshu');
-  if (crawlMode === 'deep') {
-    logger.warn({ userId: task.userId }, '小红书不支持 Deep 模式，强制使用 Light 模式');
-    crawlMode = 'light';
-  }
+  const crawlMode = await db.getCrawlMode('xiaohongshu');
 
   logger.info({ userId: task.userId, windowId: task.windowId }, '[XHS-monitor] Starting xiaohongshu check');
 

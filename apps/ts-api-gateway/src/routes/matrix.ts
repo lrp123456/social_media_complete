@@ -1474,14 +1474,6 @@ router.put('/monitor/crawl-settings/:platform', async (req: Request, res: Respon
     const { platform } = paramsSchema.parse(req.params);
     const { mode, enabled } = bodySchema.parse(req.body);
 
-    // 小红书强制light模式
-    if (platform === 'xiaohongshu' && mode === 'deep') {
-      return res.status(400).json({
-        success: false,
-        error: '小红书不支持深度爬取模式，仅支持轻量通知',
-      });
-    }
-
     const setting = await prisma.crawlSetting.upsert({
       where: { platform },
       update: { mode, ...(enabled !== undefined ? { enabled } : {}) },

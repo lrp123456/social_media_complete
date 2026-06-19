@@ -198,7 +198,19 @@ export class XiaohongshuCrawler {
     await this.scrollToLoadMoreWithDualStop(page, pattern);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
-    const sliced = allItems.slice(0, this.maxMonitorVideos);
+    // ★ 私密过滤：仅保留 permission_code === 0 的公开笔记
+    const filteredItems = allItems.filter((item: any) => {
+      const permissionCode = item.permission_code ?? item.permissionCode ?? item.permission?.code;
+      if (permissionCode !== undefined && permissionCode !== null) {
+        const isPublic = Number(permissionCode) === 0;
+        if (!isPublic) {
+          logger.info({ awemeId: item.id || item.note_id }, '[XHS-fetch] 过滤私密笔记（permission_code=%s）', permissionCode);
+        }
+        return isPublic;
+      }
+      return true; // 没有 permission_code 的笔记默认为公开
+    });
+    const sliced = filteredItems.slice(0, this.maxMonitorVideos);
 
     // 从 raw responses 中提取作者 ID
     let xhsAuthorId: string | undefined;
