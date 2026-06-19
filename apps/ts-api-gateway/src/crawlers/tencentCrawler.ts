@@ -440,8 +440,8 @@ export class TencentCrawler {
           await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
           await page.waitForTimeout(1500);
 
-          // ── 1a. 点击刷新二维码（每次截取前都刷新）──
-          await this.clickQRRefresh(frame, page);
+          // ── 1a. 仅在二维码过期时点击刷新（避免无条件刷新导致二维码进入异常状态）──
+          await this.clickQRRefreshIfNeeded(frame, page);
 
           // ── 1b. 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
           const qrInfo = await frame.evaluate(() => {
@@ -552,10 +552,25 @@ export class TencentCrawler {
   }
 
   /**
-   * 点击刷新二维码 — 在 iframe 内部查找刷新按钮并点击
+   * 仅在二维码过期时点击刷新 — 避免无条件刷新导致二维码进入异常状态
+   * 检查 iframe 内是否显示"已过期"/"已失效"/"刷新"等文字，只有检测到过期才点击刷新
    */
-  private async clickQRRefresh(frame: any, page: Page): Promise<void> {
+  private async clickQRRefreshIfNeeded(frame: any, page: Page): Promise<void> {
     try {
+      // 先检查二维码是否已过期（通过 iframe 内的文字判断）
+      const isExpired = await frame.evaluate(() => {
+        const bodyText = document.body?.innerText || '';
+        return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+          || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
+      }).catch(() => false);
+
+      if (!isExpired) {
+        logger.info('[Login] QR code not expired, skipping refresh');
+        return;
+      }
+
+      logger.info('[Login] QR code expired, clicking refresh');
+
       // 方式1: 查找刷新按钮（常见 class/text）
       const refreshSelectors = [
         '.qrcode-refresh-btn',
@@ -568,7 +583,8 @@ export class TencentCrawler {
         const btn = await frame.$(sel).catch(() => null);
         if (btn) {
           await btn.click().catch(() => {});
-          await page.waitForTimeout(2000);
+          // 等待刷新完成（新二维码加载）
+          await page.waitForTimeout(3000);
           logger.info({ selector: sel }, '[Login] QR refresh button clicked');
           return;
         }
@@ -579,7 +595,7 @@ export class TencentCrawler {
         const els = document.querySelectorAll('a, button, span, div, p');
         for (const el of els) {
           const text = el.textContent?.trim() || '';
-          if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+          if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
             (el as HTMLElement).click();
             return true;
           }
@@ -587,7 +603,7 @@ export class TencentCrawler {
         return false;
       }).catch(() => false);
       if (refreshed) {
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[Login] QR refreshed via text click');
         return;
       }
@@ -596,7 +612,7 @@ export class TencentCrawler {
       const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
       if (qrEl) {
         await qrEl.click().catch(() => {});
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[Login] QR area clicked for refresh');
       }
     } catch {}
@@ -852,14 +868,31 @@ export class TencentCrawler {
         continue;
       }
 
-      const dbVideo = dbVideos.find(v => v.id === video.exportId);
+      // 私密视频过滤：visibleType !== 1 为非公开（必须先检查 undefined，旧数据可能无此字段）
+      if (video.visibleType !== undefined && video.visibleType !== 1) {
+        logger.info({ exportId: video.exportId, visibleType: video.visibleType }, '[Phase1] 过滤非公开视频（visibleType!=1）');
+        continue;
+      }
+
+      const encodedId = video.exportId.replace(/\//g, '_');
+      const dbVideo = dbVideos.find(v => v.id === encodedId);
       const newCount = video.commentCount ?? 0;
 
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.exportId } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.exportId,
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新视频
         if (newCount > 0) {
           commentsQueue.push({
-            exportId: video.exportId,
+            exportId: video.exportId.replace(/\//g, '_'),
             description: video.desc?.description || '',
             oldCount: 0,
             newCount,
@@ -872,7 +905,7 @@ export class TencentCrawler {
 
       if (newCount > dbVideo.commentCount) {
         commentsQueue.push({
-          exportId: video.exportId,
+          exportId: video.exportId.replace(/\//g, '_'),
           description: video.desc?.description || '',
           oldCount: dbVideo.commentCount,
           newCount,
@@ -884,7 +917,7 @@ export class TencentCrawler {
 
     // 保存视频到数据库
     const videoInfos = videos.slice(0, this.maxMonitorVideos).map(v => ({
-      aweme_id: v.exportId,
+      aweme_id: v.exportId.replace(/\//g, '_'), // URL安全编码，/ → _
       description: v.desc?.description || '',
       create_time: v.createTime,
       comment_count: v.commentCount ?? 0,
