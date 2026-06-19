@@ -1618,6 +1618,18 @@ router.get('/queue/active', async (_req: Request, res: Response) => {
     const seen = new Set<string>();
     const tasks: any[] = [];
 
+    // 批量查询窗口名
+    const windowIds = [...new Set(allJobs.map(j => (j.data as any)?.windowId).filter(Boolean))];
+    const windows = await prisma.browserWindow.findMany({
+      where: { externalId: { in: windowIds } },
+      select: { externalId: true, windowName: true, operator: { select: { displayName: true } } },
+    }).catch(() => []);
+    const windowNameMap = new Map<string, string>();
+    for (const w of windows) {
+      const name = w.windowName || w.operator?.displayName || w.externalId.slice(0, 12);
+      windowNameMap.set(w.externalId, name);
+    }
+
     for (const job of allJobs) {
       const bullJobId = job.id;
       const data = job.data as any;
@@ -1653,6 +1665,8 @@ router.get('/queue/active', async (_req: Request, res: Response) => {
         taskId,
         taskType: data.taskType || 'unknown',
         platform: data.platform || 'unknown',
+        windowId: data.windowId || data.fingerprintWindowId || '',
+        windowName: (data.windowId && windowNameMap.get(data.windowId)) || (data.fingerprintWindowId && windowNameMap.get(data.fingerprintWindowId)) || '',
         status: await job.isActive() ? 'running' : 'queued',
         phaseIndex,
         totalPhases,
@@ -1677,10 +1691,12 @@ router.get('/queue/history', async (req: Request, res: Response) => {
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
     const taskType = req.query.taskType as string | undefined;
     const status = req.query.status as string | undefined;
+    const windowId = req.query.windowId as string | undefined;
 
     const where: any = {};
     if (taskType) where.taskType = taskType;
     if (status) where.status = status;
+    if (windowId) where.windowId = windowId;
 
     const [items, total] = await Promise.all([
       prisma.taskExecution.findMany({
@@ -1692,13 +1708,28 @@ router.get('/queue/history', async (req: Request, res: Response) => {
           id: true, taskId: true, taskType: true, platform: true, userId: true,
           status: true, currentPhase: true, phaseIndex: true, totalPhases: true,
           progressPercent: true, startedAt: true, completedAt: true, durationMs: true,
-          errorMessage: true, isDebugMode: true, createdAt: true,
+          errorMessage: true, isDebugMode: true, createdAt: true, windowId: true,
         },
       }),
       prisma.taskExecution.count({ where }),
     ]);
 
-    res.json({ success: true, data: { items, total, page, limit } });
+    // 批量查询窗口名
+    const histWindowIds = [...new Set(items.map((i: any) => i.windowId).filter(Boolean))];
+    const histWindows = await prisma.browserWindow.findMany({
+      where: { externalId: { in: histWindowIds } },
+      select: { externalId: true, windowName: true, operator: { select: { displayName: true } } },
+    }).catch(() => []);
+    const histWindowMap = new Map<string, string>();
+    for (const w of histWindows) {
+      histWindowMap.set(w.externalId, w.windowName || w.operator?.displayName || w.externalId.slice(0, 12));
+    }
+    const itemsWithName = items.map((item: any) => ({
+      ...item,
+      windowName: item.windowId ? (histWindowMap.get(item.windowId) || '') : '',
+    }));
+
+    res.json({ success: true, data: { items: itemsWithName, total, page, limit } });
   } catch (err) {
     handleError(res, logger, err, '获取队列历史失败');
   }
@@ -1718,6 +1749,17 @@ router.get('/queue/executions/:id', async (req: Request, res: Response) => {
     res.json({ success: true, data: execution });
   } catch (err) {
     handleError(res, logger, err, '获取执行详情失败');
+  }
+});
+
+/** 清空所有历史执行记录 */
+router.delete('/queue/history', async (_req: Request, res: Response) => {
+  try {
+    const result = await prisma.taskExecution.deleteMany({});
+    logger.info({ deletedCount: result.count }, '已清空所有执行历史');
+    res.json({ success: true, data: { deletedCount: result.count } });
+  } catch (err) {
+    handleError(res, logger, err, '清空执行历史失败');
   }
 });
 
