@@ -2,132 +2,105 @@
 
 import { cn } from '@/lib/utils';
 import { MaterialIcon } from '@/components/ui/MaterialIcon';
+import type { MaterialIconName } from '@/components/ui/MaterialIcon';
 import type { FlowNode, LastRunStep } from '@/hooks/useApi';
 
-// ── Types ──
-
-type FlowNodeCardProps = {
-  node: FlowNode;
-  lastRun?: LastRunStep;
-  selected: boolean;
-  onClick: () => void;
+const ACTION_CONFIG: Record<string, { icon: MaterialIconName; color: string }> = {
+  check_url: { icon: 'link', color: 'border-blue-400 bg-blue-50' },
+  check_menu_state: { icon: 'folder_open' as MaterialIconName, color: 'border-purple-400 bg-purple-50' },
+  click_menu: { icon: 'mouse' as MaterialIconName, color: 'border-green-400 bg-green-50' },
+  click_tab: { icon: 'tab' as MaterialIconName, color: 'border-green-400 bg-green-50' },
+  click_button: { icon: 'smart_button' as MaterialIconName, color: 'border-green-400 bg-green-50' },
+  enable_interceptor: { icon: 'visibility', color: 'border-orange-400 bg-orange-50' },
+  disable_interceptor: { icon: 'visibility_off', color: 'border-orange-400 bg-orange-50' },
+  refresh_page: { icon: 'refresh', color: 'border-cyan-400 bg-cyan-50' },
+  wait_for_response: { icon: 'hourglass_empty' as MaterialIconName, color: 'border-cyan-400 bg-cyan-50' },
+  check_quantity: { icon: 'pin' as MaterialIconName, color: 'border-yellow-400 bg-yellow-50' },
+  scroll_load: { icon: 'arrow_downward' as MaterialIconName, color: 'border-gray-400 bg-gray-50' },
+  page_turn: { icon: 'arrow_forward', color: 'border-gray-400 bg-gray-50' },
+  close_menu: { icon: 'folder_delete' as MaterialIconName, color: 'border-red-400 bg-red-50' },
+  done: { icon: 'check_circle', color: 'border-green-500 bg-green-100' },
 };
 
-// ── Action Config ──
+function getRunStatus(lastRun?: LastRunStep) {
+  if (!lastRun) return { dot: 'bg-gray-300', label: '未执行' };
+  if (lastRun.status === 'success') return { dot: 'bg-green-500', label: '成功' };
+  if (lastRun.status === 'fallback') return { dot: 'bg-yellow-500', label: '回退' };
+  if (lastRun.status === 'failed') return { dot: 'bg-red-500', label: '失败' };
+  return { dot: 'bg-gray-300', label: lastRun.status };
+}
 
-type ActionConfig = {
-  label: string;
-  icon: string;
-  color: string;
-};
-
-const ACTION_CONFIG: Record<string, ActionConfig> = {
-  check_url:            { label: '检查 URL',          icon: 'link',            color: 'border-l-sky-500' },
-  check_menu_state:     { label: '检查菜单状态',      icon: 'menu',            color: 'border-l-violet-500' },
-  click_menu:           { label: '点击菜单',          icon: 'ads_click',       color: 'border-l-blue-500' },
-  click_tab:            { label: '点击标签',          icon: 'tab',             color: 'border-l-indigo-500' },
-  click_button:         { label: '点击按钮',          icon: 'touch_app',       color: 'border-l-purple-500' },
-  enable_interceptor:   { label: '启用拦截器',        icon: 'shield',          color: 'border-l-teal-500' },
-  disable_interceptor:  { label: '禁用拦截器',        icon: 'shield_off',      color: 'border-l-orange-500' },
-  refresh_page:         { label: '刷新页面',          icon: 'refresh',         color: 'border-l-amber-500' },
-  wait_for_response:    { label: '等待响应',          icon: 'hourglass_empty', color: 'border-l-cyan-500' },
-  check_quantity:       { label: '检查数量',          icon: 'pin',             color: 'border-l-emerald-500' },
-  scroll_load:          { label: '滚动加载',          icon: 'swipe_vertical',  color: 'border-l-lime-500' },
-  page_turn:            { label: '翻页',              icon: 'chevron_right',   color: 'border-l-rose-500' },
-  close_menu:           { label: '关闭菜单',          icon: 'close',           color: 'border-l-pink-500' },
-  done:                 { label: '完成',              icon: 'check_circle',    color: 'border-l-green-600' },
-};
-
-// ── Helpers ──
-
-function formatDuration(ms?: number): string {
-  if (ms == null) return '—';
+function formatDuration(ms?: number) {
+  if (!ms) return '';
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-function statusDotColor(status?: string): string {
-  switch (status) {
-    case 'success':
-      return 'bg-emerald-500';
-    case 'fallback':
-      return 'bg-amber-400';
-    case 'failed':
-      return 'bg-red-500';
-    default:
-      return 'bg-slate-400';
-  }
-}
-
-function selectorTryStatus(tries: any): string {
-  if (!tries) return '';
-  if (typeof tries === 'object') {
-    return Object.entries(tries)
-      .map(([sel, ok]) => `${sel}:${ok ? '✓' : '✗'}`)
-      .join(' ');
-  }
-  return '';
-}
-
-// ── Component ──
-
-export default function FlowNodeCard({ node, lastRun, selected, onClick }: FlowNodeCardProps) {
-  const config = ACTION_CONFIG[node.action] || { label: node.action, icon: 'help', color: 'border-l-slate-400' };
+export function FlowNodeCard({
+  node,
+  lastRun,
+  selected,
+  onClick,
+}: {
+  node: FlowNode;
+  lastRun?: LastRunStep;
+  selected: boolean;
+  onClick: () => void;
+}) {
+  const cfg = ACTION_CONFIG[node.action] || { icon: 'help', color: 'border-gray-300' };
+  const status = getRunStatus(lastRun);
 
   return (
-    <button
-      type="button"
+    <div
       onClick={onClick}
       className={cn(
-        'relative w-full border-l-4 rounded-lg p-3 cursor-pointer transition-all hover:shadow-md text-left',
-        config.color,
+        'border-l-4 rounded-lg p-3 cursor-pointer transition-all hover:shadow-md',
+        cfg.color,
         selected && 'ring-2 ring-blue-500 shadow-md',
-        !selected && 'bg-surface border-outline-variant',
       )}
     >
-      {/* Top row: icon + action label + status dot */}
+      {/* 顶部：图标 + 类型 + 状态色点 */}
       <div className="flex items-center gap-2">
-        <MaterialIcon icon={config.icon as any} size="sm" className="text-on-surface-variant shrink-0" />
-        <span className="text-label-sm font-semibold text-on-surface flex-1 truncate">{config.label}</span>
-        {lastRun && (
-          <span className={cn('w-2.5 h-2.5 rounded-full shrink-0', statusDotColor(lastRun.status))} />
-        )}
+        <MaterialIcon icon={cfg.icon} className="text-lg" />
+        <span className="text-xs text-gray-500">{node.action}</span>
+        <span className={cn('ml-auto w-2.5 h-2.5 rounded-full', status.dot)} title={status.label} />
       </div>
 
-      {/* Step ID */}
-      <p className="text-[10px] font-mono text-on-surface-variant/60 mt-0.5">#{node.id}</p>
+      {/* 步骤ID */}
+      <div className="text-xs font-mono text-gray-400 mt-1">{node.id}</div>
 
-      {/* Description */}
-      {node.description && (
-        <p className="text-body-xs text-on-surface-variant mt-1 line-clamp-2">{node.description}</p>
-      )}
+      {/* 描述 */}
+      <div className="text-sm text-gray-700 mt-0.5">{node.description}</div>
 
-      {/* Selector summary */}
+      {/* 选择器摘要 */}
       {node.selector?.primary?.value && (
-        <p className="text-[11px] font-mono text-on-surface-variant/80 mt-1.5 truncate" title={node.selector.primary.value}>
-          {node.selector.primary.value.length > 50
-            ? node.selector.primary.value.slice(0, 50) + '…'
-            : node.selector.primary.value}
-        </p>
-      )}
-
-      {/* API Pattern reference */}
-      {node.apiPatternKey && (
-        <div className="flex items-center gap-1 mt-1.5">
-          <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-700 font-medium">API</span>
-          <span className="text-[10px] font-mono text-on-surface-variant/70 truncate">{node.apiPatternKey}</span>
+        <div className="text-xs text-gray-400 mt-1 truncate font-mono">
+          {node.selector.primary.value.substring(0, 50)}
         </div>
       )}
 
-      {/* Execution status line */}
+      {/* API Pattern 引用 */}
+      {node.apiPatternKey && (
+        <div className="text-xs text-orange-600 mt-1">
+          <MaterialIcon icon="api" className="text-xs inline" /> {node.apiPatternKey}
+        </div>
+      )}
+
+      {/* 执行状态 */}
       {lastRun && (
-        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-outline-variant/30 text-[10px] text-on-surface-variant/70">
+        <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-3 flex-wrap">
           <span>{formatDuration(lastRun.durationMs)}</span>
-          {lastRun.selectorTries && (
-            <span className="truncate">{selectorTryStatus(lastRun.selectorTries)}</span>
+          {lastRun.selectorTries && Array.isArray(lastRun.selectorTries) && (
+            <span className="flex gap-1">
+              {lastRun.selectorTries.map((t: any, i: number) => (
+                <span key={i} title={t.selector}>
+                  {t.result === 'found' ? '✓' : '✗'}{t.source?.replace('primary', 'P').replace('fallback', 'F') || i}
+                </span>
+              ))}
+            </span>
           )}
         </div>
       )}
-    </button>
+    </div>
   );
 }
