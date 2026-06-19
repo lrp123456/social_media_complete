@@ -472,10 +472,13 @@ router.delete('/selectors/:platform/:categoryKey', (req: Request, res: Response)
 });
 
 // ============================================================
-// Frameworks CRUD
+// 选择器有效性追踪
 // ============================================================
 
-/** GET /api/v1/config-automation/frameworks/:platform — 获取指定平台的所有 frameworks */
+// ============================================================
+// 大框架容器 CRUD (v2.5+)
+// ============================================================
+
 router.get('/frameworks/:platform', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const reader = getSelectorReader();
@@ -484,12 +487,14 @@ router.get('/frameworks/:platform', (req: Request, res: Response) => {
   res.json({ platform, frameworks });
 });
 
-/** PUT /api/v1/config-automation/frameworks/:platform/:key — 新增或更新 framework */
 router.put('/frameworks/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
   const { label, selector, description } = req.body || {};
-  if (!selector) { res.status(400).json({ error: 'selector is required' }); return; }
+  if (!selector) {
+    res.status(400).json({ error: 'selector is required' });
+    return;
+  }
   const reader = getSelectorReader();
   const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
   if (!config.platforms[platform]) config.platforms[platform] = {};
@@ -499,7 +504,6 @@ router.put('/frameworks/:platform/:key', (req: Request, res: Response) => {
   res.json({ ok: true, platform, key, entry: config.platforms[platform].frameworks[key] });
 });
 
-/** DELETE /api/v1/config-automation/frameworks/:platform/:key — 删除 framework */
 router.delete('/frameworks/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
@@ -513,10 +517,9 @@ router.delete('/frameworks/:platform/:key', (req: Request, res: Response) => {
 });
 
 // ============================================================
-// ApiPatterns CRUD
+// API Patterns CRUD (v2.5+)
 // ============================================================
 
-/** GET /api/v1/config-automation/api-patterns/:platform — 获取指定平台的所有 apiPatterns */
 router.get('/api-patterns/:platform', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const reader = getSelectorReader();
@@ -525,13 +528,13 @@ router.get('/api-patterns/:platform', (req: Request, res: Response) => {
   res.json({ platform, apiPatterns });
 });
 
-/** PUT /api/v1/config-automation/api-patterns/:platform/:key — 新增或更新 apiPattern */
 router.put('/api-patterns/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
   const entry = req.body || {};
-  if (!entry.method || !entry.urlPattern) {
-    res.status(400).json({ error: 'method and urlPattern are required' }); return;
+  if (!entry.pattern) {
+    res.status(400).json({ error: 'pattern is required' });
+    return;
   }
   const reader = getSelectorReader();
   const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
@@ -539,10 +542,9 @@ router.put('/api-patterns/:platform/:key', (req: Request, res: Response) => {
   if (!config.platforms[platform].apiPatterns) config.platforms[platform].apiPatterns = {};
   config.platforms[platform].apiPatterns[key] = entry;
   saveSelectorConfig(config);
-  res.json({ ok: true, platform, key, entry: config.platforms[platform].apiPatterns[key] });
+  res.json({ ok: true, platform, key, entry });
 });
 
-/** DELETE /api/v1/config-automation/api-patterns/:platform/:key — 删除 apiPattern */
 router.delete('/api-patterns/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
@@ -556,10 +558,9 @@ router.delete('/api-patterns/:platform/:key', (req: Request, res: Response) => {
 });
 
 // ============================================================
-// DataSources CRUD
+// Data Sources CRUD (v2.5+)
 // ============================================================
 
-/** GET /api/v1/config-automation/data-sources/:platform — 获取指定平台的所有 dataSources */
 router.get('/data-sources/:platform', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const reader = getSelectorReader();
@@ -568,13 +569,13 @@ router.get('/data-sources/:platform', (req: Request, res: Response) => {
   res.json({ platform, dataSources });
 });
 
-/** PUT /api/v1/config-automation/data-sources/:platform/:key — 新增或更新 dataSource */
 router.put('/data-sources/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
   const entry = req.body || {};
-  if (!entry.type || !entry.url) {
-    res.status(400).json({ error: 'type and url are required' }); return;
+  if (!entry.pageUrl || !entry.apiPatternKey) {
+    res.status(400).json({ error: 'pageUrl and apiPatternKey are required' });
+    return;
   }
   const reader = getSelectorReader();
   const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
@@ -582,10 +583,9 @@ router.put('/data-sources/:platform/:key', (req: Request, res: Response) => {
   if (!config.platforms[platform].dataSources) config.platforms[platform].dataSources = {};
   config.platforms[platform].dataSources[key] = entry;
   saveSelectorConfig(config);
-  res.json({ ok: true, platform, key, entry: config.platforms[platform].dataSources[key] });
+  res.json({ ok: true, platform, key, entry });
 });
 
-/** DELETE /api/v1/config-automation/data-sources/:platform/:key — 删除 dataSource */
 router.delete('/data-sources/:platform/:key', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const key = param(req.params.key);
@@ -599,36 +599,34 @@ router.delete('/data-sources/:platform/:key', (req: Request, res: Response) => {
 });
 
 // ============================================================
-// NavigationFlows CRUD + last-run
+// Navigation Flows CRUD (v2.5+)
 // ============================================================
 
-/** GET /api/v1/config-automation/navigation-flows/:platform — 获取指定平台的所有 navigationFlows */
 router.get('/navigation-flows/:platform', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const reader = getSelectorReader();
   const config = reader.getConfig();
-  const navigationFlows = (config.platforms as any)?.[platform]?.navigationFlows || {};
-  res.json({ platform, navigationFlows });
+  const flows = (config.platforms as any)?.[platform]?.navigationFlows || {};
+  res.json({ platform, navigationFlows: flows });
 });
 
-/** PUT /api/v1/config-automation/navigation-flows/:platform/:flowName — 新增或更新 navigationFlow */
 router.put('/navigation-flows/:platform/:flowName', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const flowName = param(req.params.flowName);
-  const { label, steps } = req.body || {};
-  if (!steps || !Array.isArray(steps)) {
-    res.status(400).json({ error: 'steps (array) is required' }); return;
+  const entry = req.body || {};
+  if (!entry.label || !Array.isArray(entry.steps)) {
+    res.status(400).json({ error: 'label and steps[] are required' });
+    return;
   }
   const reader = getSelectorReader();
   const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
   if (!config.platforms[platform]) config.platforms[platform] = {};
   if (!config.platforms[platform].navigationFlows) config.platforms[platform].navigationFlows = {};
-  config.platforms[platform].navigationFlows[flowName] = { label: label || flowName, steps };
+  config.platforms[platform].navigationFlows[flowName] = entry;
   saveSelectorConfig(config);
-  res.json({ ok: true, platform, flowName, entry: config.platforms[platform].navigationFlows[flowName] });
+  res.json({ ok: true, platform, flowName, entry });
 });
 
-/** DELETE /api/v1/config-automation/navigation-flows/:platform/:flowName — 删除 navigationFlow */
 router.delete('/navigation-flows/:platform/:flowName', (req: Request, res: Response) => {
   const platform = param(req.params.platform);
   const flowName = param(req.params.flowName);
@@ -641,36 +639,35 @@ router.delete('/navigation-flows/:platform/:flowName', (req: Request, res: Respo
   res.json({ ok: true });
 });
 
-/** GET /api/v1/config-automation/navigation-flows/:platform/:flowName/last-run — 获取最近一次执行记录 */
 router.get('/navigation-flows/:platform/:flowName/last-run', async (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const flowName = param(req.params.flowName);
   try {
-    const platform = param(req.params.platform);
     const { prisma } = await import('../lib/prisma');
     const execution = await prisma.taskExecution.findFirst({
       where: { platform, taskType: 'monitor' },
       orderBy: { startedAt: 'desc' },
       include: { steps: { orderBy: { stepIndex: 'asc' } } },
+      take: 1,
     });
     if (!execution) {
-      return res.json({ platform, flowName: param(req.params.flowName), steps: [] });
+      res.json({ platform, flowName, steps: [] });
+      return;
     }
-    const steps = execution.steps.map((s: any) => ({
+    const steps = execution.steps.map(s => ({
       stepIndex: s.stepIndex,
       label: s.label,
       status: s.status,
       durationMs: s.durationMs,
-      selectorTries: s.selectorTries,
-      extra: s.extra,
+      selectorTries: s.selectorTries as any,
+      mouseAction: s.mouseAction,
+      extra: s.extra as any,
     }));
-    res.json({ platform, flowName: param(req.params.flowName), steps });
+    res.json({ platform, flowName, executionId: execution.id, steps });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
-
-// ============================================================
-// 选择器有效性追踪
-// ============================================================
 
 /** GET /api/v1/config-automation/selectors/full — 获取完整嵌套配置 */
 router.get('/selectors/full', (_req: Request, res: Response) => {
