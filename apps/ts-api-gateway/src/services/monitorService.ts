@@ -602,10 +602,61 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
   }
 }
 
-const douyinCrawler = new DouyinCrawler(MAX_MONITOR_VIDEOS);
-const kuaishouCrawler = new KuaishouCrawler(MAX_MONITOR_VIDEOS);
-const xiaohongshuCrawler = new XiaohongshuCrawler(MAX_MONITOR_VIDEOS);
-const tencentCrawler = new TencentCrawler(MAX_MONITOR_VIDEOS);
+// Crawler 按窗口实例化，避免 interceptor/listener 跨窗口串扰
+const crawlerCache = {
+  douyin: new Map<string, DouyinCrawler>(),
+  kuaishou: new Map<string, KuaishouCrawler>(),
+  xiaohongshu: new Map<string, XiaohongshuCrawler>(),
+  tencent: new Map<string, TencentCrawler>(),
+};
+
+function getDouyinCrawler(windowId: string): DouyinCrawler {
+  if (!crawlerCache.douyin.has(windowId)) {
+    crawlerCache.douyin.set(windowId, new DouyinCrawler(MAX_MONITOR_VIDEOS));
+  }
+  return crawlerCache.douyin.get(windowId)!;
+}
+
+function getKuaishouCrawler(windowId: string): KuaishouCrawler {
+  if (!crawlerCache.kuaishou.has(windowId)) {
+    crawlerCache.kuaishou.set(windowId, new KuaishouCrawler(MAX_MONITOR_VIDEOS));
+  }
+  return crawlerCache.kuaishou.get(windowId)!;
+}
+
+function getXiaohongshuCrawler(windowId: string): XiaohongshuCrawler {
+  if (!crawlerCache.xiaohongshu.has(windowId)) {
+    crawlerCache.xiaohongshu.set(windowId, new XiaohongshuCrawler(MAX_MONITOR_VIDEOS));
+  }
+  return crawlerCache.xiaohongshu.get(windowId)!;
+}
+
+function getTencentCrawler(windowId: string): TencentCrawler {
+  if (!crawlerCache.tencent.has(windowId)) {
+    crawlerCache.tencent.set(windowId, new TencentCrawler(MAX_MONITOR_VIDEOS));
+  }
+  return crawlerCache.tencent.get(windowId)!;
+}
+
+function releaseCrawler(platform: string, windowId: string): void {
+  const cache = crawlerCache[platform as keyof typeof crawlerCache];
+  if (!cache) return;
+  const crawler = cache.get(windowId);
+  if (!crawler) return;
+  try { (crawler as any).unregisterListener?.(); } catch {}
+  try { (crawler as any).unregisterCommentListener?.(); } catch {}
+  // 清理小红书的独立评论拦截器
+  try {
+    if ((crawler as any).commentInterceptor) {
+      (crawler as any).commentInterceptor.unregisterAll?.();
+      (crawler as any).commentInterceptor = null;
+    }
+    if ((crawler as any).commentListenerId) {
+      (crawler as any).commentListenerId = null;
+    }
+  } catch {}
+  cache.delete(windowId);
+}
 
 // ============================================================
 // BullMQ 队列
@@ -687,7 +738,7 @@ export async function executeMonitorCheck(
       try {
         if (task.platform === 'douyin') {
           const source = ExitStrategy.getQuerySource();
-          await douyinCrawler.executeExitStrategy(
+          await getDouyinCrawler(task.windowId).executeExitStrategy(
             page,
             source === 'work_list' ? 'content_management' : 'data_center',
           );
@@ -711,22 +762,23 @@ export async function executeMonitorCheck(
 // ============================================================
 
 async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+  const dy = getDouyinCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('douyin');
 
   // 注册 API 拦截器
-  await douyinCrawler.registerListener(page, ['/work_list', '/item/list', '/comment/list/select']);
+  await dy.registerListener(page, ['/work_list', '/item/list', '/comment/list/select']);
 
   const currentUrl = page.url();
   if (!currentUrl.includes('creator.douyin.com')) {
-    await douyinCrawler.navigateToCreatorHome(page);
+    await dy.navigateToCreatorHome(page);
   }
 
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
   const source = ExitStrategy.getQuerySource();
-  const phase1Result = await douyinCrawler.checkForUpdates(page, task.userId, task.windowId, source as 'work_list' | 'item_list');
+  const phase1Result = await dy.checkForUpdates(page, task.userId, task.windowId, source as 'work_list' | 'item_list');
 
-  douyinCrawler.unregisterListener();
+  dy.unregisterListener();
 
   // 风控检测
   if (phase1Result.riskControlDetected) {
@@ -742,7 +794,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // 无新评论 → 执行退出策略并返回
   if (phase1Result.commentsQueue.length === 0) {
     const exitPage = source === 'work_list' ? 'content_management' : 'data_center';
-    await douyinCrawler.executeExitStrategy(page, exitPage as any);
+    await dy.executeExitStrategy(page, exitPage as any);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -751,7 +803,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // Light mode: 仅通知评论数变化，不获取具体内容
   if (crawlMode === 'light') {
     logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Light 模式 — 跳过 Phase 2/3');
-    await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+    await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
     const updates = queue.map(q => ({
       awemeId: q.awemeId,
       description: q.description,
@@ -775,18 +827,18 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 2: 导航到评论管理');
   // 在导航到评论管理页面前注册评论API拦截器（页面加载时会触发初始API调用）
-  await douyinCrawler.registerCommentListener(page);
-  const navSuccess = await douyinCrawler.navigateToCommentManage(page);
+  await dy.registerCommentListener(page);
+  const navSuccess = await dy.navigateToCommentManage(page);
   if (!navSuccess) {
     logger.warn({ userId: task.userId }, '抖音 Phase 2 失败 — 退出策略');
-    await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+    await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase2', riskDetected: false };
   }
 
   // Phase 3: 逐视频打开抽屉 → 点击 → 拦截评论 API → 解析 + 存储
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 3: 处理评论队列');
-  const phase3Result = await douyinCrawler.processCommentsQueue(page, queue);
+  const phase3Result = await dy.processCommentsQueue(page, queue);
 
   if (phase3Result.riskDetected) {
     const riskType = phase3Result.riskInfo?.type || 'unknown';
@@ -795,7 +847,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     await db.updateUserStatus(task.userId, 'login_required');
     const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
     if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
-    douyinCrawler.unregisterCommentListener();
+    dy.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
 
@@ -821,10 +873,12 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   }, '[Result] 抖音 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
 
   onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
-  await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-  douyinCrawler.unregisterCommentListener();
+  await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+  dy.unregisterCommentListener();
 
   logger.info({ userId: task.userId, processed: phase3Result.results.length, successful: successful.length }, '抖音 Phase 3 完成');
+
+  releaseCrawler('douyin', task.windowId);
 
   return {
     hasUpdate: updates.length > 0,
@@ -842,6 +896,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 // ============================================================
 
 async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+  const ks = getKuaishouCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('kuaishou');
 
   // Phase 0: 登录检测
@@ -850,11 +905,11 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   // 先导航到快手创作者中心
   const currentUrl = page.url();
   if (!currentUrl.includes('cp.kuaishou.com')) {
-    await kuaishouCrawler.navigateToHome(page);
+    await ks.navigateToHome(page);
   }
 
   // 检测登录状态（支持扫码等待）
-  const loginSuccess = await kuaishouCrawler.handleLogin(page, task.userId, onProgress);
+  const loginSuccess = await ks.handleLogin(page, task.userId, onProgress);
   if (!loginSuccess) {
     logger.error({ userId: task.userId }, '快手登录失败');
     await db.updateUserStatus(task.userId, 'login_required');
@@ -862,7 +917,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   }
 
   // 注册 API 拦截器
-  await kuaishouCrawler.registerListener(page, [
+  await ks.registerListener(page, [
     '/rest/cp/works/v2/video/pc/photo/list',
     '/rest/cp/creator/analysis/pc/photo/list',
     '/rest/cp/comment/pc/list',
@@ -871,9 +926,9 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   // Phase 1 — 随机选择数据源
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
   const source: 'work_list' | 'photo_analysis' = Math.random() < 0.5 ? 'work_list' : 'photo_analysis';
-  const phase1Result = await kuaishouCrawler.checkForUpdates(page, task.userId, task.windowId, source);
+  const phase1Result = await ks.checkForUpdates(page, task.userId, task.windowId, source);
 
-  kuaishouCrawler.unregisterListener();
+  ks.unregisterListener();
 
   if (phase1Result.riskControlDetected) {
     const riskType = phase1Result.riskControlInfo?.type || 'unknown';
@@ -887,7 +942,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 
   if (phase1Result.commentsQueue.length === 0) {
     const exitPage = source === 'work_list' ? 'kuaishou_content' : 'kuaishou_data_center';
-    await kuaishouCrawler.executeExitStrategy(page, exitPage as any);
+    await ks.executeExitStrategy(page, exitPage as any);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -895,7 +950,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 
   if (crawlMode === 'light') {
     logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Light 模式 — 跳过 Phase 2/3');
-    await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+    await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
     const updates = queue.map(q => ({
       awemeId: q.awemeId,
       description: q.description,
@@ -921,18 +976,18 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 
   // 在导航到评论管理页面前注册评论API拦截器（页面加载时会触发初始API调用，
   // 必须在 navigation 之前注册才能捕获该响应）
-  await kuaishouCrawler.registerCommentListener(page);
-  const navSuccess = await kuaishouCrawler.navigateToCommentManage(page);
+  await ks.registerCommentListener(page);
+  const navSuccess = await ks.navigateToCommentManage(page);
   if (!navSuccess) {
     logger.warn({ userId: task.userId }, '快手 Phase 2 失败');
-    await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+    await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase2', riskDetected: false };
   }
 
   // Phase 3
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Phase 3: 处理评论队列');
-  const phase3Result = await kuaishouCrawler.processCommentsQueue(page, queue);
+  const phase3Result = await ks.processCommentsQueue(page, queue);
 
   if (phase3Result.riskDetected) {
     const riskType = phase3Result.riskInfo?.type || 'unknown';
@@ -941,7 +996,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     await db.updateUserStatus(task.userId, 'login_required');
     const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
     if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'kuaishou', user.wechatUserid);
-    kuaishouCrawler.unregisterCommentListener();
+    ks.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
 
@@ -957,8 +1012,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     }));
 
   onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
-  await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-  kuaishouCrawler.unregisterCommentListener();
+  await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+  ks.unregisterCommentListener();
 
   logger.info({
     userId: task.userId,
@@ -969,6 +1024,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     failedDetails: failed.map(r => ({ awemeId: r.awemeId, error: r.error })),
     processed: phase3Result.results.length,
   }, '[Result] 快手 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
+
+  releaseCrawler('kuaishou', task.windowId);
 
   return {
     hasUpdate: updates.length > 0,
@@ -986,21 +1043,22 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 // ============================================================
 
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+  const xhs = getXiaohongshuCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('xiaohongshu');
 
   logger.info({ userId: task.userId, crawlMode }, '[XHS-monitor] Starting xiaohongshu check');
 
-  await xiaohongshuCrawler.registerListener(page, ['/api/galaxy/v2/creator/note/user/posted']);
+  await xhs.registerListener(page, ['/api/galaxy/v2/creator/note/user/posted']);
 
   const currentUrl = page.url();
   if (!currentUrl.includes('creator.xiaohongshu.com')) {
-    await xiaohongshuCrawler.navigateToCreatorHome(page);
+    await xhs.navigateToCreatorHome(page);
   }
 
   // Phase 1: 笔记列表扫描 + 私密过滤
   onProgress?.({ phase: 'Phase1', step: '扫描笔记列表', percent: 20, detail: '正在获取笔记列表并对比评论数' });
-  const phase1Result = await xiaohongshuCrawler.checkForUpdates(page, task.userId);
-  xiaohongshuCrawler.unregisterListener();
+  const phase1Result = await xhs.checkForUpdates(page, task.userId);
+  xhs.unregisterListener();
 
   if (phase1Result.riskControlDetected) {
     logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType: phase1Result.riskControlInfo?.type }, '小红书风控触发');
@@ -1013,7 +1071,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   // 无新评论 → 执行退出并返回
   if (crawlMode === 'light' || queue.length === 0) {
-    await xiaohongshuCrawler.executeExitStrategy(page);
+    await xhs.executeExitStrategy(page);
     const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
       awemeId: v.awemeId,
       description: v.description,
@@ -1027,7 +1085,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   onProgress?.({ phase: 'Phase2', step: '检查主站登录', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
   const user = await db.getUserById(task.userId);
   const wechatUserid = (user as any)?.wechatUserid || '';
-  const loggedIn = await xiaohongshuCrawler.checkMainsiteLogin(
+  const loggedIn = await xhs.checkMainsiteLogin(
     (page as any).context(),
     task.userId,
     wechatUserid,
@@ -1035,7 +1093,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   if (!loggedIn) {
     logger.info({ userId: task.userId }, '[XHS-monitor] 主站未登录 — 回退到 Light 模式');
-    await xiaohongshuCrawler.executeExitStrategy(page);
+    await xhs.executeExitStrategy(page);
     const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
       awemeId: v.awemeId,
       description: v.description,
@@ -1059,10 +1117,10 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
 
-  const phase3Result = await xiaohongshuCrawler.processCommentsQueue(page, queue, task.userId);
+  const phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
 
   // 退出策略
-  await xiaohongshuCrawler.executeExitStrategy(page);
+  await xhs.executeExitStrategy(page);
 
   const successful = phase3Result.filter((r: any) => r.success);
   const failed = phase3Result.filter((r: any) => !r.success);
@@ -1083,6 +1141,8 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     failCount: failed.length,
   }, '[Result] 小红书 Phase3 done');
 
+  releaseCrawler('xiaohongshu', task.windowId);
+
   return {
     hasUpdate: updates.length > 0,
     newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0),
@@ -1097,9 +1157,10 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 // ============================================================
 
 async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+  const tc = getTencentCrawler(task.windowId);
   // Phase 0: 登录检测
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 10, detail: '正在检测视频号登录状态' });
-  const loggedIn = await tencentCrawler.handleLogin(page, task.userId);
+  const loggedIn = await tc.handleLogin(page, task.userId);
   if (!loggedIn) {
     logger.error({ userId: task.userId }, '视频号登录失败');
     await db.updateUserStatus(task.userId, 'login_required');
@@ -1110,9 +1171,9 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
 
   // Phase 1: 检测更新（视频列表扫描 + 对比数据库）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
-  const phase1Result = await tencentCrawler.checkForUpdates(page, task.userId);
+  const phase1Result = await tc.checkForUpdates(page, task.userId);
 
-  tencentCrawler.unregisterListener();
+  tc.unregisterListener();
 
   // 风控检测
   if (phase1Result.riskControlDetected) {
@@ -1132,7 +1193,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
 
   // 无新评论 → 执行退出策略并返回
   if (phase1Result.commentsQueue.length === 0) {
-    await tencentCrawler.executeExitStrategy(page);
+    await tc.executeExitStrategy(page);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -1141,7 +1202,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // Light 模式：仅通知评论数变化，不获取具体内容
   if (crawlMode === 'light') {
     logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Light 模式 — 跳过 Phase 2/3');
-    await tencentCrawler.executeExitStrategy(page);
+    await tc.executeExitStrategy(page);
     const updates = queue.map(q => ({
       awemeId: q.exportId,
       description: q.description,
@@ -1164,11 +1225,11 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // Phase 2: 导航评论管理
   onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 2: 导航到评论管理');
-  const navSuccess = await tencentCrawler.navigateToCommentManage(page);
+  const navSuccess = await tc.navigateToCommentManage(page);
   if (!navSuccess) {
     logger.warn({ userId: task.userId }, '视频号 Phase 2 失败（可能未实现）— 回退到 Light 模式');
     // Phase 2 未实现时回退到 Light 模式
-    await tencentCrawler.executeExitStrategy(page);
+    await tc.executeExitStrategy(page);
     const updates = queue.map(q => ({
       awemeId: q.exportId,
       description: q.description,
@@ -1181,7 +1242,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // Phase 3: 逐视频采集评论详情
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 3: 处理评论队列');
-  const phase3Result = await tencentCrawler.processCommentsQueue(page, queue, task.userId);
+  const phase3Result = await tc.processCommentsQueue(page, queue, task.userId);
 
   if (phase3Result.some(r => r.error?.includes('风险') || r.error?.includes('captcha') || r.error?.includes('Risk control'))) {
     const riskType = 'phase3_risk';
@@ -1213,9 +1274,11 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   }, '[Result] 视频号 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
 
   onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
-  await tencentCrawler.executeExitStrategy(page);
+  await tc.executeExitStrategy(page);
 
   logger.info({ userId: task.userId, processed: phase3Result.length, successful: successful.length }, '视频号 Phase 3 完成');
+
+  releaseCrawler('tencent', task.windowId);
 
   return {
     hasUpdate: updates.length > 0,
@@ -1505,6 +1568,11 @@ export async function executeReplyAction(
   const { page } = await bm.connect(String(task.windowId), '', task.platform);
   if (executionId) await updatePhase(executionId, 1, '准备', 5, '连接浏览器');
 
+  const dy = getDouyinCrawler(task.windowId);
+  const ks = getKuaishouCrawler(task.windowId);
+  const xhs = getXiaohongshuCrawler(task.windowId);
+  const tc = getTencentCrawler(task.windowId);
+
   // 查找评论的数字 ID 以便更新回复状态
   const { prisma } = await import('../lib/prisma');
   const commentRow = await prisma.comment.findFirst({
@@ -1565,15 +1633,15 @@ export async function executeReplyAction(
   }
 
   try {
-    // ── 抖音回复：委托给 douyinCrawler.replyToComment ──
+    // ── 抖音回复：委托给 dy.replyToComment ──
     if (task.platform === 'douyin') {
       const currentUrl = page.url();
       if (!currentUrl.includes('creator.douyin.com')) {
-        await douyinCrawler.navigateToCreatorHome(page);
+        await dy.navigateToCreatorHome(page);
       }
 
       // 导航到评论管理页面
-      const navSuccess = await douyinCrawler.navigateToCommentManage(page);
+      const navSuccess = await dy.navigateToCommentManage(page);
       if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
@@ -1585,19 +1653,19 @@ export async function executeReplyAction(
       await HumanActions.wait(page, 3000, 5000);
 
       // 打开抽屉选择目标视频
-      const drawerOpened = await (douyinCrawler as any).openSelectWorkDrawer(page);
+      const drawerOpened = await (dy as any).openSelectWorkDrawer(page);
       if (drawerOpened) {
-        const videoClicked = await (douyinCrawler as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
+        const videoClicked = await (dy as any).findAndClickVideoInDrawer(page, replyData.videoId, videoDescription);
         if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoClicked) {
           logger.warn({ videoId: replyData.videoId }, '[Reply] 无法在抽屉中点击目标视频');
         }
         // 等待抽屉自动关闭
         await HumanActions.wait(page, 2500, 4000);
-        const drawerStillOpen = await (douyinCrawler as any).isDrawerVisible(page);
+        const drawerStillOpen = await (dy as any).isDrawerVisible(page);
         if (drawerStillOpen) {
           logger.info('[Reply] 抽屉仍然打开，手动关闭');
-          await (douyinCrawler as any).closeDrawer(page);
+          await (dy as any).closeDrawer(page);
           await HumanActions.wait(page, 1000, 2000);
         }
       } else {
@@ -1659,7 +1727,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await douyinCrawler.replyToComment(page, replyTarget, replyData.text, executionId);
+      const replied = await dy.replyToComment(page, replyTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1671,14 +1739,14 @@ export async function executeReplyAction(
       }
     }
 
-    // ── 快手回复：选择视频 → 导航到评论页 → 委托给 kuaishouCrawler.replyToComment ──
+    // ── 快手回复：选择视频 → 导航到评论页 → 委托给 ks.replyToComment ──
     if (task.platform === 'kuaishou') {
       const currentUrl = page.url();
       if (!currentUrl.includes('cp.kuaishou.com')) {
-        await kuaishouCrawler.navigateToHome(page);
+        await ks.navigateToHome(page);
       }
 
-      const navSuccess = await kuaishouCrawler.navigateToCommentPageDirect(page);
+      const navSuccess = await ks.navigateToCommentPageDirect(page);
       if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理页面');
@@ -1690,7 +1758,7 @@ export async function executeReplyAction(
 
       // 选择目标视频（评论管理页面默认显示第一个视频的评论，需切换到目标视频）
       if (videoDescription) {
-        const videoSwitched = await kuaishouCrawler.selectVideoForReply(page, replyData.videoId, videoDescription, videoCreateTime);
+        const videoSwitched = await ks.selectVideoForReply(page, replyData.videoId, videoDescription, videoCreateTime);
         if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoSwitched) {
           logger.warn({ videoDescription }, '快手切换到目标视频失败，将尝试在当前视频下回复');
@@ -1711,7 +1779,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await kuaishouCrawler.replyToComment(page, kuaishouTarget, replyData.text, executionId);
+      const replied = await ks.replyToComment(page, kuaishouTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '快手回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1725,14 +1793,14 @@ export async function executeReplyAction(
 
     // ── 视频号（Tencent）回复 ──
     if (task.platform === 'tencent') {
-      const loggedIn = await tencentCrawler.handleLogin(page, task.userId);
+      const loggedIn = await tc.handleLogin(page, task.userId);
       if (!loggedIn) {
         logger.error('回复失败：视频号登录失败');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
         throw new Error('视频号登录失败');
       }
 
-      const navSuccess = await tencentCrawler.navigateToCommentManage(page);
+      const navSuccess = await tc.navigateToCommentManage(page);
       if (executionId) await updatePhase(executionId, 2, '导航', 20, '已导航到评论管理页');
       if (!navSuccess) {
         logger.error('回复失败：无法导航到评论管理');
@@ -1756,7 +1824,7 @@ export async function executeReplyAction(
 
       // 切换到目标视频（通过 wujie shadow DOM 内的视频列表点击）
       if (videoTitle) {
-        const videoSwitched = await (tencentCrawler as any).switchToVideoForReply(page, videoTitle);
+        const videoSwitched = await (tc as any).switchToVideoForReply(page, videoTitle);
         if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoSwitched) {
           logger.warn({ videoTitle }, '视频号切换到目标视频失败，将尝试在当前视频下回复');
@@ -1776,7 +1844,7 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await tencentCrawler.replyToComment(page, tencentTarget, replyData.text, executionId);
+      const replied = await tc.replyToComment(page, tencentTarget, replyData.text, executionId);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '视频号回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1787,7 +1855,7 @@ export async function executeReplyAction(
         throw new Error('视频号回复执行失败');
       }
 
-      await tencentCrawler.executeExitStrategy(page);
+      await tc.executeExitStrategy(page);
       return;
     }
 
@@ -1795,13 +1863,13 @@ export async function executeReplyAction(
     if (task.platform === 'xiaohongshu') {
       const currentUrl = page.url();
       if (!currentUrl.includes('creator.xiaohongshu.com')) {
-        await xiaohongshuCrawler.navigateToCreatorHome(page);
+        await xhs.navigateToCreatorHome(page);
       }
 
       if (executionId) await updatePhase(executionId, 2, '导航', 20, '已定位到笔记管理');
 
       // 通过点击缩略图进入笔记详情页
-      const newPage = await xiaohongshuCrawler.clickThumbnailAndWaitNewTab(page, replyData.videoId);
+      const newPage = await xhs.clickThumbnailAndWaitNewTab(page, replyData.videoId);
       if (!newPage) {
         logger.error('回复失败：无法打开笔记详情页');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1822,7 +1890,7 @@ export async function executeReplyAction(
         };
 
         if (executionId) await updatePhase(executionId, 3, '定位评论', 55, '正在定位评论');
-        const replied = await xiaohongshuCrawler.replyToComment(newPage, xhsTarget, replyData.text, executionId);
+        const replied = await xhs.replyToComment(newPage, xhsTarget, replyData.text, executionId);
         if (replied) {
           logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '小红书回复执行成功');
           if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
@@ -1837,7 +1905,7 @@ export async function executeReplyAction(
         await page.bringToFront();
       }
 
-      await xiaohongshuCrawler.executeExitStrategy(page);
+      await xhs.executeExitStrategy(page);
       return;
     }
   } catch (err: any) {
@@ -1845,19 +1913,25 @@ export async function executeReplyAction(
     if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
     throw err;
   } finally {
+    // 清理 listener 状态（不释放实例，留给后续 Monitor 复用）
+    try { dy.unregisterListener?.(); } catch {}
+    try { dy.unregisterCommentListener?.(); } catch {}
+    try { ks.unregisterListener?.(); } catch {}
+    try { ks.unregisterCommentListener?.(); } catch {}
+
     if (task.platform === 'douyin') {
       try {
-        await douyinCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+        await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
       } catch {}
     }
     if (task.platform === 'kuaishou') {
       try {
-        await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+        await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
       } catch {}
     }
     if (task.platform === 'xiaohongshu') {
       try {
-        await xiaohongshuCrawler.executeExitStrategy(page, 'menu.note-manage');
+        await xhs.executeExitStrategy(page, 'menu.note-manage');
       } catch {}
     }
   }
