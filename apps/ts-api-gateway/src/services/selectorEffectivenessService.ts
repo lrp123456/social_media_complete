@@ -22,7 +22,8 @@ export type SelectorStrategy =
   | 'spatial-filter'    // 空间过滤文本
   | 'unfiltered-text'   // 无过滤文本
   | 'scope-scoped'      // 作用域限定
-  | 'page-search';      // 全页搜索
+  | 'page-search'       // 全页搜索
+  | 'url-intercept';    // URL 监控拦截
 
 /** 选择器使用记录 */
 export interface SelectorUsageRecord {
@@ -347,4 +348,42 @@ export function reportNavigationResult(
       timestamp: Date.now(),
     });
   }
+}
+
+// ============================================================
+// URL 监控有效性追踪 (v2.4+)
+// ============================================================
+
+/**
+ * 便捷方法：记录 URL 监控拦截结果
+ * Redis key: selector:stats:{platform}:urlMonitors:{monitorName}:url-intercept
+ */
+export function reportUrlMonitorUsage(
+  platform: string,
+  monitorName: string,
+  success: boolean,
+  itemsExtracted: number,
+  durationMs: number,
+  error?: string,
+): void {
+  reportSelectorUsage({
+    platform,
+    category: 'urlMonitors',
+    name: monitorName,
+    strategy: 'url-intercept',
+    selector: `url-monitor:${monitorName}`,
+    success,
+    durationMs,
+    timestamp: Date.now(),
+    error,
+  });
+}
+
+/**
+ * 查询 URL 监控有效性统计
+ */
+export async function getUrlMonitorEffectiveness(
+  platform?: string,
+): Promise<SelectorEffectivenessStats[]> {
+  return getSelectorEffectiveness(platform, 'urlMonitors');
 }
