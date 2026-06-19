@@ -1129,6 +1129,28 @@
           "hasMoreField": "has_more",
           "cursorField": "cursor"
         }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": "#douyin-creator-master",
+          "description": "抖音创作者中心左侧导航菜单"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".douyin-creator-master-content",
+          "description": "右侧主内容区域"
+        },
+        "drawer": {
+          "label": "选择作品抽屉",
+          "selector": ".douyin-creator-interactive-sidesheet",
+          "description": "评论管理页面弹出选择视频抽屉"
+        },
+        "comment_area": {
+          "label": "评论区",
+          "selector": ".douyin-creator-interactive-tabs-content",
+          "description": "评论列表滚动容器"
+        }
       }
     },
     "kuaishou": {
@@ -2098,6 +2120,23 @@
           ],
           "hasMoreField": "has_more"
         }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".side-nav",
+          "description": "快手创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".main-content",
+          "description": "右侧主内容区域"
+        },
+        "drawer": {
+          "label": "选择视频抽屉",
+          "selector": ".el-drawer",
+          "description": "评论管理页面弹出选择视频抽屉"
+        }
       }
     },
     "xiaohongshu": {
@@ -2637,6 +2676,23 @@
           "hasMoreField": "data.page",
           "hasMoreCondition": "=== -1"
         }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".creator-sidebar",
+          "description": "小红书创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".creator-content",
+          "description": "右侧主内容区域"
+        },
+        "note_list": {
+          "label": "笔记列表",
+          "selector": ".note-list",
+          "description": "笔记管理页面笔记卡片列表"
+        }
       }
     },
     "tencent": {
@@ -2972,6 +3028,23 @@
           ],
           "hasMoreField": "data.downContinueFlag",
           "hasMoreCondition": "=== 1"
+        }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".weui-desktop-nav",
+          "description": "视频号创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".weui-desktop-block",
+          "description": "右侧主内容区域"
+        },
+        "video_list": {
+          "label": "视频列表",
+          "selector": ".feeds-container",
+          "description": "评论管理页面侧边视频列表（shadow DOM）"
         }
       }
     }
