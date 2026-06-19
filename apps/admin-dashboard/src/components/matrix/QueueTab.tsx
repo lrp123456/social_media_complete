@@ -41,15 +41,6 @@ export default function QueueTab() {
   const updateDebugMode = useUpdateDebugMode();
   const isDebugMode = debugModeData?.enabled ?? false;
 
-  if (selectedExecutionId) {
-    return (
-      <ExecutionDetail
-        executionId={selectedExecutionId}
-        onBack={() => setSelectedExecutionId(null)}
-      />
-    );
-  }
-
   const activeTasks = activeData?.tasks || [];
   const historyItems = historyData?.items || [];
   const totalHistory = historyData?.total || 0;
@@ -82,6 +73,15 @@ export default function QueueTab() {
     }
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [historyItems]);
+
+  if (selectedExecutionId) {
+    return (
+      <ExecutionDetail
+        executionId={selectedExecutionId}
+        onBack={() => setSelectedExecutionId(null)}
+      />
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto px-4 pb-12">
