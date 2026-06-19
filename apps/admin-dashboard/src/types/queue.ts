@@ -18,6 +18,8 @@ export interface QueueTask {
   taskId: string;
   taskType: QueueTaskType;
   platform: string;
+  windowId?: string;
+  windowName?: string;
   status: QueueTaskStatus;
   phaseIndex?: number;
   totalPhases?: number;
@@ -36,6 +38,8 @@ export interface ExecutionHistoryItem {
   taskId: string;
   taskType: QueueTaskType;
   platform: string;
+  windowId: string;
+  windowName: string;
   userId: number | null;
   status: ExecutionStatus;
   currentPhase: string | null;

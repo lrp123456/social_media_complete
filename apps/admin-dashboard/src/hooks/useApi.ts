@@ -1041,6 +1041,53 @@ export function useDeleteCustomSelector() {
 }
 
 // ============================================================
+// URL 监控配置 (v2.4+)
+// ============================================================
+
+export function useUrlMonitors() {
+  return useQuery({
+    queryKey: ['config-automation', 'url-monitors'],
+    queryFn: () => api.get('/config-automation/selectors/url-monitors').then((r) => r.data),
+  });
+}
+
+export function useUpsertUrlMonitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; name: string; entry: UrlMonitorEntry }) =>
+      api.put(`/config-automation/selectors/url-monitors/${input.platform}/${input.name}`, { entry: input.entry }).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'url-monitors'] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useDeleteUrlMonitor() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; name: string }) =>
+      api.delete(`/config-automation/selectors/url-monitors/${input.platform}/${input.name}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'url-monitors'] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useUpdateUrlMonitors() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; urlMonitors: Record<string, UrlMonitorEntry> | null; reset?: boolean }) =>
+      api.put('/config-automation/selectors/url-monitors', input).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'url-monitors'] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
 // 板块六: 网络路由与物理代理 (config-network)
 // ============================================================
 
@@ -1376,6 +1423,38 @@ export type PlatformSelectors = {
   regions: Record<string, SelectorEntry>;
   textboxes: Record<string, SelectorEntry>;
   flowRules?: Record<string, unknown>;
+  urlMonitors?: Record<string, UrlMonitorEntry>;
+};
+
+export type ResponseExtraction = {
+  itemsPath: string;
+  idField: string;
+  fieldMap?: Record<string, string>;
+};
+
+export type PaginationRule = {
+  hasMorePath?: string;
+  hasMoreValue?: unknown;
+  hasMoreFalseValue?: unknown;
+  cursorPath?: string;
+  cursorParamName?: string;
+};
+
+export type UrlMonitorEntry = {
+  enabled: boolean;
+  description?: string;
+  tags?: string[];
+  urlPatterns: string[];
+  method: 'GET' | 'POST';
+  extraction: ResponseExtraction;
+  pagination?: PaginationRule;
+  flowPhase?: string;
+  validation?: {
+    expectedPageUrls?: string[];
+    requiredItemFields?: string[];
+    minItems?: number;
+    requiredUrlParams?: string[];
+  };
 };
 
 export type SelectorConfig = {
@@ -1507,7 +1586,7 @@ export function useActiveQueueTasks() {
   });
 }
 
-export function useQueueHistory(params?: { page?: number; limit?: number; taskType?: string; status?: string }) {
+export function useQueueHistory(params?: { page?: number; limit?: number; taskType?: string; status?: string; windowId?: string }) {
   return useQuery<HistoryData>({
     queryKey: ['queue', 'history', params],
     queryFn: () =>
@@ -1523,5 +1602,16 @@ export function useExecutionDetail(id: string | null) {
       api.get(`/matrix/queue/executions/${id}`).then((r) => r.data as ExecutionDetail),
     enabled: !!id,
     retry: 1,
+  });
+}
+
+export function useClearQueueHistory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete('/matrix/queue/history').then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['queue', 'history'] });
+      qc.invalidateQueries({ queryKey: ['queue', 'active'] });
+    },
   });
 }
