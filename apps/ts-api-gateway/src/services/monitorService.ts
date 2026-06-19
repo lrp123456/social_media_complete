@@ -971,7 +971,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 }
 
 // ============================================================
-// 小红书监控 — Light 模式（不支持 Deep 模式）
+// 小红书监控（支持 Light / Deep 模式）
 // ============================================================
 
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
