@@ -65,25 +65,9 @@ export interface RootCommentSnapshot {
   labelType?: number;
 }
 
-// ── Reply target descriptor (username + subReplyCount + content triple matching) ──
-export interface ReplyTarget {
-  /** 评论正文（仅用于日志和最终可视确认，不参与匹配） */
-  text: string;
-  /** 评论层级：1=根评论，2=子评论 */
-  level: 1 | 2;
-  /** ★ 要回复的那条评论的作者昵称（必填，根评论匹配主键之一） */
-  username: string;
-  /** ★ 仅 level=1：根评论的子评论数（来自"查看N条回复"文本），0=没有子评论；-1=未知 */
-  subReplyCount?: number;
-  /** ★ 仅 level=2：所属根评论的正文 */
-  rootText?: string;
-  /** ★ 仅 level=2：所属根评论的作者昵称 */
-  rootUsername?: string;
-  /** ★ 仅 level=2：所属根评论的子评论数（同 subReplyCount 语义） */
-  rootSubReplyCount?: number;
-  /** 保留：用于日志和向后兼容，不再用于匹配 */
-  createTime?: number;
-}
+// 引用共享回复目标接口
+import { ReplyTarget } from './replyTypes';
+export { ReplyTarget };
 
 export type RiskControlDetection = {
   detected: boolean;

@@ -10,6 +10,7 @@ import { createLogger } from '../lib/logger';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
+import type { ReplyTarget } from './replyTypes';
 import fs from 'fs';
 import path from 'path';
 
@@ -130,16 +131,9 @@ export type KuaishouQuerySource = 'work_list' | 'photo_analysis';
 // Reply target interface (similar to douyin's ReplyTarget)
 // ============================================================
 
-export interface KuaishouReplyTarget {
-  commentCid: string;           // 评论 ID
-  text: string;                 // 评论正文
-  username: string;             // ★ 评论作者昵称（匹配主键）
-  level: 1 | 2;                // 1=根评论, 2=子评论
-  subReplyCount?: number;       // ★ level=1：子评论数（来自"展开N条回复"）
-  rootText?: string;            // ★ level=2：所属根评论的正文
-  rootUsername?: string;        // ★ level=2：所属根评论的作者昵称
-  rootSubReplyCount?: number;   // ★ level=2：所属根评论的子评论数
-  createTime?: number;          // 仅日志/向后兼容
+// 快手回复目标 — 扩展共享 ReplyTarget，增加快手特有的 commentCid 字段
+export interface KuaishouReplyTarget extends ReplyTarget {
+  commentCid: string;
 }
 
 // ============================================================

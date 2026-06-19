@@ -9,6 +9,7 @@ import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnap
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { ReplyTarget } from './replyTypes';
 
 const logger = createLogger('crawler:tencent');
 
@@ -91,16 +92,8 @@ export interface CheckResult {
  * 视频号回复目标（与抖音 ReplyTarget / 快手 KuaishouReplyTarget 对齐）
  * 用于 replyToComment 方法精确定位根评论或子评论
  */
-export interface TencentReplyTarget {
-  commentCid: string;           // 评论 ID
-  text: string;                 // 评论正文
-  username: string;             // ★ 评论作者昵称（匹配主键）
-  level: 1 | 2;                 // 1=根评论, 2=子评论
-  subReplyCount?: number;       // ★ level=1：子评论数
-  rootText?: string;            // ★ level=2：所属根评论的正文
-  rootUsername?: string;        // ★ level=2：所属根评论的作者昵称
-  rootSubReplyCount?: number;   // ★ level=2：所属根评论的子评论数
-  createTime?: number;          // 仅日志/向后兼容
+export interface TencentReplyTarget extends ReplyTarget {
+  commentCid: string;
 }
 
 export type RiskControlDetection = {
