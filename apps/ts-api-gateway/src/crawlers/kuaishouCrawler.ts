@@ -1257,7 +1257,7 @@ export class KuaishouCrawler {
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
     // 动态剔除：已入库视频变为私密（photoStatus!=0）时从数据库删除
-    const awemeIdToPhotoStatus = (this as any)._awemeIdToPhotoStatus || new Map<string, number>();
+    const awemeIdToPhotoStatus = this.awemeIdToPhotoStatus;
     for (const dbVideo of dbVideos) {
       const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
       if (!freshItem) {

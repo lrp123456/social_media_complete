@@ -144,6 +144,7 @@ export class DouyinCrawler {
   private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
   private page?: Page;
+  private awemeIdToPlayCount: Map<string, number> = new Map();
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -401,7 +402,7 @@ export class DouyinCrawler {
       awemeIds: filtered.map(i => i.aweme_id),
     }, 'Video list fetch completed');
 
-    (this as any)._awemeIdToPlayCount = awemeIdToPlayCount;
+    this.awemeIdToPlayCount = awemeIdToPlayCount;
     return filtered;
   }
 
@@ -1234,7 +1235,7 @@ export class DouyinCrawler {
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
     // 动态剔除：已入库视频变为私密（play_count=0）时从数据库删除
-    const awemeIdToPlayCount = (this as any)._awemeIdToPlayCount || new Map<string, number>();
+    const awemeIdToPlayCount = this.awemeIdToPlayCount;
     for (const dbVideo of dbVideos) {
       const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
       if (!freshItem) {
