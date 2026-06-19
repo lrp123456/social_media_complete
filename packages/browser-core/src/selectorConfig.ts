@@ -105,6 +105,64 @@ export interface PublishFlowRules {
   declareModalMethod?: 'selector' | 'page-text' | 'both';
 }
 
+// ============================================================
+// URL 监控配置 (v2.4+) — 网络请求旁路拦截规则
+// ============================================================
+
+/** HTTP 请求方法 */
+export type HttpMethod = 'GET' | 'POST';
+
+/** 响应数据提取规则 */
+export interface ResponseExtraction {
+  /** 数据列表的 JSON 路径 (如 "data.list", "data.comment", "data.items") */
+  itemsPath: string;
+  /** 单条记录的唯一 ID 字段路径 (如 "exportId", "commentId", "aweme_id") */
+  idField: string;
+  /** 可选: 需要提取的关键字段映射 {别名: JSON路径} */
+  fieldMap?: Record<string, string>;
+}
+
+/** 分页检测规则 */
+export interface PaginationRule {
+  /** hasMore 标志的 JSON 路径 (如 "data.downContinueFlag", "data.has_more") */
+  hasMorePath?: string;
+  /** hasMore=true 的判定值 (如 1, true, "1") — 默认 true */
+  hasMoreValue?: unknown;
+  /** hasMore=false 的判定值 (如 0, false, "0", -1) — 默认 false */
+  hasMoreFalseValue?: unknown;
+  /** 游标字段路径 (如 "data.lastBuff", "cursor.max", "data.cursor") */
+  cursorPath?: string;
+  /** 分页参数名 (请求体中传入的字段名, 如 "lastBuff", "cursor", "pcursor") */
+  cursorParamName?: string;
+}
+
+/** URL 监控条目 — 描述一个需要拦截的 API 端点 (v2.4+) */
+export interface UrlMonitorEntry {
+  /** 启用/禁用 */
+  enabled: boolean;
+  /** 描述 */
+  description?: string;
+  /** 标签 (如 ["核心", "评论"]) */
+  tags?: string[];
+  /** URL 匹配模式 — 请求 URL 包含任一子串即命中 */
+  urlPatterns: string[];
+  /** HTTP 方法 */
+  method: HttpMethod;
+  /** 响应提取规则 */
+  extraction: ResponseExtraction;
+  /** 分页检测规则 */
+  pagination?: PaginationRule;
+  /** 关联的业务流程阶段 (如 "monitor:scan", "monitor:collect", "reply:execute") */
+  flowPhase?: string;
+  /** 可选: 响应结构校验 (复用 interceptor 的 ValidationConfig 子集) */
+  validation?: {
+    expectedPageUrls?: string[];
+    requiredItemFields?: string[];
+    minItems?: number;
+    requiredUrlParams?: string[];
+  };
+}
+
 /** 平台选择器集合 + 流程规则 (v2.1+) */
 export interface PlatformSelectors {
   /** 菜单 / 导航项 */
@@ -120,6 +178,26 @@ export interface PlatformSelectors {
   // ============================================================
   /** 该平台的发布流程规则 (scope/disabled 方式/URL 模式) */
   flowRules?: PublishFlowRules;
+  // ============================================================
+  // URL 监控配置 (v2.4+) — 网络请求拦截规则
+  // ============================================================
+  /** 该平台的 URL 监控条目 (API 拦截模式, 替代/补充 DOM 爬取) */
+  urlMonitors?: Record<string, UrlMonitorEntry>;
+  // ============================================================
+  // API 模式配置 (v2.5+) — API 请求模式匹配
+  // ============================================================
+  /** 该平台的 API 模式配置 */
+  apiPatterns?: Record<string, Record<string, unknown>>;
+  // ============================================================
+  // 数据源配置 (v2.5+) — 外部数据源定义
+  // ============================================================
+  /** 该平台的数据源配置 */
+  dataSources?: Record<string, Record<string, unknown>>;
+  // ============================================================
+  // 导航流程配置 (v2.5+) — 页面导航流程定义
+  // ============================================================
+  /** 该平台的导航流程配置 */
+  navigationFlows?: Record<string, Record<string, unknown>>;
 }
 
 // ============================================================
@@ -336,6 +414,63 @@ export class SelectorReader {
     }
     this.config.updatedAt = new Date().toISOString();
     logger.info({ platform, hasFlowRules: !!flowRules }, 'FlowRules updated');
+    return true;
+  }
+
+  // ============================================================
+  // URL 监控配置 (v2.4+) — 网络请求拦截规则
+  // ============================================================
+
+  /** 获取平台的全部 URL 监控条目 */
+  getUrlMonitors(platform: string): Record<string, UrlMonitorEntry> | null {
+    const p = this.config.platforms[platform];
+    if (!p) return null;
+    return p.urlMonitors || null;
+  }
+
+  /** 获取单个 URL 监控条目 */
+  getUrlMonitor(platform: string, name: string): UrlMonitorEntry | null {
+    const p = this.config.platforms[platform];
+    if (!p || !p.urlMonitors) return null;
+    return p.urlMonitors[name] || null;
+  }
+
+  /** 整体替换平台的 URL 监控条目 (null 清空) */
+  setUrlMonitors(platform: string, monitors: Record<string, UrlMonitorEntry> | null): boolean {
+    const p = this.config.platforms[platform];
+    if (!p) return false;
+    if (monitors === null || monitors === undefined) {
+      delete p.urlMonitors;
+    } else {
+      p.urlMonitors = monitors;
+    }
+    this.config.updatedAt = new Date().toISOString();
+    logger.info({ platform, count: monitors ? Object.keys(monitors).length : 0 }, 'UrlMonitors updated');
+    return true;
+  }
+
+  /** 新增或更新单个 URL 监控条目 */
+  upsertUrlMonitor(platform: string, name: string, entry: UrlMonitorEntry): void {
+    if (!this.config.platforms[platform]) {
+      this.config.platforms[platform] = {
+        menus: {}, buttons: {}, regions: {}, textboxes: {},
+      };
+    }
+    if (!this.config.platforms[platform].urlMonitors) {
+      this.config.platforms[platform].urlMonitors = {};
+    }
+    this.config.platforms[platform].urlMonitors![name] = entry;
+    this.config.updatedAt = new Date().toISOString();
+    logger.info({ platform, name }, 'UrlMonitor upserted');
+  }
+
+  /** 删除单个 URL 监控条目 */
+  deleteUrlMonitor(platform: string, name: string): boolean {
+    const p = this.config.platforms[platform];
+    if (!p || !p.urlMonitors || !p.urlMonitors[name]) return false;
+    delete p.urlMonitors[name];
+    this.config.updatedAt = new Date().toISOString();
+    logger.info({ platform, name }, 'UrlMonitor deleted');
     return true;
   }
 }

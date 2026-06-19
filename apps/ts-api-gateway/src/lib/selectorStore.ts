@@ -16,7 +16,7 @@ const logger = createLogger('selector-store');
 // Minimal embedded default — only used when data/selectors.json is missing or invalid
 // Contains at least the critical navigation selectors so the system stays functional
 const FALLBACK_CONFIG: SelectorConfig = {
-  version: '2.1.0',
+  version: '2.4.0',
   updatedAt: new Date().toISOString(),
   platforms: {
     douyin: {
@@ -58,9 +58,13 @@ const FALLBACK_CONFIG: SelectorConfig = {
       },
       textboxes: {},
       flowRules: {},
+      urlMonitors: {},
+      apiPatterns: {},
+      dataSources: {},
+      navigationFlows: {},
     },
-    kuaishou: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} },
-    xiaohongshu: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} },
+    kuaishou: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} },
+    xiaohongshu: { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} },
   },
 };
 
@@ -77,7 +81,7 @@ let instance: SelectorReader | null = null;
 // ============================================================
 
 const VALID_PURPOSES = new Set(['publish', 'monitor']);
-const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes'];
+const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes', 'apiPatterns', 'dataSources', 'navigationFlows'];
 const VALID_TYPES = new Set(['css', 'role', 'text', 'placeholder', 'label']);
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
@@ -162,6 +166,38 @@ function validateConfig(raw: unknown): ValidationIssue[] {
         }
       }
     }
+    // v2.4+ urlMonitors 校验
+    if (p.urlMonitors !== undefined) {
+      if (typeof p.urlMonitors !== 'object' || p.urlMonitors === null) {
+        issues.push({ path: `$.platforms.${plat}.urlMonitors`, message: 'must be an object' });
+      } else {
+        for (const [name, mVal] of Object.entries(p.urlMonitors as Record<string, unknown>)) {
+          const mp = `$.platforms.${plat}.urlMonitors.${name}`;
+          if (!mVal || typeof mVal !== 'object') {
+            issues.push({ path: mp, message: 'entry must be an object' });
+            continue;
+          }
+          const m = mVal as Record<string, unknown>;
+          if (!Array.isArray(m.urlPatterns) || m.urlPatterns.length === 0) {
+            issues.push({ path: `${mp}.urlPatterns`, message: 'must be a non-empty array' });
+          }
+          if (typeof m.method !== 'string' || !['GET', 'POST'].includes(m.method)) {
+            issues.push({ path: `${mp}.method`, message: 'must be GET or POST' });
+          }
+          if (!m.extraction || typeof m.extraction !== 'object') {
+            issues.push({ path: `${mp}.extraction`, message: 'must be an object with itemsPath and idField' });
+          } else {
+            const ext = m.extraction as Record<string, unknown>;
+            if (typeof ext.itemsPath !== 'string' || ext.itemsPath.length === 0) {
+              issues.push({ path: `${mp}.extraction.itemsPath`, message: 'must be a non-empty string' });
+            }
+            if (typeof ext.idField !== 'string' || ext.idField.length === 0) {
+              issues.push({ path: `${mp}.extraction.idField`, message: 'must be a non-empty string' });
+            }
+          }
+        }
+      }
+    }
   }
   return issues;
 }
@@ -182,12 +218,12 @@ function hasInvalidPurposes(entry: Record<string, unknown>): boolean {
 function sanitizeConfig(raw: unknown): SelectorConfig {
   const cfg = raw as Record<string, unknown>;
   const platforms = cfg.platforms as Record<string, Record<string, Record<string, unknown>>>;
-  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown> }> = {};
+  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown>; urlMonitors: Record<string, unknown>; apiPatterns: Record<string, unknown>; dataSources: Record<string, unknown>; navigationFlows: Record<string, unknown> }> = {};
 
   let removedCount = 0;
   for (const [plat, pVal] of Object.entries(platforms || {})) {
     const p = pVal as Record<string, unknown>;
-    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {} };
+    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {} };
     for (const cat of VALID_CATEGORIES) {
       const entries = (p[cat] || {}) as Record<string, unknown>;
       for (const [name, eVal] of Object.entries(entries)) {
@@ -200,6 +236,12 @@ function sanitizeConfig(raw: unknown): SelectorConfig {
         }
       }
     }
+    // 透传 urlMonitors 字段
+    out.urlMonitors = (p.urlMonitors || {}) as Record<string, unknown>;
+    // 透传 apiPatterns / dataSources / navigationFlows 字段（不做 purposes 校验）
+    out.apiPatterns = (p.apiPatterns || {}) as Record<string, unknown>;
+    out.dataSources = (p.dataSources || {}) as Record<string, unknown>;
+    out.navigationFlows = (p.navigationFlows || {}) as Record<string, unknown>;
     sanitized[plat] = out as any;
   }
 
@@ -297,3 +339,48 @@ export function resetSelectorConfig(): SelectorConfig {
 
 // 暴露给测试用
 export { validateConfig, SCHEMA_FILE };
+
+/**
+ * 从 selectors.json 读取 apiPattern 配置
+ * @returns pattern 字符串，未找到返回 undefined
+ */
+export function getApiPattern(platform: string, key: string): string | undefined {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  if (!p?.apiPatterns?.[key]) return undefined;
+  return p.apiPatterns[key].pattern;
+}
+
+/**
+ * 从 selectors.json 读取 dataSource 配置
+ * @returns DataSourceConfig 对象，未找到返回 undefined
+ */
+export function getDataSource(platform: string, key: string): Record<string, any> | undefined {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  if (!p?.dataSources?.[key]) return undefined;
+  return p.dataSources[key];
+}
+
+/**
+ * 从 selectors.json 读取所有 dataSource 配置
+ */
+export function getDataSources(platform: string): Record<string, Record<string, any>> {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  return p?.dataSources || {};
+}
+
+/**
+ * 从 selectors.json 读取 navigationFlow 配置
+ */
+export function getNavigationFlow(platform: string, flowName: string): Record<string, any> | undefined {
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const p = (config.platforms as any)?.[platform];
+  if (!p?.navigationFlows?.[flowName]) return undefined;
+  return p.navigationFlows[flowName];
+}
