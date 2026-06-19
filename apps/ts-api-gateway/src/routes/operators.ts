@@ -134,6 +134,43 @@ async function syncOperatorToMonitorUser(operatorId: number): Promise<void> {
   }
 }
 
+/**
+ * 清理指定窗口的所有监控用户数据及关联
+ * 用于删除操作员、解绑窗口时调用，避免 users 表孤儿数据
+ */
+async function cleanupWindowMonitorData(windowExternalId: string, reason: string): Promise<void> {
+  const monitorPlatforms = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'];
+
+  const users = await prisma.user.findMany({
+    where: { fingerprintWindowId: windowExternalId, platform: { in: monitorPlatforms } },
+    include: { videos: { select: { id: true } } },
+  });
+
+  for (const user of users) {
+    const videoIds = user.videos.map((v) => v.id);
+    if (videoIds.length > 0) {
+      await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+      await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: videoIds } } });
+      await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: videoIds } } });
+    }
+    await prisma.monitorStatus.deleteMany({ where: { accountId: String(user.id) } });
+    await prisma.user.delete({ where: { id: user.id } });
+
+    // 清理 BullMQ 待处理任务
+    const staleJobs = await monitorQueue.getJobs(['waiting', 'delayed']);
+    for (const job of staleJobs) {
+      if ((job.data as any).userId === user.id) {
+        await job.remove().catch(() => {});
+      }
+    }
+
+    logger.info(
+      { windowExternalId, userId: user.id, platform: user.platform, reason, cleanedVideos: videoIds.length },
+      '已清理窗口监控用户数据及关联',
+    );
+  }
+}
+
 // ============================================================
 // 窗口数量限制
 // ============================================================
@@ -234,6 +271,22 @@ router.put('/:id', async (req: Request, res: Response) => {
 router.delete('/:id', async (req: Request, res: Response) => {
   try {
     const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(req.params);
+
+    // 获取操作员绑定的窗口（在解绑前，用于清理监控数据）
+    const operator = await prisma.operator.findUnique({
+      where: { id },
+      include: { windows: true },
+    });
+    if (!operator) {
+      return res.status(404).json({ success: false, error: '操作员不存在' });
+    }
+
+    // 清理每个绑定窗口的监控用户数据及关联
+    for (const window of operator.windows) {
+      if (window.status === 'bound') {
+        await cleanupWindowMonitorData(window.externalId, `operator ${id} deleted`);
+      }
+    }
 
     // 解绑所有窗口
     await prisma.browserWindow.updateMany({
@@ -426,6 +479,16 @@ router.post('/windows/:id/bind', async (req: Request, res: Response) => {
 router.post('/windows/:id/unbind', async (req: Request, res: Response) => {
   try {
     const { id } = z.object({ id: z.coerce.number().int().positive() }).parse(req.params);
+
+    const window = await prisma.browserWindow.findUnique({ where: { id } });
+    if (!window) {
+      return res.status(404).json({ success: false, error: '窗口不存在' });
+    }
+
+    // 清理该窗口的监控用户数据及关联（防止孤儿数据）
+    if (window.boundOperatorId) {
+      await cleanupWindowMonitorData(window.externalId, `window ${id} unbound`);
+    }
 
     const updated = await prisma.browserWindow.update({
       where: { id },
