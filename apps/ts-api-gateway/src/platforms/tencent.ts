@@ -228,16 +228,29 @@ export class TencentPublisher extends BasePublisher {
   }
 
   /**
-   * 点击刷新二维码 — 在 iframe 内部查找刷新按钮并点击
+   * 仅在二维码过期时点击刷新 — 避免无条件刷新导致二维码进入异常状态
    */
   private async clickQRRefresh(frame: any, page: Page): Promise<void> {
     try {
+      // 先检查二维码是否已过期
+      const isExpired = await frame.evaluate(() => {
+        const bodyText = document.body?.innerText || '';
+        return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+          || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
+      }).catch(() => false);
+
+      if (!isExpired) {
+        logger.info('[腾讯视频号] 二维码未过期，跳过刷新');
+        return;
+      }
+
+      logger.info('[腾讯视频号] 二维码已过期，点击刷新');
       const refreshSelectors = ['.qrcode-refresh-btn', '[class*="refresh"]', '[class*="Refresh"]'];
       for (const sel of refreshSelectors) {
         const btn = await frame.$(sel).catch(() => null);
         if (btn) {
           await btn.click().catch(() => {});
-          await page.waitForTimeout(2000);
+          await page.waitForTimeout(3000);
           logger.info({ selector: sel }, '[腾讯视频号] 二维码刷新按钮已点击');
           return;
         }
@@ -246,7 +259,7 @@ export class TencentPublisher extends BasePublisher {
         const els = document.querySelectorAll('a, button, span, div, p');
         for (const el of els) {
           const text = el.textContent?.trim() || '';
-          if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+          if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
             (el as HTMLElement).click();
             return true;
           }
@@ -254,14 +267,14 @@ export class TencentPublisher extends BasePublisher {
         return false;
       }).catch(() => false);
       if (refreshed) {
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[腾讯视频号] 二维码已通过文字点击刷新');
         return;
       }
       const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
       if (qrEl) {
         await qrEl.click().catch(() => {});
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[腾讯视频号] 二维码区域已点击刷新');
       }
     } catch {}
