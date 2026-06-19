@@ -1075,6 +1075,149 @@ export function useDeleteUrlMonitor() {
   });
 }
 
+// ============================================================
+// 框架配置 (v2.5+)
+// ============================================================
+
+export function useFrameworks(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'frameworks', platform],
+    queryFn: () => api.get(`/config-automation/frameworks/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+export function useUpsertFramework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: FrameworkEntry }) =>
+      api.put(`/config-automation/frameworks/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+export function useDeleteFramework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/frameworks/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// API 模式配置 (v2.5+)
+// ============================================================
+
+export function useApiPatterns(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'api-patterns', platform],
+    queryFn: () => api.get(`/config-automation/api-patterns/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+export function useUpsertApiPattern() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: ApiPatternEntry }) =>
+      api.put(`/config-automation/api-patterns/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+export function useDeleteApiPattern() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/api-patterns/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// 数据源配置 (v2.5+)
+// ============================================================
+
+export function useDataSources(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'data-sources', platform],
+    queryFn: () => api.get(`/config-automation/data-sources/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+export function useUpsertDataSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: DataSourceEntry }) =>
+      api.put(`/config-automation/data-sources/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+export function useDeleteDataSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/data-sources/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// 导航流程配置 (v2.5+)
+// ============================================================
+
+export function useNavigationFlows(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'navigation-flows', platform],
+    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+export function useUpsertNavigationFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; flowName: string; entry: NavigationFlowEntry }) =>
+      api.put(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`, input.entry).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+export function useDeleteNavigationFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; flowName: string }) =>
+      api.delete(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`).then((r) => r.data),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', v.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+export function useFlowLastRun(platform: string | null, flowName: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'navigation-flows', platform, flowName, 'last-run'],
+    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}/${flowName}/last-run`).then((r) => r.data),
+    enabled: !!platform && !!flowName,
+  });
+}
+
 export function useUpdateUrlMonitors() {
   const qc = useQueryClient();
   return useMutation({
@@ -1424,6 +1567,10 @@ export type PlatformSelectors = {
   textboxes: Record<string, SelectorEntry>;
   flowRules?: Record<string, unknown>;
   urlMonitors?: Record<string, UrlMonitorEntry>;
+  apiPatterns?: Record<string, ApiPatternEntry>;
+  dataSources?: Record<string, DataSourceEntry>;
+  navigationFlows?: Record<string, NavigationFlowEntry>;
+  frameworks?: Record<string, FrameworkEntry>;
 };
 
 export type ResponseExtraction = {
@@ -1457,7 +1604,98 @@ export type UrlMonitorEntry = {
   };
 };
 
+// ============================================================
+// v2.5+ 类型定义
+// ============================================================
+
+export type SelectorType = 'css' | 'role' | 'text' | 'xpath';
+export type ScopeMode = 'none' | 'framework' | 'custom';
+
+export type ScopedSelector = {
+  type: SelectorType;
+  value: string;
+  scopeMode?: ScopeMode;
+  frameworkKey?: string;
+  subContainer?: string;
+  customContainer?: string;
+  filterTag?: string;
+  filterText?: string;
+};
+
 export type SelectorConfig = {
+  primary: ScopedSelector;
+  fallbacks: ScopedSelector[];
+};
+
+export type StepAction =
+  | 'check_url' | 'check_menu_state' | 'click_menu' | 'click_tab'
+  | 'click_button' | 'enable_interceptor' | 'disable_interceptor'
+  | 'refresh_page' | 'wait_for_response' | 'check_quantity'
+  | 'scroll_load' | 'page_turn' | 'close_menu' | 'done';
+
+export type FlowNode = {
+  id: string;
+  action: StepAction;
+  description: string;
+  selector?: SelectorConfig;
+  apiPatternKey?: string;
+  waitFor?: {
+    attribute?: { name: string; value: string; timeout: number };
+    urlContains?: string;
+    apiResponse?: string;
+    timeout: number;
+  };
+  branches?: Record<string, { goto: string }>;
+  next?: string;
+  maxVideos?: number;
+  scrollConfig?: { maxScrolls: number; scrollDelta: number };
+  nextPageBtn?: { css?: string; xpath?: string; text?: string };
+};
+
+export type NavigationFlowEntry = {
+  label: string;
+  steps: FlowNode[];
+};
+
+export type FrameworkEntry = {
+  label: string;
+  selector: string;
+  description?: string;
+};
+
+export type ApiPatternEntry = {
+  pattern: string;
+  description?: string;
+  responseArrayPath?: string[];
+  hasMoreField?: string;
+  hasMoreCondition?: string;
+  cursorField?: string;
+  fieldMappings?: Record<string, string[]>;
+};
+
+export type DataSourceEntry = {
+  label: string;
+  pageUrl: string;
+  apiPatternKey: string;
+  pagination: { type: 'scroll' | 'page'; [key: string]: any };
+  privateFilter?: { enabled: boolean; field: string; condition: string; dynamicRemove?: boolean };
+  responseArrayPath?: string[];
+  hasMoreField?: string;
+  hasMoreCondition?: string;
+  cursorField?: string;
+};
+
+export type LastRunStep = {
+  stepIndex: number;
+  label: string;
+  status: string;
+  durationMs?: number;
+  selectorTries?: any;
+  mouseAction?: string;
+  extra?: any;
+};
+
+export type FullSelectorConfig = {
   version: string;
   updatedAt: string;
   platforms: Record<string, PlatformSelectors>;
@@ -1482,7 +1720,7 @@ export function useSelectorConfig() {
   return useQuery({
     queryKey: ['selectors', 'config'],
     queryFn: () =>
-      api.get('/config-automation/selectors/full').then((r) => r.data as SelectorConfig),
+      api.get('/config-automation/selectors/full').then((r) => r.data as FullSelectorConfig),
     staleTime: 30_000,
   });
 }
