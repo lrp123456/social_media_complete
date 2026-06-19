@@ -11,7 +11,7 @@ const logger = rootLogger.child({ name: 'selector-config' });
 // ============================================================
 
 /** 选择器类型 */
-export type SelectorType = 'css' | 'role' | 'text' | 'placeholder' | 'label' | 'xpath';
+export type SelectorType = 'css' | 'role' | 'text' | 'placeholder' | 'label';
 
 /** 选择器用途 */
 export type SelectorPurpose = 'publish' | 'monitor';
@@ -199,7 +199,7 @@ export interface PlatformSelectors {
   /** 该平台的导航流程配置 */
   navigationFlows?: Record<string, Record<string, unknown>>;
   // ============================================================
-  // 框架配置 (v2.6+) — 前端框架相关配置
+  // Frameworks 配置 (v2.6+) — 框架级配置
   // ============================================================
   /** 该平台的框架配置 */
   frameworks?: Record<string, Record<string, unknown>>;
@@ -478,33 +478,4 @@ export class SelectorReader {
     logger.info({ platform, name }, 'UrlMonitor deleted');
     return true;
   }
-}
-
-// ============================================================
-// 向后兼容函数 (v2.6+) — normalizeSelector
-// ============================================================
-
-export type ScopeMode = 'none' | 'framework' | 'custom';
-
-export interface ScopedSelector {
-  type: SelectorType;
-  value: string;
-  scopeMode?: ScopeMode;
-  frameworkKey?: string;
-  subContainer?: string;
-  customContainer?: string;
-  filterTag?: string;
-  filterText?: string;
-}
-
-export function normalizeSelector(entry: any): ScopedSelector {
-  if (typeof entry.primary === 'object') return entry.primary as ScopedSelector;
-  return {
-    type: (entry.selectorType as SelectorType) || 'css',
-    value: entry.primary as string,
-    scopeMode: 'none',
-    frameworkKey: entry.scopeKey,
-    filterTag: entry.filterTag,
-    filterText: entry.filterText,
-  };
 }

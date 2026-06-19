@@ -300,30 +300,6 @@ function loadFromDisk(): SelectorConfig {
     },
     'selectors.json loaded & schema-validated',
   );
-
-  // 自动合并 urlMonitors → apiPatterns（向后兼容）
-  for (const [platName, platData] of Object.entries(config.platforms as any)) {
-    const p = platData as any;
-    if (!p.urlMonitors || !p.apiPatterns) continue;
-    for (const [umName, umEntry] of Object.entries(p.urlMonitors as any)) {
-      const um = umEntry as any;
-      if (!um?.urlPatterns?.[0]) continue;
-      const pattern = um.urlPatterns[0];
-      // 检查 apiPatterns 中是否已存在相同 pattern
-      const exists = Object.values(p.apiPatterns as any).some((ap: any) => ap?.pattern === pattern);
-      if (!exists) {
-        const key = `url_monitor_${umName}`;
-        (p.apiPatterns as any)[key] = {
-          pattern,
-          description: um.description || `Auto-migrated from urlMonitor: ${umName}`,
-          responseArrayPath: um.extraction?.itemsPath ? [um.extraction.itemsPath] : [],
-          hasMoreField: um.pagination?.hasMorePath || '',
-          cursorField: um.pagination?.cursorPath || '',
-        };
-      }
-    }
-  }
-
   return config;
 }
 
