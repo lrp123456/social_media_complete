@@ -1044,17 +1044,41 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase2', riskDetected: false };
   }
 
-  // Phase 3: 评论树采集（由下一任务实现）
-  // 临时返回 light 结果，等待 Task 6 实现 processCommentsQueue
-  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-monitor] 主站已登录，Phase 3 待实现');
+  // Phase 3: 评论树采集
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
+
+  const phase3Result = await xiaohongshuCrawler.processCommentsQueue(page, queue, task.userId);
+
+  // 退出策略
   await xiaohongshuCrawler.executeExitStrategy(page);
-  const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
-    awemeId: v.awemeId,
-    description: v.description,
-    oldCount: v.oldCount,
-    newCount: v.newCount,
-  }));
-  return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase2', riskDetected: false };
+
+  const successful = phase3Result.filter((r: any) => r.success);
+  const failed = phase3Result.filter((r: any) => !r.success);
+  const updates = queue
+    .filter((q: any) => successful.some((r: any) => r.awemeId === q.exportId))
+    .map((q: any) => ({
+      awemeId: q.exportId,
+      description: q.description,
+      oldCount: q.oldCount,
+      newCount: q.newCount,
+    }));
+
+  logger.info({
+    userId: task.userId,
+    platform: 'xiaohongshu',
+    queueLength: queue.length,
+    successCount: successful.length,
+    failCount: failed.length,
+  }, '[Result] 小红书 Phase3 done');
+
+  return {
+    hasUpdate: updates.length > 0,
+    newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0),
+    updatedVideos: updates,
+    phase: 'Phase3',
+    riskDetected: false,
+  };
 }
 
 // ============================================================

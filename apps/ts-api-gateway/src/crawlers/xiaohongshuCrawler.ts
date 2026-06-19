@@ -745,4 +745,308 @@ export class XiaohongshuCrawler {
       riskControlDetected: false,
     };
   }
+
+  // ============================================================
+  // Phase 3: 评论树采集
+  // ============================================================
+
+  async clickThumbnailAndWaitNewTab(page: Page, noteId: string, timeout = 15000): Promise<Page | null> {
+    logger.info({ noteId }, '[XHS-Phase3] Clicking thumbnail to open note detail');
+
+    try {
+      const cardDef = getSelector('region.note-card-by-id', XHS_PLATFORM);
+      const coverDef = getSelector('region.note-card-cover', XHS_PLATFORM);
+
+      // 监听新标签页
+      const [newPage] = await Promise.all([
+        page.context().waitForEvent('page', { timeout }),
+        (async () => {
+          // 找到卡片内的缩略图并点击
+          const cardSelector = cardDef.css?.replace('{noteId}', noteId);
+          if (!cardSelector) throw new Error('No card selector');
+          const card = await page.waitForSelector(cardSelector, { timeout: 10000 });
+          let clickEl = card;
+          if (coverDef.css) {
+            const cover = await card.$(coverDef.css);
+            if (cover) clickEl = cover;
+          }
+          await (clickEl as any).click();
+        })(),
+      ]);
+
+      await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 });
+      await HumanActions.wait(newPage, 2000, 4000);
+      logger.info({ noteId, url: newPage.url() }, '[XHS-Phase3] New tab opened');
+      return newPage;
+    } catch (err: any) {
+      logger.warn({ noteId, error: err.message }, '[XHS-Phase3] Failed to open new tab for note');
+      return null;
+    }
+  }
+
+  async registerCommentInterceptor(newPage: Page): Promise<void> {
+    const patterns = [
+      '/api/sns/web/v2/comment/page',
+      '/api/sns/web/v2/comment/sub/page',
+    ];
+
+    const interceptor = new RequestInterceptor();
+    for (const pattern of patterns) {
+      interceptor.setValidationConfig(pattern, {
+        expectedPageUrls: ['www.xiaohongshu.com'],
+        requiredItemFields: [],
+        minItems: 0,
+      });
+    }
+
+    const listenerId = await interceptor.register(newPage, patterns);
+    logger.info({ patterns }, '[XHS-Phase3] Comment API interceptor registered');
+
+    (this as any)._commentInterceptor = interceptor;
+    (this as any)._commentListenerId = listenerId;
+  }
+
+  async scrollLoadRootComments(newPage: Page): Promise<any[]> {
+    logger.info('[XHS-Phase3] Loading root comments via scroll');
+
+    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
+    const pattern = '/api/sns/web/v2/comment/page';
+
+    await interceptor.waitForResponse(pattern, 15000).catch(() => {});
+
+    let allItems: any[] = [];
+    let scrollAttempts = 0;
+    const maxScrollAttempts = 30;
+
+    while (scrollAttempts < maxScrollAttempts) {
+      const items = interceptor.getCollectedItems(pattern);
+      if (items.length > allItems.length) {
+        allItems = items;
+        logger.info({ totalItems: allItems.length, attempt: scrollAttempts }, '[XHS-Phase3] Root comments batch loaded');
+      }
+
+      const responses = interceptor.getResponses(pattern);
+      const lastResp = responses[responses.length - 1];
+      const hasMore = lastResp?.body?.data?.has_more !== false;
+
+      if (!hasMore && allItems.length > 0) {
+        logger.info({ totalItems: allItems.length }, '[XHS-Phase3] All root comments loaded');
+        break;
+      }
+
+      const scrollerDef = getSelector('region.comment-scroller', XHS_PLATFORM);
+      if (scrollerDef.css) {
+        try {
+          await HumanActions.cdpSmartScroll(newPage, [scrollerDef.css], 400, 'down');
+        } catch {
+          await HumanActions.humanScroll(newPage, 300, { minPause: 300, maxPause: 800 });
+        }
+      } else {
+        await HumanActions.humanScroll(newPage, 300, { minPause: 300, maxPause: 800 });
+      }
+      await HumanActions.wait(newPage, 1000, 2000);
+      scrollAttempts++;
+    }
+
+    return allItems;
+  }
+
+  async expandSubCommentsForRoots(newPage: Page, rootComments: any[]): Promise<void> {
+    logger.info({ totalRoots: rootComments.length }, '[XHS-Phase3] Expanding sub-comments');
+
+    for (const root of rootComments) {
+      const subCount = root.sub_comment_count || root.subCommentCount || 0;
+      if (subCount <= 0) continue;
+
+      const rootCid = root.id;
+      if (!rootCid) continue;
+
+      logger.info({ rootCid, subCount }, '[XHS-Phase3] Expanding sub-comments for root');
+
+      try {
+        const rootContainer = newPage.locator(`[id="comment-${rootCid}"]`).first();
+        if (await rootContainer.isVisible().catch(() => false)) {
+          const expandBtn = rootContainer.getByText('展开').first();
+          if (await expandBtn.isVisible().catch(() => false)) {
+            await expandBtn.click();
+            await HumanActions.wait(newPage, 1500, 2500);
+          }
+
+          for (let i = 0; i < 10; i++) {
+            const moreBtn = rootContainer.getByText('展开更多回复').first();
+            if (await moreBtn.isVisible().catch(() => false)) {
+              await moreBtn.click();
+              await HumanActions.wait(newPage, 1000, 2000);
+            } else {
+              break;
+            }
+          }
+        } else {
+          logger.warn({ rootCid }, '[XHS-Phase3] Root container not found, trying page-wide search');
+          const expandBtn = newPage.getByText('展开').first();
+          if (await expandBtn.isVisible().catch(() => false)) {
+            await expandBtn.click();
+            await HumanActions.wait(newPage, 1500, 2500);
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ rootCid, error: err.message }, '[XHS-Phase3] Failed to expand sub-comments');
+      }
+    }
+  }
+
+  buildCommentTree(newPage: Page): Array<{
+    cid: string; text: string; user_nickname: string; user_uid: string;
+    digg_count: number; create_time: number; reply_id: string;
+    rootId?: string; parentId?: string; level: number; replyToName?: string; is_author?: boolean;
+  }> {
+    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
+    const comments: Array<any> = [];
+
+    // 解析根评论 /comment/page
+    const rootResponses = interceptor.getResponses('/api/sns/web/v2/comment/page');
+    for (const resp of rootResponses) {
+      const items = resp?.body?.data?.comments || resp?.body?.data?.items || [];
+      for (const item of items) {
+        comments.push({
+          cid: item.id,
+          text: item.content,
+          user_nickname: item.user_info?.nickname || '',
+          user_uid: item.user_info?.user_id || '',
+          digg_count: parseInt(item.like_count || '0', 10),
+          create_time: Math.floor((item.create_time || 0) / 1000),
+          reply_id: '0',
+          rootId: undefined,
+          parentId: undefined,
+          level: 1,
+          replyToName: undefined,
+          is_author: item.show_tags?.includes('is_author') || false,
+        });
+
+        if (item.comments && Array.isArray(item.comments)) {
+          for (const sub of item.comments) {
+            comments.push({
+              cid: sub.id,
+              text: sub.content,
+              user_nickname: sub.user_info?.nickname || '',
+              user_uid: sub.user_info?.user_id || '',
+              digg_count: parseInt(sub.like_count || '0', 10),
+              create_time: Math.floor((sub.create_time || 0) / 1000),
+              reply_id: sub.target_comment?.id || item.id,
+              rootId: item.id,
+              parentId: sub.target_comment?.id || item.id,
+              level: 2,
+              replyToName: sub.target_comment?.user_info?.nickname || '',
+              is_author: sub.show_tags?.includes('is_author') || false,
+            });
+          }
+        }
+      }
+    }
+
+    // 解析子评论 /comment/sub/page
+    const subResponses = interceptor.getResponses('/api/sns/web/v2/comment/sub/page');
+    for (const resp of subResponses) {
+      const items = resp?.body?.data?.comments || resp?.body?.data?.items || [];
+      for (const sub of items) {
+        comments.push({
+          cid: sub.id,
+          text: sub.content,
+          user_nickname: sub.user_info?.nickname || '',
+          user_uid: sub.user_info?.user_id || '',
+          digg_count: parseInt(sub.like_count || '0', 10),
+          create_time: Math.floor((sub.create_time || 0) / 1000),
+          reply_id: sub.target_comment?.id || sub.root_id || '0',
+          rootId: sub.root_id || undefined,
+          parentId: sub.target_comment?.id || sub.parent_id || undefined,
+          level: 2,
+          replyToName: sub.target_comment?.user_info?.nickname || '',
+          is_author: sub.show_tags?.includes('is_author') || false,
+        });
+      }
+    }
+
+    return comments;
+  }
+
+  async processOneNoteComments(
+    page: Page,
+    item: { exportId: string; description: string },
+    userId: number,
+  ): Promise<{ success: boolean; awemeId: string; error?: string }> {
+    const { exportId, description } = item;
+    logger.info({ exportId, desc: description?.slice(0, 30) }, '[XHS-Phase3] Processing note');
+
+    try {
+      const newPage = await this.clickThumbnailAndWaitNewTab(page, exportId);
+      if (!newPage) {
+        return { success: false, awemeId: exportId, error: 'Failed to open note detail page' };
+      }
+
+      try {
+        await this.registerCommentInterceptor(newPage);
+        const rootComments = await this.scrollLoadRootComments(newPage);
+        await this.expandSubCommentsForRoots(newPage, rootComments);
+
+        const comments = this.buildCommentTree(newPage);
+        logger.info({ exportId, rootCount: rootComments.length, totalComments: comments.length }, '[XHS-Phase3] Comments collected');
+
+        if (comments.length > 0) {
+          await db.upsertCommentTree(exportId, comments);
+
+          const rootCids = new Set(comments.filter((c) => c.level === 1).map((c) => c.cid));
+          const subCountByRoot = new Map<string, number>();
+          for (const c of comments) {
+            if (c.level === 2 && c.rootId && rootCids.has(c.rootId)) {
+              subCountByRoot.set(c.rootId, (subCountByRoot.get(c.rootId) || 0) + 1);
+            }
+          }
+          const rootCounts = [...subCountByRoot.entries()].map(([cid, count]) => ({ cid, replyCount: count }));
+          await db.upsertRootCommentCounts(exportId, rootCounts);
+          await db.deleteStaleRootCounts(exportId, [...rootCids].concat(rootCounts.map((r) => r.cid)));
+          await db.updateVideoCommentCount(userId, exportId, comments.length);
+        }
+
+        return { success: true, awemeId: exportId };
+      } finally {
+        await newPage.close().catch(() => {});
+        await page.bringToFront();
+        await HumanActions.wait(page, 5000, 10000);
+      }
+    } catch (err: any) {
+      logger.warn({ exportId, error: err.message }, '[XHS-Phase3] Note processing failed');
+      return { success: false, awemeId: exportId, error: err.message };
+    }
+  }
+
+  async processCommentsQueue(
+    page: Page,
+    queue: Array<{ exportId: string; description: string; oldCount: number; newCount: number }>,
+    userId: number,
+  ): Promise<Array<{ success: boolean; awemeId: string; error?: string }>> {
+    logger.info({ queueLength: queue.length, userId }, '[XHS-Phase3] Processing comments queue');
+
+    const results: Array<{ success: boolean; awemeId: string; error?: string }> = [];
+
+    for (const item of queue) {
+      const result = await this.processOneNoteComments(page, item, userId);
+      results.push(result);
+
+      if (result.error?.includes('captcha') || result.error?.includes('Risk control')) {
+        logger.warn({ userId, awemeId: item.exportId }, '[XHS-Phase3] Risk detected, aborting queue');
+        break;
+      }
+    }
+
+    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
+    const listenerId = (this as any)._commentListenerId;
+    if (interceptor && listenerId) {
+      interceptor.unregister(listenerId);
+      interceptor.clearAll();
+      (this as any)._commentInterceptor = undefined;
+      (this as any)._commentListenerId = undefined;
+    }
+
+    return results;
+  }
 }
