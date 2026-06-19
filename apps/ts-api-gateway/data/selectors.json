@@ -1,6 +1,6 @@
 {
   "version": "2.4.0",
-  "updatedAt": "2026-06-16T12:00:00.000000Z",
+  "updatedAt": "2026-06-19T00:40:46.000000Z",
   "platforms": {
     "douyin": {
       "flowRules": {
@@ -2355,24 +2355,44 @@
           "description": "小红书创作者中心-【发布笔记】按钮"
         },
         "btn_expand_sub_comments": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"展开\")",
-          "fallbacks": ["[class*=\"expand-reply\"]"]
+          "fallbacks": [
+            "[class*=\"expand-reply\"]"
+          ],
+          "selectorType": "text"
         },
         "btn_reply_comment": {
-          "purposes": ["reply"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"回复\", exact=True)",
-          "fallbacks": ["[class*=\"icon-reply\"]"]
+          "fallbacks": [
+            "[class*=\"icon-reply\"]"
+          ],
+          "selectorType": "text"
         },
         "btn_reply_submit": {
-          "purposes": ["reply"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"发送\", exact=True)",
-          "fallbacks": ["[class*=\"send-btn\"]"]
+          "fallbacks": [
+            "[class*=\"send-btn\"]"
+          ],
+          "selectorType": "text"
         },
         "btn_reply_cancel": {
-          "purposes": ["reply"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"取消\", exact=True)",
-          "fallbacks": ["[class*=\"cancel-btn\"]"]
+          "fallbacks": [
+            "[class*=\"cancel-btn\"]"
+          ],
+          "selectorType": "text"
         }
       },
       "regions": {
@@ -2451,79 +2471,155 @@
           "description": "小红书发布成功提示"
         },
         "region_note_card_by_id": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".note-card[data-impression*=\"{noteId}\"]",
-          "fallbacks": [".note-card__cover"]
+          "fallbacks": [
+            ".note-card__cover"
+          ],
+          "selectorType": "css"
         },
         "region_note_card_cover": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".note-card__cover .media-body",
-          "fallbacks": [".note-card__cover img"]
+          "fallbacks": [
+            ".note-card__cover img"
+          ],
+          "selectorType": "css"
         },
         "region_note_card_private_marker": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"仅自己可见\", exact=True)",
-          "fallbacks": ["[class*=\"private\"]:visible"]
+          "fallbacks": [
+            "[class*=\"private\"]:visible"
+          ],
+          "selectorType": "text"
         },
         "region_mainsite_user_avatar": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".user.side-bar-component",
-          "fallbacks": [".user-avatar", "[class*=\"user-sidebar\"]"]
+          "fallbacks": [
+            ".user-avatar",
+            "[class*=\"user-sidebar\"]"
+          ],
+          "selectorType": "css"
         },
         "region_mainsite_login_modal": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"登录\", exact=True)",
-          "fallbacks": ["[class*=\"login-modal\"]:visible"]
+          "fallbacks": [
+            "[class*=\"login-modal\"]:visible"
+          ],
+          "selectorType": "text"
         },
         "region_mainsite_qr_code": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".qrcode-img",
-          "fallbacks": ["img[alt*=\"二维码\"]"]
+          "fallbacks": [
+            "img[alt*=\"二维码\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comments_container": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".comments-el",
-          "fallbacks": ["[class*=\"comment-list\"]"]
+          "fallbacks": [
+            "[class*=\"comment-list\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comment_scroller": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".note-scroller",
-          "fallbacks": ["[class*=\"scroller\"]"]
+          "fallbacks": [
+            "[class*=\"scroller\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comment_total": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".comments-container .total",
-          "fallbacks": ["getByText(/条评论/)"]
+          "fallbacks": [
+            "getByText(/条评论/)"
+          ],
+          "selectorType": "css"
         },
         "region_comment_root_container": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".comment-item:not(.comment-item-sub)",
-          "fallbacks": ["[class*=\"comment-item\"]:not([class*=\"sub\"])"]
+          "fallbacks": [
+            "[class*=\"comment-item\"]:not([class*=\"sub\"])"
+          ],
+          "selectorType": "css"
         },
         "region_comment_sub_container": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".comment-item.comment-item-sub",
-          "fallbacks": ["[class*=\"comment-item\"][class*=\"sub\"]"]
+          "fallbacks": [
+            "[class*=\"comment-item\"][class*=\"sub\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comment_author_name": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".author .name",
-          "fallbacks": ["[class*=\"author-name\"]"]
+          "fallbacks": [
+            "[class*=\"author-name\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comment_content_text": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".content .note-text",
-          "fallbacks": ["[class*=\"comment-content\"]"]
+          "fallbacks": [
+            "[class*=\"comment-content\"]"
+          ],
+          "selectorType": "css"
         },
         "region_comment_author_tag": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": "getByText(\"作者\", exact=True)",
-          "fallbacks": ["[class*=\"author-tag\"]"]
+          "fallbacks": [
+            "[class*=\"author-tag\"]"
+          ],
+          "selectorType": "text"
         },
         "region_reply_input_area": {
-          "purposes": ["reply"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".bottom-container [contenteditable=\"true\"]",
-          "fallbacks": ["[class*=\"reply-input-area\"]"]
+          "fallbacks": [
+            "[class*=\"reply-input-area\"]"
+          ],
+          "selectorType": "css"
         }
       },
       "textboxes": {
@@ -2566,9 +2662,14 @@
           "description": "小红书话题标签输入框"
         },
         "tb_reply_input": {
-          "purposes": ["reply"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".bottom-container [contenteditable=\"true\"]",
-          "fallbacks": ["[contenteditable=\"true\"]:visible"]
+          "fallbacks": [
+            "[contenteditable=\"true\"]:visible"
+          ],
+          "selectorType": "css"
         }
       }
     },
@@ -2878,8 +2979,13 @@
         "api_video_list": {
           "enabled": true,
           "description": "视频号作品列表 API — 拦截 post_list 接口获取视频数据",
-          "tags": ["核心", "作品"],
-          "urlPatterns": ["post/post_list"],
+          "tags": [
+            "核心",
+            "作品"
+          ],
+          "urlPatterns": [
+            "post/post_list"
+          ],
           "method": "POST",
           "extraction": {
             "itemsPath": "data.list",
@@ -2900,8 +3006,13 @@
         "api_comment_list": {
           "enabled": true,
           "description": "评论列表 API — 拦截 comment_list 接口获取评论数据",
-          "tags": ["核心", "评论"],
-          "urlPatterns": ["comment/comment_list"],
+          "tags": [
+            "核心",
+            "评论"
+          ],
+          "urlPatterns": [
+            "comment/comment_list"
+          ],
           "method": "POST",
           "extraction": {
             "itemsPath": "data.comment",
