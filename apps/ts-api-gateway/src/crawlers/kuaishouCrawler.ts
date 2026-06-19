@@ -1964,7 +1964,7 @@ export class KuaishouCrawler {
     description: string,
     createTime: number,
   ): Promise<boolean> {
-    const MAX_SCROLL_ATTEMPTS = 20;
+    const MAX_SCROLL_ATTEMPTS = 100;
     const TIMESTAMP_TOLERANCE = 60;
 
     logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
@@ -1975,6 +1975,11 @@ export class KuaishouCrawler {
       // 在 page.evaluate 中遍历 .video-item 元素
       const matchResult = await page.evaluate(({ desc, createTimeNum, tolerance }: { desc: string; createTimeNum: number; tolerance: number }) => {
         const items = document.querySelectorAll('.video-item');
+        let minTimestamp = Infinity;
+        let maxTimestamp = -Infinity;
+        let itemCount = 0;
+        const timeDiffs: number[] = [];
+
         for (const item of items) {
           const titleEl = item.querySelector('.video-info__content__title');
           const dateEl = item.querySelector('.video-info__content__date');
@@ -1988,6 +1993,11 @@ export class KuaishouCrawler {
           const [, y, m, d, h, min, s] = dateMatch;
           const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
 
+          itemCount++;
+          if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
+          if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
+          timeDiffs.push(domTimestamp - createTimeNum);
+
           // 时间差判断
           if (Math.abs(domTimestamp - createTimeNum) > tolerance) continue;
 
@@ -1999,15 +2009,29 @@ export class KuaishouCrawler {
           const detailEl = item.querySelector('.video-info__content__detail') || item.querySelector('.video-info__content');
           if (detailEl) {
             (detailEl as HTMLElement).click();
-            return { found: true, domTimestamp, title: title.substring(0, 50) };
+            return { found: true, domTimestamp, title: title.substring(0, 50), itemCount, minTimestamp, maxTimestamp, timeDiffs };
           }
         }
-        return { found: false };
+
+        // 如果所有已加载视频的时间都早于目标时间，说明已经滚动过头了
+        if (minTimestamp < createTimeNum - tolerance) {
+          return { found: false, scrolledPast: true, itemCount, minTimestamp, maxTimestamp, timeDiffs };
+        }
+
+        return { found: false, scrolledPast: false, itemCount, minTimestamp, maxTimestamp, timeDiffs };
       }, { desc: description, createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
+
+      logger.info({ scrollAttempt, loadedItems: matchResult.itemCount, latestDate: matchResult.maxTimestamp, oldestDate: matchResult.minTimestamp, targetCreateTime: createTime }, '[Drawer] Scroll diagnostic');
 
       if (matchResult.found) {
         logger.info({ awemeId, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Drawer] 匹配成功');
         return true;
+      }
+
+      // 如果已滚动过头，提前终止
+      if (matchResult.scrolledPast) {
+        logger.warn({ awemeId, createTime, oldestTimestamp: matchResult.minTimestamp }, '[Drawer] 已滚动过头，停止搜索');
+        break;
       }
 
       // 未匹配，滚动加载更多

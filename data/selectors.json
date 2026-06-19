@@ -1130,6 +1130,123 @@
           "cursorField": "cursor"
         }
       },
+      "navigationFlows": {
+        "monitor": {
+          "label": "数据监控流程",
+          "steps": [
+            {
+              "id": "check_url",
+              "action": "check_url",
+              "description": "检查是否在创作者中心"
+            },
+            {
+              "id": "click_work_manage",
+              "action": "click_menu",
+              "description": "点击「内容管理」→「作品管理」",
+              "selector": { "key": "menus.menu_work_manage" }
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用视频列表API拦截",
+              "apiPatternKey": "video_list.work_list"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载更多视频"
+            },
+            {
+              "id": "check_quantity",
+              "action": "check_quantity",
+              "description": "对比数据库评论数"
+            },
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」",
+              "selector": { "key": "menus.menu_comment_manage_new" }
+            },
+            {
+              "id": "click_select_works",
+              "action": "click_button",
+              "description": "点击「选择作品」",
+              "selector": { "key": "buttons.btn_select_works" }
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "publish": {
+          "label": "视频发布流程",
+          "steps": [
+            {
+              "id": "check_url",
+              "action": "check_url",
+              "description": "检查是否在发布页"
+            },
+            {
+              "id": "click_publish_hd",
+              "action": "click_menu",
+              "description": "点击「高清发布」",
+              "selector": { "key": "menus.menu_publish_hd" }
+            },
+            {
+              "id": "click_upload_video",
+              "action": "click_button",
+              "description": "点击「上传视频」",
+              "selector": { "key": "buttons.btn_upload_video" }
+            },
+            {
+              "id": "click_publish_submit",
+              "action": "click_button",
+              "description": "点击「发布」",
+              "selector": { "key": "buttons.btn_publish_submit" }
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "reply": {
+          "label": "评论回复流程",
+          "steps": [
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」",
+              "selector": { "key": "menus.menu_comment_manage_new" }
+            },
+            {
+              "id": "click_select_works",
+              "action": "click_button",
+              "description": "点击「选择作品」",
+              "selector": { "key": "buttons.btn_select_works" }
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用评论API拦截",
+              "apiPatternKey": "comment_list"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载评论"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        }
+      },
       "frameworks": {
         "sidebar": {
           "label": "侧边栏菜单",
@@ -2121,6 +2238,97 @@
           "hasMoreField": "has_more"
         }
       },
+      "navigationFlows": {
+        "monitor": {
+          "label": "数据监控流程",
+          "steps": [
+            {
+              "id": "check_url",
+              "action": "check_url",
+              "description": "检查是否在创作者中心"
+            },
+            {
+              "id": "click_work_manage",
+              "action": "click_menu",
+              "description": "点击「内容管理」→「作品管理」",
+              "selector": { "key": "menus.menu_work_manage" }
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用视频列表API拦截",
+              "apiPatternKey": "video_list"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载更多视频"
+            },
+            {
+              "id": "check_quantity",
+              "action": "check_quantity",
+              "description": "对比数据库评论数"
+            },
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」",
+              "selector": { "key": "menus.menu_comment_manage" }
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "publish": {
+          "label": "视频发布流程",
+          "steps": [
+            {
+              "id": "click_work_manage",
+              "action": "click_menu",
+              "description": "点击「内容管理」→「作品管理」"
+            },
+            {
+              "id": "click_upload_video",
+              "action": "click_button",
+              "description": "上传视频"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "reply": {
+          "label": "评论回复流程",
+          "steps": [
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」",
+              "selector": { "key": "menus.menu_comment_manage" }
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用评论API拦截"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载评论"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        }
+      },
       "frameworks": {
         "sidebar": {
           "label": "侧边栏菜单",
@@ -2677,6 +2885,78 @@
           "hasMoreCondition": "=== -1"
         }
       },
+      "navigationFlows": {
+        "monitor": {
+          "label": "数据监控流程",
+          "steps": [
+            {
+              "id": "check_url",
+              "action": "check_url",
+              "description": "检查是否在创作者中心"
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用笔记列表API拦截"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载更多笔记"
+            },
+            {
+              "id": "check_quantity",
+              "action": "check_quantity",
+              "description": "对比数据库评论数"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "publish": {
+          "label": "视频发布流程",
+          "steps": [
+            {
+              "id": "click_publish",
+              "action": "click_menu",
+              "description": "点击「发布笔记」"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "reply": {
+          "label": "评论回复流程",
+          "steps": [
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「评论管理」"
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用评论API拦截"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载评论"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        }
+      },
       "frameworks": {
         "sidebar": {
           "label": "侧边栏菜单",
@@ -3028,6 +3308,88 @@
           ],
           "hasMoreField": "data.downContinueFlag",
           "hasMoreCondition": "=== 1"
+        }
+      },
+      "navigationFlows": {
+        "monitor": {
+          "label": "数据监控流程",
+          "steps": [
+            {
+              "id": "check_url",
+              "action": "check_url",
+              "description": "检查是否在视频号助手"
+            },
+            {
+              "id": "click_work_manage",
+              "action": "click_menu",
+              "description": "点击「内容管理」→「作品管理」"
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用视频列表API拦截"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载更多视频"
+            },
+            {
+              "id": "check_quantity",
+              "action": "check_quantity",
+              "description": "对比数据库评论数"
+            },
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "publish": {
+          "label": "视频发布流程",
+          "steps": [
+            {
+              "id": "click_publish_video",
+              "action": "click_menu",
+              "description": "点击「发布视频」"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
+        },
+        "reply": {
+          "label": "评论回复流程",
+          "steps": [
+            {
+              "id": "click_comment_manage",
+              "action": "click_menu",
+              "description": "点击「互动管理」→「评论管理」"
+            },
+            {
+              "id": "enable_interceptor",
+              "action": "enable_interceptor",
+              "description": "启用评论API拦截"
+            },
+            {
+              "id": "scroll_load",
+              "action": "scroll_load",
+              "description": "滚动加载评论"
+            },
+            {
+              "id": "done",
+              "action": "done",
+              "description": "完成"
+            }
+          ]
         }
       },
       "frameworks": {
