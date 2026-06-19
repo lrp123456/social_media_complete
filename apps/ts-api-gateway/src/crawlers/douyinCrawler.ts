@@ -8,6 +8,7 @@ import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
+import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import fs from 'fs';
 import path from 'path';
 
@@ -104,6 +105,7 @@ const RISK_CONTROL_URLS = ['/login', '/passport', '/verify', '/captcha'];
 export interface CommentQueueItem {
   awemeId: string;
   description: string;
+  createTime: number;
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;  // true = 新视频首次采集（全量展开+建快照）
@@ -1271,6 +1273,7 @@ export class DouyinCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: 0,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1301,6 +1304,7 @@ export class DouyinCrawler {
         commentsQueue.push({
           awemeId: video.aweme_id,
           description: video.description,
+          createTime: video.create_time,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
           isFirstCrawl: false,
@@ -1317,6 +1321,7 @@ export class DouyinCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: dbVideo.commentCount,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1559,7 +1564,7 @@ export class DouyinCrawler {
           }
 
           const clickT0 = Date.now();
-          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer video click completed');
           if (!clicked) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in drawer — manually closing and skipping');
@@ -2370,72 +2375,76 @@ export class DouyinCrawler {
   private async findAndClickVideoInDrawer(
     page: Page,
     awemeId: string,
-    description: string
+    description: string,
+    createTime: number,
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS_DRAWER = 25;
-    const descLower = description.toLowerCase();
-    const descPrefix = descLower.substring(0, Math.min(descLower.length, 25));
+    const TIMESTAMP_TOLERANCE = 60; // 秒
 
-    logger.info({ awemeId, descPrefix }, '[Drawer] Searching for target video in drawer');
+    logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
 
-    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
+    // 检查"没有更多视频"标记（避免无意义滚动）
+    const noMoreVideo = await page.evaluate(() => {
+      const els = document.querySelectorAll('[class*="loading"]');
+      for (const el of els) {
+        if (el.textContent?.includes('没有更多视频')) return true;
+      }
+      return false;
+    }).catch(() => false);
+
+    if (noMoreVideo) {
+      logger.info('[Drawer] 抽屉已无更多视频，跳过滚动');
+    }
+
+    const maxScrolls = noMoreVideo ? 0 : MAX_SCROLL_ATTEMPTS_DRAWER;
+
+    for (let scrollAttempt = 0; scrollAttempt <= maxScrolls; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
       const containerSelector = getSelector('drawer.video-item').css || '[class*="douyin-creator-interactive-list-items"] > div';
       const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
       if (!containerElements || containerElements.length === 0) {
-        logger.info({ scrollAttempt }, '[Drawer] No video containers found in current viewport');
-        if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-          await this.scrollDrawerForMore(page, scrollAttempt);
-        }
+        if (scrollAttempt < maxScrolls) await this.scrollDrawerForMore(page, scrollAttempt);
         continue;
       }
 
       logger.info({ count: containerElements.length, scrollAttempt }, '[Drawer] Found video containers');
 
-      let matchedContainer: { nodeId: number; text: string } | null = null;
-      let matchType = '';
-
       for (const container of containerElements) {
         const containerText = container.text || '';
-        const matchedExact = containerText.includes(descLower);
-        const matchedPartial = containerText.includes(descPrefix);
-        const matchedReverse = descLower.length > 5 && containerText.length > 5 && descLower.includes(containerText.substring(0, Math.min(containerText.length, 25)));
 
-        if (matchedExact || matchedPartial || matchedReverse) {
-          matchedContainer = { nodeId: container.nodeId, text: containerText };
-          matchType = matchedExact ? 'exact' : matchedPartial ? 'partial' : 'reverse';
-          break;
+        // 1. 提取 DOM 时间戳
+        const domTimestamp = parseDomTimestamp(containerText, 'douyin');
+        if (domTimestamp === null) continue; // 时间解析失败，跳过
+
+        // 2. 时间差判断
+        if (!isTimestampMatch(domTimestamp, createTime, TIMESTAMP_TOLERANCE)) continue;
+
+        // 3. 时间匹配后，检查 description 前缀
+        if (!isDescriptionMatch(containerText, description)) continue;
+
+        // 4. 双重确认通过，点击
+        const clicked = await HumanActions.cdpClickNode(page, container.nodeId);
+        if (clicked) {
+          logger.info({ awemeId, domTimestamp, createTime, timeDiff: Math.abs(domTimestamp - createTime), matchType: 'timestamp+description' }, '[Drawer] 匹配成功（时间戳+描述双重确认）');
+          return true;
         }
+
+        // 点击失败，尝试重新查询
+        const reClicked = await this.tryClickMatchedContainer(page, description.toLowerCase(), description.toLowerCase().substring(0, 25));
+        if (reClicked) return true;
+
+        logger.warn({ awemeId }, '[Drawer] Match found but click failed — giving up');
+        return false;
       }
 
-      if (!matchedContainer) {
-        logger.info({ scrollAttempt, containerCount: containerElements.length }, '[Drawer] No match in current containers, scrolling for more');
-        if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-          await this.scrollDrawerForMore(page, scrollAttempt);
-        }
-        continue;
+      if (scrollAttempt < maxScrolls) {
+        logger.info({ scrollAttempt, containerCount: containerElements.length }, '[Drawer] 未匹配，滚动加载更多');
+        await this.scrollDrawerForMore(page, scrollAttempt);
       }
-
-      logger.info({ awemeId, matchType, text: matchedContainer.text.substring(0, 50) }, '[Drawer] Found matching video — stopping scroll, attempting click');
-
-      const clicked = await HumanActions.cdpClickNode(page, matchedContainer.nodeId);
-      if (clicked) {
-        logger.info('[Drawer] Successfully clicked video via cdpClickNode');
-        return true;
-      }
-
-      logger.info('[Drawer] Direct cdpClickNode failed, trying re-query + click');
-      await HumanActions.wait(page, 500, 1000);
-
-      const reClicked = await this.tryClickMatchedContainer(page, descLower, descPrefix);
-      if (reClicked) return true;
-
-      logger.warn({ awemeId }, '[Drawer] Match found but click failed after scrollIntoView + re-query — giving up on this video to avoid flicker');
-      return false;
     }
 
-    logger.warn({ awemeId, descPrefix, maxScrolls: MAX_SCROLL_ATTEMPTS_DRAWER }, '[Drawer] Video not found after exhaustive search');
+    logger.warn({ awemeId, maxScrolls }, '[Drawer] 滚动穷尽仍未匹配');
     return false;
   }
 
