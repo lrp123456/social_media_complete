@@ -26,7 +26,8 @@ export type MaterialIconName =
   | 'logout' | 'menu' | 'input' | 'output' | 'rocket_launch' | 'science' | 'style' | 'auto_fix_high' | 'graphic_eq'
   | 'work' | 'label' | 'inventory_2' | 'pending' | 'priority_high' | 'cloud' | 'storage' | 'link' | 'content_copy'
   | 'open_in_new' | 'visibility_off' | 'music_note'
-  | 'cloud_download' | 'wall_art' | 'bookmark' | 'link_off' | 'bug_report';
+  | 'cloud_download' | 'wall_art' | 'bookmark' | 'link_off' | 'bug_report' | 'api' | 'hub'
+  | 'account_tree' | 'select_all';
 
 export type IconSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
 
