@@ -923,9 +923,10 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     '/rest/cp/comment/pc/list',
   ]);
 
-  // Phase 1 — 随机选择数据源
+  // Phase 1 — 统一使用 work_list 数据源（photo_analysis 返回数量少且 ID 体系不同，
+  // 交替使用会导致 reconcile 误删视频，见 issue: 两源交替循环删除）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
-  const source: 'work_list' | 'photo_analysis' = Math.random() < 0.5 ? 'work_list' : 'photo_analysis';
+  const source = 'work_list' as const;
   const phase1Result = await ks.checkForUpdates(page, task.userId, task.windowId, source);
 
   ks.unregisterListener();
@@ -941,8 +942,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   }
 
   if (phase1Result.commentsQueue.length === 0) {
-    const exitPage = source === 'work_list' ? 'kuaishou_content' : 'kuaishou_data_center';
-    await ks.executeExitStrategy(page, exitPage as any);
+    await ks.executeExitStrategy(page, 'kuaishou_content' as any);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
