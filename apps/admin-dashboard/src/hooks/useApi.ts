@@ -1075,149 +1075,6 @@ export function useDeleteUrlMonitor() {
   });
 }
 
-// ============================================================
-// 框架配置 (v2.5+)
-// ============================================================
-
-export function useFrameworks(platform: string | null) {
-  return useQuery({
-    queryKey: ['config-automation', 'frameworks', platform],
-    queryFn: () => api.get(`/config-automation/frameworks/${platform}`).then((r) => r.data),
-    enabled: !!platform,
-  });
-}
-export function useUpsertFramework() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string; entry: FrameworkEntry }) =>
-      api.put(`/config-automation/frameworks/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-export function useDeleteFramework() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string }) =>
-      api.delete(`/config-automation/frameworks/${input.platform}/${input.key}`).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-
-// ============================================================
-// API 模式配置 (v2.5+)
-// ============================================================
-
-export function useApiPatterns(platform: string | null) {
-  return useQuery({
-    queryKey: ['config-automation', 'api-patterns', platform],
-    queryFn: () => api.get(`/config-automation/api-patterns/${platform}`).then((r) => r.data),
-    enabled: !!platform,
-  });
-}
-export function useUpsertApiPattern() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string; entry: ApiPatternEntry }) =>
-      api.put(`/config-automation/api-patterns/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-export function useDeleteApiPattern() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string }) =>
-      api.delete(`/config-automation/api-patterns/${input.platform}/${input.key}`).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-
-// ============================================================
-// 数据源配置 (v2.5+)
-// ============================================================
-
-export function useDataSources(platform: string | null) {
-  return useQuery({
-    queryKey: ['config-automation', 'data-sources', platform],
-    queryFn: () => api.get(`/config-automation/data-sources/${platform}`).then((r) => r.data),
-    enabled: !!platform,
-  });
-}
-export function useUpsertDataSource() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string; entry: DataSourceEntry }) =>
-      api.put(`/config-automation/data-sources/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-export function useDeleteDataSource() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; key: string }) =>
-      api.delete(`/config-automation/data-sources/${input.platform}/${input.key}`).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-
-// ============================================================
-// 导航流程配置 (v2.5+)
-// ============================================================
-
-export function useNavigationFlows(platform: string | null) {
-  return useQuery({
-    queryKey: ['config-automation', 'navigation-flows', platform],
-    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}`).then((r) => r.data),
-    enabled: !!platform,
-  });
-}
-export function useUpsertNavigationFlow() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; flowName: string; entry: NavigationFlowEntry }) =>
-      api.put(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`, input.entry).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-export function useDeleteNavigationFlow() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (input: { platform: string; flowName: string }) =>
-      api.delete(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`).then((r) => r.data),
-    onSuccess: (_d, v) => {
-      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', v.platform] });
-      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
-    },
-  });
-}
-export function useFlowLastRun(platform: string | null, flowName: string | null) {
-  return useQuery({
-    queryKey: ['config-automation', 'navigation-flows', platform, flowName, 'last-run'],
-    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}/${flowName}/last-run`).then((r) => r.data),
-    enabled: !!platform && !!flowName,
-  });
-}
-
 export function useUpdateUrlMonitors() {
   const qc = useQueryClient();
   return useMutation({
@@ -1227,6 +1084,158 @@ export function useUpdateUrlMonitors() {
       qc.invalidateQueries({ queryKey: ['config-automation', 'url-monitors'] });
       qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
     },
+  });
+}
+
+// ============================================================
+// Frameworks (v2.5+)
+// ============================================================
+
+export function useFrameworks(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'frameworks', platform],
+    queryFn: () => api.get(`/config-automation/frameworks/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+
+export function useUpsertFramework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: FrameworkEntry }) =>
+      api.put(`/config-automation/frameworks/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useDeleteFramework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/frameworks/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'frameworks', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// API Patterns (v2.5+)
+// ============================================================
+
+export function useApiPatterns(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'api-patterns', platform],
+    queryFn: () => api.get(`/config-automation/api-patterns/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+
+export function useUpsertApiPattern() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: ApiPatternEntry }) =>
+      api.put(`/config-automation/api-patterns/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useDeleteApiPattern() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/api-patterns/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'api-patterns', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// Data Sources (v2.5+)
+// ============================================================
+
+export function useDataSources(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'data-sources', platform],
+    queryFn: () => api.get(`/config-automation/data-sources/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+
+export function useUpsertDataSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string; entry: DataSourceEntry }) =>
+      api.put(`/config-automation/data-sources/${input.platform}/${input.key}`, input.entry).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useDeleteDataSource() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; key: string }) =>
+      api.delete(`/config-automation/data-sources/${input.platform}/${input.key}`).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'data-sources', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+// ============================================================
+// Navigation Flows (v2.5+)
+// ============================================================
+
+export function useNavigationFlows(platform: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'navigation-flows', platform],
+    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}`).then((r) => r.data),
+    enabled: !!platform,
+  });
+}
+
+export function useUpsertNavigationFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; flowName: string; entry: NavigationFlowEntry }) =>
+      api.put(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`, input.entry).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useDeleteNavigationFlow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { platform: string; flowName: string }) =>
+      api.delete(`/config-automation/navigation-flows/${input.platform}/${input.flowName}`).then((r) => r.data),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['config-automation', 'navigation-flows', variables.platform] });
+      qc.invalidateQueries({ queryKey: ['selectors', 'config'] });
+    },
+  });
+}
+
+export function useFlowLastRun(platform: string | null, flowName: string | null) {
+  return useQuery({
+    queryKey: ['config-automation', 'navigation-flows', platform, flowName, 'last-run'],
+    queryFn: () => api.get(`/config-automation/navigation-flows/${platform}/${flowName}/last-run`).then((r) => r.data),
+    enabled: !!platform && !!flowName,
   });
 }
 
@@ -1567,10 +1576,10 @@ export type PlatformSelectors = {
   textboxes: Record<string, SelectorEntry>;
   flowRules?: Record<string, unknown>;
   urlMonitors?: Record<string, UrlMonitorEntry>;
-  apiPatterns?: Record<string, ApiPatternEntry>;
-  dataSources?: Record<string, DataSourceEntry>;
-  navigationFlows?: Record<string, NavigationFlowEntry>;
-  frameworks?: Record<string, FrameworkEntry>;
+  apiPatterns?: Record<string, any>;
+  dataSources?: Record<string, any>;
+  navigationFlows?: Record<string, any>;
+  frameworks?: Record<string, any>;
 };
 
 export type ResponseExtraction = {
@@ -1609,6 +1618,7 @@ export type UrlMonitorEntry = {
 // ============================================================
 
 export type SelectorType = 'css' | 'role' | 'text' | 'xpath';
+
 export type ScopeMode = 'none' | 'framework' | 'custom';
 
 export type ScopedSelector = {
@@ -1622,7 +1632,7 @@ export type ScopedSelector = {
   filterText?: string;
 };
 
-export type SelectorConfig = {
+export type FlowSelectorConfig = {
   primary: ScopedSelector;
   fallbacks: ScopedSelector[];
 };
@@ -1637,7 +1647,7 @@ export type FlowNode = {
   id: string;
   action: StepAction;
   description: string;
-  selector?: SelectorConfig;
+  selector?: FlowSelectorConfig;
   apiPatternKey?: string;
   waitFor?: {
     attribute?: { name: string; value: string; timeout: number };
@@ -1659,8 +1669,19 @@ export type NavigationFlowEntry = {
 
 export type FrameworkEntry = {
   label: string;
+  key: string;
   selector: string;
   description?: string;
+};
+
+export type LastRunStep = {
+  stepIndex: number;
+  label: string;
+  status: string;
+  durationMs?: number;
+  selectorTries?: any;
+  mouseAction?: string;
+  extra?: any;
 };
 
 export type ApiPatternEntry = {
@@ -1685,17 +1706,7 @@ export type DataSourceEntry = {
   cursorField?: string;
 };
 
-export type LastRunStep = {
-  stepIndex: number;
-  label: string;
-  status: string;
-  durationMs?: number;
-  selectorTries?: any;
-  mouseAction?: string;
-  extra?: any;
-};
-
-export type FullSelectorConfig = {
+export type SelectorConfig = {
   version: string;
   updatedAt: string;
   platforms: Record<string, PlatformSelectors>;
@@ -1720,7 +1731,7 @@ export function useSelectorConfig() {
   return useQuery({
     queryKey: ['selectors', 'config'],
     queryFn: () =>
-      api.get('/config-automation/selectors/full').then((r) => r.data as FullSelectorConfig),
+      api.get('/config-automation/selectors/full').then((r) => r.data as SelectorConfig),
     staleTime: 30_000,
   });
 }
