@@ -4,6 +4,7 @@ import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
+import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getSelectorReader } from '../lib/selectorStore';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
@@ -57,6 +58,7 @@ export type TencentCommentInfo = {
 export interface CommentQueueItem {
   exportId: string;
   description: string;
+  createTime: number;
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;
@@ -908,6 +910,7 @@ export class TencentCrawler {
           commentsQueue.push({
             exportId: video.exportId.replace(/\//g, '_'),
             description: video.desc?.description || '',
+            createTime: video.createTime,
             oldCount: 0,
             newCount,
             isFirstCrawl: true,
@@ -921,6 +924,7 @@ export class TencentCrawler {
         commentsQueue.push({
           exportId: video.exportId.replace(/\//g, '_'),
           description: video.desc?.description || '',
+          createTime: video.createTime,
           oldCount: dbVideo.commentCount,
           newCount,
           isFirstCrawl: false,
@@ -1161,10 +1165,11 @@ export class TencentCrawler {
     page: Page,
     exportId: string,
     videoTitle: string,
+    createTime: number,
     userId: number,
     clearPrevious: boolean = true,
   ): Promise<{ success: boolean; allComments: any[]; error?: string }> {
-    logger.info({ exportId, videoTitle, clearPrevious }, '[Phase3:Collect] Starting comment collection');
+    logger.info({ exportId, videoTitle, createTime, clearPrevious }, '[Phase3:Collect] Starting comment collection');
 
     // 清除之前捕获的评论数据
     if (clearPrevious) {
@@ -1172,7 +1177,7 @@ export class TencentCrawler {
     }
 
     // ── 步骤0: 滚动视频列表找到目标视频（瀑布流可能未加载目标视频）──
-    const videoFound = await this.scrollToFindVideo(page, videoTitle);
+    const videoFound = await this.scrollToFindVideo(page, videoTitle, createTime);
     if (!videoFound) {
       logger.warn({ exportId, videoTitle }, '[Phase3:Collect] Target video not found in scroll list, trying first video');
       await this.clickFirstVideoInCommentPage(page);
@@ -1590,45 +1595,62 @@ export class TencentCrawler {
    *
    * 通过 shadow DOM 直接查询目标视频，未找到时用 scrollShadowContainer
    * 滚动加载更多（鼠标 wheel → IntersectionObserver → API 加载）。
+   *
+   * 使用时间戳 + description 双重匹配提高准确性。
    */
-  private async scrollToFindVideo(page: Page, videoTitle: string): Promise<boolean> {
-    logger.info({ videoTitle }, '[Phase3:Scroll] Scrolling to find video in waterfall list');
-
+  private async scrollToFindVideo(page: Page, videoTitle: string, createTime: number): Promise<boolean> {
     const MAX_SCROLLS = 20;
+    const TIMESTAMP_TOLERANCE = 60;
 
-    for (let i = 0; i < MAX_SCROLLS; i++) {
-      // 在 shadow DOM 中查找目标视频
-      const found = await page.evaluate((title: string) => {
-        const wujieApps = document.querySelectorAll('wujie-app');
-        for (const app of Array.from(wujieApps)) {
-          const sr = (app as HTMLElement).shadowRoot;
-          if (!sr) continue;
-          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-          if (feeds.some(f =>
-            f.querySelector('.feed-title')?.textContent?.trim() === title
-            || f.querySelector('.feed-title')?.textContent?.trim().includes(title.slice(0, 10))
-          )) return true;
+    logger.info({ videoTitle, createTime }, '[Tencent] Searching for target video in sidebar');
+
+    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLLS; scrollAttempt++) {
+      // 在 shadow DOM 中查找匹配的视频
+      const matchResult = await page.evaluate(({ title, createTimeNum, tolerance }: { title: string; createTimeNum: number; tolerance: number }) => {
+        const app = document.querySelector('wujie-app');
+        if (!app?.shadowRoot) return { found: false, reason: 'no shadow root' };
+
+        const wraps = app.shadowRoot.querySelectorAll('.comment-feed-wrap');
+        for (const wrap of wraps) {
+          const titleEl = wrap.querySelector('.feed-title');
+          const timeEl = wrap.querySelector('.feed-time');
+          const titleText = titleEl?.textContent?.trim() || '';
+          const timeText = timeEl?.textContent?.trim() || '';
+          const fullText = titleText + ' ' + timeText;
+
+          // 解析时间（视频号格式：2026/06/13 13:58）
+          const dateMatch = timeText.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
+          if (!dateMatch) continue;
+          const [, y, m, d, h, min] = dateMatch;
+          const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:00+08:00`).getTime() / 1000);
+
+          // 时间差判断
+          if (Math.abs(domTimestamp - createTimeNum) > tolerance) continue;
+
+          // description 前缀匹配
+          const descPrefix = title.toLowerCase().substring(0, 10);
+          if (descPrefix.length > 0 && !fullText.toLowerCase().includes(descPrefix)) continue;
+
+          // 匹配成功，点击
+          (wrap as HTMLElement).click();
+          return { found: true, domTimestamp, title: titleText.substring(0, 50) };
         }
-        return false;
-      }, videoTitle);
+        return { found: false };
+      }, { title: videoTitle, createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
 
-      if (found) {
-        logger.info({ videoTitle, scrolls: i }, '[Phase3:Scroll] Video found');
+      if (matchResult.found) {
+        logger.info({ videoTitle, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Tencent] 匹配成功');
         return true;
       }
 
-      // 未找到，用鼠标滚轮滚动视频列表容器加载更多
-      // 使用 scrollShadowContainer 确保 wheel 事件精准发送到 shadow DOM 容器
-      const scrolled = await this.scrollShadowContainer(page, '.feeds-container', 500, 4);
-      if (!scrolled) {
-        logger.warn({ videoTitle }, '[Phase3:Scroll] Cannot access scroll container, giving up');
-        break;
+      // 未匹配，滚动加载更多
+      if (scrollAttempt < MAX_SCROLLS) {
+        logger.info({ scrollAttempt }, '[Tencent] 未匹配，滚动加载更多');
+        await this.scrollShadowContainer(page, '.feeds-container', 500, 4);
       }
-
-      await HumanActions.wait(page, 1500, 2500);
     }
 
-    logger.warn({ videoTitle, maxScrolls: MAX_SCROLLS }, '[Phase3:Scroll] Video not found after max scrolls');
+    logger.warn({ videoTitle, maxScrolls: MAX_SCROLLS }, '[Tencent] 滚动穷尽仍未匹配');
     return false;
   }
 
@@ -1664,7 +1686,7 @@ export class TencentCrawler {
         // 采集该视频的完整评论树
         // 第一个视频不清除拦截器数据（保留 Phase2 导航时捕获的初始 comment_list 响应）
         const collectResult = await this.collectVideoComments(
-          page, item.exportId, item.description, userId, i > 0
+          page, item.exportId, item.description, item.createTime, userId, i > 0
         );
 
         results.push({
