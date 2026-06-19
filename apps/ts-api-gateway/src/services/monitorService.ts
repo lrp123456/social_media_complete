@@ -357,7 +357,7 @@ const MAX_MONITOR_VIDEOS = 20;
  * 截图二维码并通过 sendLoginAlert 发送给企微用户
  * 优先截取二维码元素（带边距），找不到则截全页
  */
-async function captureAndSendQR(page: any, userId: number, platform: string, wechatUserid: string): Promise<void> {
+export async function captureAndSendQR(page: any, userId: number, platform: string, wechatUserid: string): Promise<void> {
   try {
     // 平台特定的二维码选择器（优先级从高到低）
     const platformSelectors: Record<string, string[]> = {
@@ -436,7 +436,7 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
     }
 
     // ── 穿透 iframe 获取 QR 码（视频号登录页 iframe 结构）──
-    // 每次截取前点击刷新 + 扩大截图区域（四周 padding，正方形裁剪）
+    // 仅在二维码过期时点击刷新，避免无条件刷新导致二维码进入异常状态
     if (platform === 'tencent') {
       try {
         const iframeEl = await page.$('iframe[src*="login-for-iframe"]').catch(() => null)
@@ -447,47 +447,58 @@ async function captureAndSendQR(page: any, userId: number, platform: string, wec
             await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
             await page.waitForTimeout(1500);
 
-            // ── 点击刷新二维码 ──
+            // ── 仅在二维码过期时点击刷新（避免无条件刷新导致二维码进入异常状态）──
             try {
-              // 方式1: 查找刷新按钮
-              const refreshSelectors = ['.qrcode-refresh-btn', '[class*="refresh"]', '[class*="Refresh"]'];
-              let refreshed = false;
-              for (const sel of refreshSelectors) {
-                const btn = await frame.$(sel).catch(() => null);
-                if (btn) {
-                  await btn.click().catch(() => {});
-                  await page.waitForTimeout(2000);
-                  logger.info({ platform, userId, selector: sel }, '已点击 iframe 内二维码刷新按钮');
-                  refreshed = true;
-                  break;
-                }
-              }
-              // 方式2: 查找包含"刷新"/"重新生成"文字的元素
-              if (!refreshed) {
-                refreshed = await frame.evaluate(() => {
-                  const els = document.querySelectorAll('a, button, span, div, p');
-                  for (const el of els) {
-                    const text = el.textContent?.trim() || '';
-                    if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
-                      (el as HTMLElement).click();
-                      return true;
-                    }
+              const isExpired = await frame.evaluate(() => {
+                const bodyText = document.body?.innerText || '';
+                return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+                  || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
+              }).catch(() => false);
+
+              if (isExpired) {
+                logger.info({ platform, userId }, '[QR] QR code expired, clicking refresh');
+                // 方式1: 查找刷新按钮
+                const refreshSelectors = ['.qrcode-refresh-btn', '[class*="refresh"]', '[class*="Refresh"]'];
+                let refreshed = false;
+                for (const sel of refreshSelectors) {
+                  const btn = await frame.$(sel).catch(() => null);
+                  if (btn) {
+                    await btn.click().catch(() => {});
+                    await page.waitForTimeout(3000);
+                    logger.info({ platform, userId, selector: sel }, '已点击 iframe 内二维码刷新按钮');
+                    refreshed = true;
+                    break;
                   }
-                  return false;
-                }).catch(() => false);
-                if (refreshed) {
-                  await page.waitForTimeout(2000);
-                  logger.info({ platform, userId }, '已通过文字点击刷新二维码');
                 }
-              }
-              // 方式3: 点击 QR 区域本身
-              if (!refreshed) {
-                const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
-                if (qrEl) {
-                  await qrEl.click().catch(() => {});
-                  await page.waitForTimeout(2000);
-                  logger.info({ platform, userId }, '已点击二维码区域刷新');
+                // 方式2: 查找包含"刷新"/"重新生成"文字的元素
+                if (!refreshed) {
+                  refreshed = await frame.evaluate(() => {
+                    const els = document.querySelectorAll('a, button, span, div, p');
+                    for (const el of els) {
+                      const text = el.textContent?.trim() || '';
+                      if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
+                        (el as HTMLElement).click();
+                        return true;
+                      }
+                    }
+                    return false;
+                  }).catch(() => false);
+                  if (refreshed) {
+                    await page.waitForTimeout(3000);
+                    logger.info({ platform, userId }, '已通过文字点击刷新二维码');
+                  }
                 }
+                // 方式3: 点击 QR 区域本身
+                if (!refreshed) {
+                  const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
+                  if (qrEl) {
+                    await qrEl.click().catch(() => {});
+                    await page.waitForTimeout(3000);
+                    logger.info({ platform, userId }, '已点击二维码区域刷新');
+                  }
+                }
+              } else {
+                logger.info({ platform, userId }, '[QR] QR code not expired, skipping refresh');
               }
             } catch {}
 
@@ -1507,12 +1518,13 @@ export async function executeReplyAction(
       rootId: true,
       userNickname: true,
       videoId: true,
-      video: { select: { description: true } },
+      video: { select: { description: true, createTime: true } },
     },
   });
   const commentDbId = commentRow?.id;
   const commentText = commentRow?.text || replyData.commentCid;
   const videoDescription = commentRow?.video?.description || '';
+  const videoCreateTime = Number(commentRow?.video?.createTime) || 0;
   const commentCreateTime = Number(commentRow?.createTime) || 0;
   const commentLevel = (commentRow?.level as 1 | 2) || 1;
   const commentRootId = commentRow?.rootId || undefined;
@@ -1678,7 +1690,7 @@ export async function executeReplyAction(
 
       // 选择目标视频（评论管理页面默认显示第一个视频的评论，需切换到目标视频）
       if (videoDescription) {
-        const videoSwitched = await kuaishouCrawler.selectVideoForReply(page, replyData.videoId, videoDescription);
+        const videoSwitched = await kuaishouCrawler.selectVideoForReply(page, replyData.videoId, videoDescription, videoCreateTime);
         if (executionId) await updatePhase(executionId, 3, '定位视频', 35, '已选择目标视频');
         if (!videoSwitched) {
           logger.warn({ videoDescription }, '快手切换到目标视频失败，将尝试在当前视频下回复');

@@ -11,6 +11,7 @@ import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import type { ReplyTarget } from './replyTypes';
+import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import fs from 'fs';
 import path from 'path';
 
@@ -98,6 +99,7 @@ const PLATFORM: 'kuaishou' = 'kuaishou';
 export interface KuaishouCommentQueueItem {
   awemeId: string;
   description: string;
+  createTime: number;
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;
@@ -1291,6 +1293,7 @@ export class KuaishouCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: 0,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1322,6 +1325,7 @@ export class KuaishouCrawler {
         commentsQueue.push({
           awemeId: video.aweme_id,
           description: video.description,
+          createTime: video.create_time,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
           isFirstCrawl: false,
@@ -1338,6 +1342,7 @@ export class KuaishouCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: dbVideo.commentCount,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1552,7 +1557,7 @@ export class KuaishouCrawler {
           }
 
           const clickT0 = Date.now();
-          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer click completed');
           if (!clicked) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Video not found in drawer — skipping');
@@ -1954,126 +1959,94 @@ export class KuaishouCrawler {
   private async findAndClickVideoInDrawer(
     page: Page,
     awemeId: string,
-    description: string
+    description: string,
+    createTime: number,
   ): Promise<boolean> {
-    const MAX_SCROLL_ATTEMPTS_DRAWER = 20;
-    // 规范化：将 \u00a0 (non-breaking space) 替换为普通空格，避免 DOM 中的 &nbsp; 导致匹配失败
-    const descLower = description.toLowerCase().trim().replace(/\u00a0/g, ' ');
-    const descPrefix = descLower.substring(0, Math.min(descLower.length, 20));
+    const MAX_SCROLL_ATTEMPTS = 20;
+    const TIMESTAMP_TOLERANCE = 60;
 
-    logger.info({ awemeId, descPrefix, rawLength: description.length }, '[Drawer] Searching for target video in kuaishou drawer');
+    logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
 
-    const SCROLL_CONTAINER = '.auto-load-list';
-
-    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
+    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      // 在视口中查找匹配的视频项并返回点击坐标
-      const matchResult = await page.evaluate((prefix: string) => {
+      // 在 page.evaluate 中遍历 .video-item 元素
+      const matchResult = await page.evaluate(({ desc, createTimeNum, tolerance }: { desc: string; createTimeNum: number; tolerance: number }) => {
         const items = document.querySelectorAll('.video-item');
         for (const item of items) {
-          const titleEl = item.querySelector('.video-info__content__title') as HTMLElement;
-          if (!titleEl) continue;
-          // 规范化：将 \u00a0 (non-breaking space / &nbsp;) 替换为普通空格，与 descPrefix 保持一致
-          const titleText = (titleEl.textContent || '').toLowerCase().trim().replace(/\u00a0/g, ' ');
-          if (!titleText) continue;
-          // 匹配标题
-          if (titleText.includes(prefix) || prefix.includes(titleText)) {
-            // 检查是否在视口内
-            const itemRect = item.getBoundingClientRect();
-            if (itemRect.top < 0 || itemRect.bottom > window.innerHeight || itemRect.height === 0) continue;
+          const titleEl = item.querySelector('.video-info__content__title');
+          const dateEl = item.querySelector('.video-info__content__date');
+          const title = titleEl?.textContent?.trim() || '';
+          const dateText = dateEl?.textContent?.trim() || '';
+          const fullText = title + ' ' + dateText;
 
-            // 点击 .video-info__content__detail 区域（播放数+评论数，非标题非封面）
-            const detailEl = item.querySelector('.video-info__content__detail') as HTMLElement;
-            if (detailEl) {
-              const rect = detailEl.getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
-                return {
-                  x: Math.round(rect.left + rect.width / 2),
-                  y: Math.round(rect.top + rect.height / 2),
-                  title: titleText,
-                  method: 'detail',
-                };
-              }
-            }
-            // fallback: 点击 .video-info__content__date 区域
-            const dateEl = item.querySelector('.video-info__content__date') as HTMLElement;
-            if (dateEl) {
-              const rect = dateEl.getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
-                return {
-                  x: Math.round(rect.left + rect.width / 2),
-                  y: Math.round(rect.top + rect.height / 2),
-                  title: titleText,
-                  method: 'date',
-                };
-              }
-            }
-            // fallback: 点击 .video-info__content 中非标题区域
-            const contentEl = item.querySelector('.video-info__content') as HTMLElement;
-            if (contentEl) {
-              const rect = contentEl.getBoundingClientRect();
-              if (rect.width > 0 && rect.height > 0) {
-                return {
-                  x: Math.round(rect.left + rect.width / 2),
-                  y: Math.round(rect.top + rect.height * 0.8),
-                  title: titleText,
-                  method: 'content-bottom',
-                };
-              }
-            }
+          // 解析时间（快手格式：2026-05-28 09:03:19）
+          const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+          if (!dateMatch) continue;
+          const [, y, m, d, h, min, s] = dateMatch;
+          const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
+
+          // 时间差判断
+          if (Math.abs(domTimestamp - createTimeNum) > tolerance) continue;
+
+          // description 前缀匹配
+          const descPrefix = desc.toLowerCase().substring(0, 20);
+          if (descPrefix.length > 0 && !fullText.toLowerCase().includes(descPrefix)) continue;
+
+          // 匹配成功，点击 detail 区域
+          const detailEl = item.querySelector('.video-info__content__detail') || item.querySelector('.video-info__content');
+          if (detailEl) {
+            (detailEl as HTMLElement).click();
+            return { found: true, domTimestamp, title: title.substring(0, 50) };
           }
         }
-        return null;
-      }, descPrefix);
+        return { found: false };
+      }, { desc: description, createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
 
-      if (matchResult) {
-        logger.info({ awemeId, title: matchResult.title, method: matchResult.method, x: matchResult.x, y: matchResult.y }, '[Drawer] Found kuaishou video, clicking');
-        await HumanActions.withCDPContext(page, async (ctx) => {
-          await ctx.mouse.moveTo({ x: matchResult.x, y: matchResult.y });
-          await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
-          await ctx.mouse.clickAt(matchResult.x, matchResult.y);
-        });
+      if (matchResult.found) {
+        logger.info({ awemeId, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Drawer] 匹配成功');
         return true;
       }
 
-      // 没找到，hover 到抽屉容器后用 wheel 滚动
-      if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-        logger.info({ scrollAttempt }, '[Drawer] Video not in viewport, scrolling drawer');
-        // 抽屉的滚动容器优先级：.el-drawer__body > .drawer__content > .auto-load-list
-        const drawerScrollSelectors = ['.el-drawer__body', '.drawer__content', SCROLL_CONTAINER];
-        await HumanActions.withCDPContext(page, async (ctx) => {
-          await ctx.dom.refreshDocument();
-          let containerRect: { x: number; y: number; width: number; height: number } | null = null;
-          for (const sel of drawerScrollSelectors) {
-            const nodeId = await ctx.cdp.querySelector(sel);
-            if (nodeId && nodeId > 0) {
-              const box = await ctx.cdp.getBoxModel(nodeId);
-              if (box && box.width > 0 && box.height > 0) {
-                containerRect = { x: box.content[0], y: box.content[1], width: box.width, height: box.height };
-                break;
-              }
-            }
-          }
-          if (containerRect) {
-            const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
-            const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
-            await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
-            await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
-            // 小幅滚动，避免滚过目标
-            for (let i = 0; i < 2; i++) {
-              await ctx.mouse.dispatchWheel(0, 200 + Math.random() * 150);
-              await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
-            }
-          }
-        });
-        // 等待 infinite-scroll 加载新内容
-        await HumanActions.wait(page, 1500, 2500);
+      // 未匹配，滚动加载更多
+      if (scrollAttempt < MAX_SCROLL_ATTEMPTS) {
+        logger.info({ scrollAttempt }, '[Drawer] 未匹配，滚动加载更多');
+        await this.scrollDrawerForMoreKuaishou(page, scrollAttempt);
       }
     }
 
-    logger.warn({ awemeId, descPrefix, maxScrolls: MAX_SCROLL_ATTEMPTS_DRAWER }, '[Drawer] Kuaishou video not found after scrolling');
+    logger.warn({ awemeId, maxScrolls: MAX_SCROLL_ATTEMPTS }, '[Drawer] 滚动穷尽仍未匹配');
     return false;
+  }
+
+  private async scrollDrawerForMoreKuaishou(page: Page, scrollAttempt: number): Promise<void> {
+    const SCROLL_CONTAINER = '.auto-load-list';
+    const drawerScrollSelectors = ['.el-drawer__body', '.drawer__content', SCROLL_CONTAINER];
+    await HumanActions.withCDPContext(page, async (ctx) => {
+      await ctx.dom.refreshDocument();
+      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
+      for (const sel of drawerScrollSelectors) {
+        const nodeId = await ctx.cdp.querySelector(sel);
+        if (nodeId && nodeId > 0) {
+          const box = await ctx.cdp.getBoxModel(nodeId);
+          if (box && box.width > 0 && box.height > 0) {
+            containerRect = { x: box.content[0], y: box.content[1], width: box.width, height: box.height };
+            break;
+          }
+        }
+      }
+      if (containerRect) {
+        const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
+        const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
+        await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
+        await new Promise(r => setTimeout(r, 150 + Math.random() * 200));
+        for (let i = 0; i < 2; i++) {
+          await ctx.mouse.dispatchWheel(0, 200 + Math.random() * 150);
+          await new Promise(r => setTimeout(r, 100 + Math.random() * 150));
+        }
+      }
+    });
+    await HumanActions.wait(page, 1500, 2500);
   }
 
   private async waitForCommentResponse(page: Page): Promise<InterceptedResponse | null> {
@@ -2173,13 +2146,13 @@ export class KuaishouCrawler {
   /**
    * 选择目标视频（用于回复流程）
    */
-  async selectVideoForReply(page: Page, videoId: string, videoDescription: string): Promise<boolean> {
+  async selectVideoForReply(page: Page, videoId: string, videoDescription: string, createTime: number): Promise<boolean> {
     const drawerOpened = await this.openSelectVideoDrawer(page);
     if (!drawerOpened) {
       logger.error('[Reply] Failed to open video selection drawer');
       return false;
     }
-    const clicked = await this.findAndClickVideoInDrawer(page, videoId, videoDescription);
+    const clicked = await this.findAndClickVideoInDrawer(page, videoId, videoDescription, createTime);
     if (clicked) {
       await HumanActions.wait(page, 1500, 3000);
     }
