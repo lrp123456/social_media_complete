@@ -457,6 +457,7 @@ class WeChatBotManager {
         ],
         jump_list: [
           { type: 3, title: '✅ 已登录，继续监控', question: `继续监控 ${userId} ${platform}` },
+          { type: 3, title: '🔄 强制刷新登录页', question: `强制刷新 ${userId} ${platform}` },
         ],
         card_action: { type: 1, url: 'https://work.weixin.qq.com' },
       };
@@ -556,6 +557,57 @@ async function autoStartBot(): Promise<void> {
             await botManager.sendTextMessage([userid], `✅ 已恢复 ${targetPlatform} 监控，任务已加入队列`);
           } else {
             await botManager.sendTextMessage([userid], `❌ 未找到用户 ${targetUserId} 的窗口信息`);
+          }
+          return;
+        }
+
+        // 匹配"强制刷新"意图: 格式 "强制刷新 <userId> <platform>"（来自登录告警 jump_list）
+        const forceRefreshSetup = content.match(/^强制刷新\s+(\d+)\s+(\S+)$/);
+        if (forceRefreshSetup) {
+          const targetUserId = parseInt(forceRefreshSetup[1], 10);
+          const targetPlatform = forceRefreshSetup[2];
+
+          const { prisma } = await import('../lib/prisma');
+          const user = await prisma.user.findUnique({
+            where: { id: targetUserId },
+            select: { fingerprintWindowId: true, wechatUserid: true },
+          }).catch(() => null);
+
+          if (!user) {
+            await botManager.sendTextMessage([userid], '❌ 未找到用户');
+            return;
+          }
+
+          const loginUrls: Record<string, string> = {
+            douyin: 'https://creator.douyin.com/creator-micro/home',
+            kuaishou: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api',
+            xiaohongshu: 'https://creator.xiaohongshu.com/creator/home',
+            tencent: 'https://channels.weixin.qq.com/login.html?from=assistant',
+          };
+          const loginUrl = loginUrls[targetPlatform];
+          if (!loginUrl) {
+            await botManager.sendTextMessage([userid], `❌ 不支持的平台: ${targetPlatform}`);
+            return;
+          }
+
+          const { getBrowserManager } = await import('../lib/browserManager');
+          const bm = getBrowserManager();
+          const windowId = String(user.fingerprintWindowId);
+
+          try {
+            const { page } = await bm.connect(windowId, '', targetPlatform);
+            await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForTimeout(3000);
+
+            const { captureAndSendQR } = await import('./monitorService');
+            await captureAndSendQR(page, targetUserId, targetPlatform, user.wechatUserid || userid);
+
+            await botManager.sendTextMessage([userid], `🔄 已刷新 ${targetPlatform} 登录页，新二维码已发送`);
+          } catch (err: any) {
+            logger.error({ targetUserId, targetPlatform, err }, '强制刷新登录页失败');
+            await botManager.sendTextMessage([userid], `❌ 刷新登录页失败: ${err.message || '未知错误'}`);
+          } finally {
+            await bm.disconnectSession(windowId, targetPlatform as any).catch(() => {});
           }
           return;
         }
