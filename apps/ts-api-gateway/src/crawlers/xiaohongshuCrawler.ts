@@ -44,6 +44,12 @@ export interface XiaohongshuCheckResult {
     oldCount: number;
     newCount: number;
   }>;
+  commentsQueue: Array<{
+    exportId: string;
+    description: string;
+    oldCount: number;
+    newCount: number;
+  }>;
   riskControlDetected: boolean;
   riskControlInfo?: RiskControlDetection;
 }
@@ -529,6 +535,65 @@ export class XiaohongshuCrawler {
     return { screenshotPath, htmlPath };
   }
 
+  /**
+   * Phase 2: 检查主站登录态
+   * 打开 www.xiaohongshu.com → 检测用户头像存在 → 未登录则发 QR → 回退 light
+   * @returns true=已登录，false=未登录
+   */
+  async checkMainsiteLogin(
+    context: any,  // BrowserContext
+    userId: number,
+    wechatUserid: string,
+  ): Promise<boolean> {
+    logger.info({ userId }, '[XHS-Phase2] 开始检查主站登录态');
+    const mainsitePage = await context.newPage();
+
+    try {
+      await mainsitePage.goto('https://www.xiaohongshu.com', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+      await HumanActions.wait(mainsitePage, 3000, 5000);
+
+      // 检测用户头像（已登录标识）
+      const avatarDef = getSelector('region.mainsite-user-avatar', XHS_PLATFORM);
+      let loggedIn = false;
+      if (avatarDef.css) {
+        try {
+          await mainsitePage.waitForSelector(avatarDef.css, { timeout: 8000 });
+          loggedIn = true;
+        } catch {
+          loggedIn = false;
+        }
+      }
+
+      if (!loggedIn) {
+        logger.info({ userId }, '[XHS-Phase2] 主站未登录，发送 QR 码');
+
+        // 截图 QR 码区域
+        const qrDef = getSelector('region.mainsite-qr-code', XHS_PLATFORM);
+        try {
+          const qrEl = await mainsitePage.waitForSelector(qrDef.css || '.qrcode-img', { timeout: 15000 });
+          const qrBuffer = await qrEl.screenshot({ type: 'png' });
+
+          // 发送到企微 — 使用 botManager.sendLoginAlert（与抖音/快手/视频号一致）
+          const { botManager } = await import('../services/wechatBotService');
+          await botManager.sendLoginAlert(wechatUserid, 'xiaohongshu', userId, qrBuffer);
+          logger.info({ userId }, '[XHS-Phase2] QR 码已发送到企微');
+        } catch (err: any) {
+          logger.warn({ userId, error: err.message }, '[XHS-Phase2] QR 码截图失败');
+        }
+      }
+
+      return loggedIn;
+    } catch (err: any) {
+      logger.warn({ userId, error: err.message }, '[XHS-Phase2] 主站登录检查异常');
+      return false;
+    } finally {
+      await mainsitePage.close().catch(() => {});
+    }
+  }
+
   async checkForUpdates(
     page: Page,
     userId: number
@@ -541,6 +606,7 @@ export class XiaohongshuCrawler {
       return {
         hasUpdate: false,
         updatedVideos: [],
+        commentsQueue: [],
         riskControlDetected: true,
         riskControlInfo: riskCheck,
       };
@@ -659,14 +725,23 @@ export class XiaohongshuCrawler {
       return {
         hasUpdate: false,
         updatedVideos: [],
+        commentsQueue: [],
         riskControlDetected: true,
         riskControlInfo: postRiskCheck,
       };
     }
 
+    const commentsQueue = updatedVideos.map((v) => ({
+      exportId: v.awemeId,
+      description: v.description,
+      oldCount: v.oldCount,
+      newCount: v.newCount,
+    }));
+
     return {
       hasUpdate: updatedVideos.length > 0,
       updatedVideos,
+      commentsQueue,
       riskControlDetected: false,
     };
   }

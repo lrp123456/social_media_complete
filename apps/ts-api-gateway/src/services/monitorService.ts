@@ -977,46 +977,84 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const crawlMode = await db.getCrawlMode('xiaohongshu');
 
-  logger.info({ userId: task.userId, windowId: task.windowId }, '[XHS-monitor] Starting xiaohongshu check');
+  logger.info({ userId: task.userId, crawlMode }, '[XHS-monitor] Starting xiaohongshu check');
 
   await xiaohongshuCrawler.registerListener(page, ['/api/galaxy/v2/creator/note/user/posted']);
 
   const currentUrl = page.url();
-  logger.info({ currentUrl, isOnCreator: currentUrl.includes('creator.xiaohongshu.com') }, '[XHS-monitor] Current page state');
   if (!currentUrl.includes('creator.xiaohongshu.com')) {
-    logger.info('[XHS-monitor] Not on creator page, navigating...');
     await xiaohongshuCrawler.navigateToCreatorHome(page);
   }
 
-  // Phase 1 (唯一阶段)
-  logger.info({ userId: task.userId }, '[XHS-monitor] Starting checkForUpdates');
-  const result = await xiaohongshuCrawler.checkForUpdates(page, task.userId);
-
+  // Phase 1: 笔记列表扫描 + 私密过滤
+  onProgress?.({ phase: 'Phase1', step: '扫描笔记列表', percent: 20, detail: '正在获取笔记列表并对比评论数' });
+  const phase1Result = await xiaohongshuCrawler.checkForUpdates(page, task.userId);
   xiaohongshuCrawler.unregisterListener();
 
-  if (result.riskControlDetected) {
-    logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType: result.riskControlInfo?.type }, '小红书风控触发');
-    await db.logRiskScene(task.userId, 'xiaohongshu', result.riskControlInfo?.type || 'unknown', result.riskControlInfo?.evidence || '');
+  if (phase1Result.riskControlDetected) {
+    logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType: phase1Result.riskControlInfo?.type }, '小红书风控触发');
+    await db.logRiskScene(task.userId, 'xiaohongshu', phase1Result.riskControlInfo?.type || 'unknown', phase1Result.riskControlInfo?.evidence || '');
     await db.setUserCooldown(task.userId, Date.now() + 30 * 60 * 1000);
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
-  await xiaohongshuCrawler.executeExitStrategy(page);
+  const queue = phase1Result.commentsQueue || [];
 
-  const updates = result.updatedVideos.map(v => ({
+  // 无新评论 → 执行退出并返回
+  if (crawlMode === 'light' || queue.length === 0) {
+    await xiaohongshuCrawler.executeExitStrategy(page);
+    const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
+      awemeId: v.awemeId,
+      description: v.description,
+      oldCount: v.oldCount,
+      newCount: v.newCount,
+    }));
+    return { hasUpdate: phase1Result.hasUpdate, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
+  }
+
+  // Phase 2: 主站登录校验
+  onProgress?.({ phase: 'Phase2', step: '检查主站登录', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
+  const user = await db.getUserById(task.userId);
+  const wechatUserid = (user as any)?.wechatUserid || '';
+  const loggedIn = await xiaohongshuCrawler.checkMainsiteLogin(
+    (page as any).context(),
+    task.userId,
+    wechatUserid,
+  );
+
+  if (!loggedIn) {
+    logger.info({ userId: task.userId }, '[XHS-monitor] 主站未登录 — 回退到 Light 模式');
+    await xiaohongshuCrawler.executeExitStrategy(page);
+    const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
+      awemeId: v.awemeId,
+      description: v.description,
+      oldCount: v.oldCount,
+      newCount: v.newCount,
+    }));
+    // Light 模式合成 Comment
+    for (const u of updates) {
+      const diff = u.newCount - u.oldCount;
+      if (diff > 0) {
+        await db.upsertLightModeComment(u.awemeId, {
+          text: `[轻量模式] ${diff} 条新评论（主站未登录）`,
+          create_time: Math.floor(Date.now() / 1000),
+        });
+      }
+    }
+    return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase2', riskDetected: false };
+  }
+
+  // Phase 3: 评论树采集（由下一任务实现）
+  // 临时返回 light 结果，等待 Task 6 实现 processCommentsQueue
+  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-monitor] 主站已登录，Phase 3 待实现');
+  await xiaohongshuCrawler.executeExitStrategy(page);
+  const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
     awemeId: v.awemeId,
     description: v.description,
     oldCount: v.oldCount,
     newCount: v.newCount,
   }));
-
-  return {
-    hasUpdate: result.hasUpdate,
-    newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0),
-    updatedVideos: updates,
-    phase: 'Phase1',
-    riskDetected: false,
-  };
+  return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase2', riskDetected: false };
 }
 
 // ============================================================
