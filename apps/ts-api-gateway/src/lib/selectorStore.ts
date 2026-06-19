@@ -300,6 +300,46 @@ function loadFromDisk(): SelectorConfig {
     },
     'selectors.json loaded & schema-validated',
   );
+
+  // 自动合并 urlMonitors → apiPatterns（向后兼容）
+  for (const [platform, pVal] of Object.entries(config.platforms || {})) {
+    const p = pVal as any;
+    if (!p.urlMonitors || Object.keys(p.urlMonitors).length === 0) continue;
+    if (!p.apiPatterns) p.apiPatterns = {};
+
+    for (const [name, monitor] of Object.entries(p.urlMonitors) as [string, any][]) {
+      // 如果 apiPatterns 中已存在同名条目，跳过
+      if (p.apiPatterns[name]) continue;
+
+      // 从 urlMonitor 创建 apiPattern
+      const patterns = monitor.urlPatterns || [];
+      if (patterns.length === 0) continue;
+
+      p.apiPatterns[name] = {
+        pattern: patterns[0],
+        description: monitor.description || `Auto-migrated from urlMonitor: ${name}`,
+      };
+
+      // 如果 urlMonitor 有 extraction 配置，映射到 responseArrayPath
+      if (monitor.extraction?.itemsPath) {
+        p.apiPatterns[name].responseArrayPath = [monitor.extraction.itemsPath];
+      }
+      if (monitor.extraction?.idField) {
+        p.apiPatterns[name].fieldMappings = { aweme_id: [monitor.extraction.idField] };
+      }
+
+      // 如果 urlMonitor 有 pagination 配置，映射到 hasMoreField/cursorField
+      if (monitor.pagination?.hasMorePath) {
+        p.apiPatterns[name].hasMoreField = monitor.pagination.hasMorePath;
+      }
+      if (monitor.pagination?.cursorPath) {
+        p.apiPatterns[name].cursorField = monitor.pagination.cursorPath;
+      }
+
+      logger.info({ platform, name, pattern: patterns[0] }, 'Auto-migrated urlMonitor to apiPattern');
+    }
+  }
+
   return config;
 }
 
