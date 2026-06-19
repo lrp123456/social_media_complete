@@ -581,6 +581,7 @@ export class KuaishouCrawler {
     // 从 raw responses 中提取 authorUid（探测所有可能的形状路径）
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToPhotoStatus = new Map<string, number>();
     for (const resp of rawResponses) {
       const body = (resp as any)?.body;
       if (!body || typeof body !== 'object') continue;
@@ -605,6 +606,11 @@ export class KuaishouCrawler {
             nickname: raw.userName || raw.authorName || '',
           });
         }
+        // 提取 photoStatus 用于私密过滤（photo_analysis 源无此字段，undefined 视为公开）
+        const photoStatus = raw.photoStatus ?? raw.status;
+        if (id && photoStatus !== undefined) {
+          awemeIdToPhotoStatus.set(String(id), Number(photoStatus));
+        }
       }
     }
     logger.info(
@@ -618,17 +624,27 @@ export class KuaishouCrawler {
       authorNickname: awemeIdToAuthor.get(String(item.aweme_id))?.nickname || item.userName || item.authorName || '',
     }));
 
+    // 私密视频过滤：photoStatus !== 0 视为私密（必须先检查 undefined，photo_analysis 源无此字段）
+    const filtered = sliced.filter((item: any) => {
+      const photoStatus = awemeIdToPhotoStatus.get(String(item.aweme_id));
+      if (photoStatus !== undefined && photoStatus !== 0) {
+        logger.info({ awemeId: item.aweme_id, photoStatus }, '[Phase1] 过滤私密视频（photoStatus!=0）');
+        return false;
+      }
+      return true;
+    });
+
     logger.info({
       source,
       step: 'FETCH_COMPLETE',
       totalCollected: allItems.length,
       totalResponses: this.interceptor.getResponseCount(pattern),
-      finalCount: sliced.length,
+      finalCount: filtered.length,
       maxMonitor: this.maxMonitorVideos,
-      awemeIds: sliced.map(i => i.aweme_id),
+      awemeIds: filtered.map(i => i.aweme_id),
     }, 'Kuaishou video list fetch completed');
 
-    return sliced;
+    return filtered;
   }
 
   private isOnTargetPage(page: Page, source: KuaishouQuerySource): boolean {
@@ -1240,6 +1256,17 @@ export class KuaishouCrawler {
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新视频首次入库：如果有评论，入队获取
         if (video.comment_count > 0) {
           logger.info({
