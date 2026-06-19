@@ -1778,6 +1778,56 @@ export async function executeReplyAction(
       await tencentCrawler.executeExitStrategy(page);
       return;
     }
+
+    // ── 小红书回复 ──
+    if (task.platform === 'xiaohongshu') {
+      const currentUrl = page.url();
+      if (!currentUrl.includes('creator.xiaohongshu.com')) {
+        await xiaohongshuCrawler.navigateToCreatorHome(page);
+      }
+
+      if (executionId) await updatePhase(executionId, 2, '导航', 20, '已定位到笔记管理');
+
+      // 通过点击缩略图进入笔记详情页
+      const newPage = await xiaohongshuCrawler.clickThumbnailAndWaitNewTab(page, replyData.videoId);
+      if (!newPage) {
+        logger.error('回复失败：无法打开笔记详情页');
+        if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+        throw new Error('无法打开小红书笔记详情页');
+      }
+
+      try {
+        const xhsTarget: import('../crawlers/replyTypes').ReplyTarget = {
+          cid: replyData.commentCid,
+          text: commentText,
+          level: commentLevel,
+          username: commentUsername,
+          subReplyCount: commentLevel === 1 ? rootSubReplyCount : undefined,
+          rootText: rootCommentText,
+          rootUsername: commentLevel === 2 ? rootUsername : undefined,
+          rootSubReplyCount: commentLevel === 2 ? rootSubReplyCount : undefined,
+          createTime: commentCreateTime,
+        };
+
+        if (executionId) await updatePhase(executionId, 3, '定位评论', 55, '正在定位评论');
+        const replied = await xiaohongshuCrawler.replyToComment(newPage, xhsTarget, replyData.text, executionId);
+        if (replied) {
+          logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '小红书回复执行成功');
+          if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
+          if (executionId) await updatePhase(executionId, 4, '完成', 100, '回复执行完成');
+        } else {
+          logger.error({ commentCid: replyData.commentCid }, '小红书回复执行失败');
+          if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
+          throw new Error('小红书回复执行失败');
+        }
+      } finally {
+        await newPage.close().catch(() => {});
+        await page.bringToFront();
+      }
+
+      await xiaohongshuCrawler.executeExitStrategy(page);
+      return;
+    }
   } catch (err: any) {
     logger.error({ err: err.message }, '回复执行失败');
     if (commentDbId) await db.updateReplyStatus(commentDbId, 'failed');
@@ -1791,6 +1841,11 @@ export async function executeReplyAction(
     if (task.platform === 'kuaishou') {
       try {
         await kuaishouCrawler.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
+      } catch {}
+    }
+    if (task.platform === 'xiaohongshu') {
+      try {
+        await xiaohongshuCrawler.executeExitStrategy(page, 'menu.note-manage');
       } catch {}
     }
   }

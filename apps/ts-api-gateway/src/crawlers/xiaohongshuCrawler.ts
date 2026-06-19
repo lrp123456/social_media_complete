@@ -1049,4 +1049,129 @@ export class XiaohongshuCrawler {
 
     return results;
   }
+
+  /**
+   * 评论回复 6 阶段流程（在小红书主站笔记详情页执行）
+   * Phase 1: 数据准备（已在 executeReplyAction 中完成）
+   * Phase 3: 评论定位（cid 强主键 + 文本 + 昵称三重匹配）
+   * Phase 4: 点击回复按钮
+   * Phase 5: 输入内容并发送
+   */
+  async replyToComment(
+    page: Page,
+    target: import('./replyTypes').ReplyTarget,
+    replyText: string,
+    executionId?: string,
+  ): Promise<boolean> {
+    logger.info({
+      cid: target.cid,
+      text: target.text?.slice(0, 30),
+      level: target.level,
+      username: target.username,
+    }, '[XHS-Reply] Starting xiaohongshu reply');
+
+    try {
+      // 等待评论区加载
+      const containerDef = getSelector('region.comments-container', XHS_PLATFORM);
+      if (containerDef.css) {
+        await page.waitForSelector(containerDef.css, { timeout: 15000 }).catch(() => {});
+      }
+      await HumanActions.wait(page, 2000, 4000);
+
+      // Phase 3: 评论定位（cid 强主键）
+      const cid = target.cid;
+      if (!cid) {
+        logger.error('[XHS-Reply] No cid provided');
+        return false;
+      }
+
+      let commentEl = page.locator(`[data-cid="${cid}"]`).first();
+      if (!(await commentEl.isVisible().catch(() => false))) {
+        commentEl = page.locator(`[id*="${cid}"]`).first();
+      }
+      if (!(await commentEl.isVisible().catch(() => false))) {
+        logger.warn({ cid }, '[XHS-Reply] Comment element not found by cid, trying text+username matching');
+        const allComments = page.locator('[class*="comment-item"]');
+        const count = await allComments.count();
+        for (let i = 0; i < count; i++) {
+          const el = allComments.nth(i);
+          const text = await el.innerText().catch(() => '');
+          if (text.includes(target.text?.slice(0, 20) || '') && text.includes(target.username || '')) {
+            commentEl = el;
+            logger.info({ idx: i }, '[XHS-Reply] Found comment by text+username');
+            break;
+          }
+        }
+      }
+
+      if (!(await commentEl.isVisible().catch(() => false))) {
+        logger.error({ cid }, '[XHS-Reply] Comment not found');
+        return false;
+      }
+
+      // Phase 4: 点击回复按钮
+      await commentEl.scrollIntoViewIfNeeded();
+      await HumanActions.wait(page, 500, 1000);
+
+      let replyClicked = false;
+      const replyBtn = commentEl.getByText('回复').first();
+      if (await replyBtn.isVisible().catch(() => false)) {
+        await replyBtn.click();
+        replyClicked = true;
+      } else {
+        const globalReplyBtn = page.getByText('回复', { exact: true }).first();
+        if (await globalReplyBtn.isVisible().catch(() => false)) {
+          await globalReplyBtn.click();
+          replyClicked = true;
+        }
+      }
+
+      if (!replyClicked) {
+        logger.error({ cid }, '[XHS-Reply] Reply button not found');
+        return false;
+      }
+      await HumanActions.wait(page, 500, 1000);
+
+      // Phase 5: 输入内容并发送
+      let inputFocused = false;
+      const inputEl = page.locator('.bottom-container [contenteditable="true"]').first();
+      if (await inputEl.isVisible().catch(() => false)) {
+        await inputEl.click();
+        await HumanActions.wait(page, 200, 500);
+        await HumanActions.safeCDPType(page, replyText);
+        await HumanActions.wait(page, 500, 1200);
+        inputFocused = true;
+      } else {
+        const fallbackInput = page.locator('[contenteditable="true"]').first();
+        if (await fallbackInput.isVisible().catch(() => false)) {
+          await fallbackInput.click();
+          await HumanActions.wait(page, 200, 500);
+          await HumanActions.safeCDPType(page, replyText);
+          await HumanActions.wait(page, 500, 1200);
+          inputFocused = true;
+        }
+      }
+
+      if (!inputFocused) {
+        logger.error('[XHS-Reply] No reply input found');
+        return false;
+      }
+
+      // 发送：优先找"发送"按钮，回退 Enter 键
+      const sendBtn = page.getByText('发送', { exact: true }).first();
+      if (await sendBtn.isVisible().catch(() => false)) {
+        await sendBtn.click();
+        await HumanActions.wait(page, 1000, 2000);
+        logger.info({ cid: target.cid, text: replyText }, '[XHS-Reply] Reply sent');
+      } else {
+        await page.keyboard.press('Enter');
+        await HumanActions.wait(page, 1000, 2000);
+        logger.info({ cid: target.cid }, '[XHS-Reply] Reply sent via Enter key');
+      }
+      return true;
+    } catch (err: any) {
+      logger.error({ cid: target.cid, error: err.message }, '[XHS-Reply] Reply failed');
+      return false;
+    }
+  }
 }
