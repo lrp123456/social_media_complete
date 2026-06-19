@@ -8,6 +8,7 @@ import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
+import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import fs from 'fs';
 import path from 'path';
 
@@ -104,6 +105,7 @@ const RISK_CONTROL_URLS = ['/login', '/passport', '/verify', '/captcha'];
 export interface CommentQueueItem {
   awemeId: string;
   description: string;
+  createTime: number;
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;  // true = 新视频首次采集（全量展开+建快照）
@@ -142,6 +144,7 @@ export class DouyinCrawler {
   private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
   private page?: Page;
+  private awemeIdToPlayCount: Map<string, number> = new Map();
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -333,6 +336,7 @@ export class DouyinCrawler {
     // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToPlayCount = new Map<string, number>();
     for (const resp of rawResponses) {
       const body = (resp as any)?.body;
       if (!body || typeof body !== 'object') continue;
@@ -356,6 +360,11 @@ export class DouyinCrawler {
             nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
           });
         }
+        // 提取 play_count 用于私密过滤（parseVideoItem 会剥离 statistics 字段）
+        const playCount = raw.statistics?.play_count ?? raw.stat?.play_count ?? raw.play_count;
+        if (id && playCount !== undefined) {
+          awemeIdToPlayCount.set(String(id), Number(playCount));
+        }
       }
     }
     logger.info(
@@ -372,17 +381,29 @@ export class DouyinCrawler {
       };
     });
 
+    // 私密视频过滤：play_count === 0 视为私密
+    const filtered = sliced.filter((item: any) => {
+      const playCount = awemeIdToPlayCount.get(String(item.aweme_id));
+      if (playCount === 0) {
+        logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤私密视频（play_count=0）');
+        return false;
+      }
+      return true; // playCount 为 undefined 时视为公开（字段缺失不等于私密）
+    });
+
     logger.info({
       source,
       step: 'FETCH_COMPLETE',
       totalCollected: allItems.length,
       totalResponses: this.interceptor.getResponseCount(pattern),
-      finalCount: sliced.length,
+      finalCount: filtered.length,
+      privateFiltered: sliced.length - filtered.length,
       maxMonitor: this.maxMonitorVideos,
-      awemeIds: sliced.map(i => i.aweme_id),
+      awemeIds: filtered.map(i => i.aweme_id),
     }, 'Video list fetch completed');
 
-    return sliced;
+    this.awemeIdToPlayCount = awemeIdToPlayCount;
+    return filtered;
   }
 
   private async scrollToLoadMoreWithDualStop(page: Page, pattern: string): Promise<void> {
@@ -1213,11 +1234,36 @@ export class DouyinCrawler {
 
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
+    // 动态剔除：已入库视频变为私密（play_count=0）时从数据库删除
+    const awemeIdToPlayCount = this.awemeIdToPlayCount;
+    for (const dbVideo of dbVideos) {
+      const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
+      if (!freshItem) {
+        const playCount = awemeIdToPlayCount.get(dbVideo.id);
+        if (playCount === 0) {
+          logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为私密，剔除');
+          await prisma.video.delete({ where: { id: dbVideo.id } });
+        }
+      }
+    }
+
     const commentsQueue: CommentQueueItem[] = [];
 
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库（窗口登录态混淆等）
+        // 此时不应重复爬取和通知，直接跳过
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新视频首次入库：如果有评论，入队获取（ID归一化已修复跨源重复）
         if (video.comment_count > 0) {
           logger.info({
@@ -1228,6 +1274,7 @@ export class DouyinCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: 0,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1258,6 +1305,7 @@ export class DouyinCrawler {
         commentsQueue.push({
           awemeId: video.aweme_id,
           description: video.description,
+          createTime: video.create_time,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
           isFirstCrawl: false,
@@ -1274,6 +1322,7 @@ export class DouyinCrawler {
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
+            createTime: video.create_time,
             oldCount: dbVideo.commentCount,
             newCount: video.comment_count,
             isFirstCrawl: true,
@@ -1516,7 +1565,7 @@ export class DouyinCrawler {
           }
 
           const clickT0 = Date.now();
-          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer video click completed');
           if (!clicked) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in drawer — manually closing and skipping');
@@ -1787,6 +1836,38 @@ export class DouyinCrawler {
           }
 
           logger.info({ awemeId: item.awemeId, groupCount: firstCrawlGroups.length, totalComments: allFlat.length }, '[Tree] First crawl: built %d commentGroups for summary notification', firstCrawlGroups.length);
+
+          // 通知去重：检查评论是否已存在于 DB（可能被其他用户首次爬取过）
+          // 如果某个 group 的所有评论都已存在，则该 group 不需要发通知
+          if (firstCrawlGroups.length > 0) {
+            const allCids = firstCrawlGroups.flatMap(g => g.newInGroup.map(n => n.cid));
+            if (allCids.length > 0) {
+              const existingCids = new Set(
+                (await prisma.comment.findMany({
+                  where: { cid: { in: allCids } },
+                  select: { cid: true },
+                })).map(c => c.cid)
+              );
+
+              const originalCount = firstCrawlGroups.length;
+              for (let i = firstCrawlGroups.length - 1; i >= 0; i--) {
+                const g = firstCrawlGroups[i];
+                const hasNewComment = g.newInGroup.some(n => !existingCids.has(n.cid));
+                if (!hasNewComment) {
+                  firstCrawlGroups.splice(i, 1);
+                }
+              }
+
+              if (firstCrawlGroups.length < originalCount) {
+                logger.info({
+                  awemeId: item.awemeId,
+                  originalGroups: originalCount,
+                  filteredGroups: firstCrawlGroups.length,
+                  existingCidCount: existingCids.size,
+                }, '[Tree] First crawl: filtered groups where all comments already exist in DB (cross-user dedup)');
+              }
+            }
+          }
 
           results.push({ awemeId: item.awemeId, success: true, comments: [], commentGroups: firstCrawlGroups } as any);
         } else {
@@ -2295,72 +2376,76 @@ export class DouyinCrawler {
   private async findAndClickVideoInDrawer(
     page: Page,
     awemeId: string,
-    description: string
+    description: string,
+    createTime: number,
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS_DRAWER = 25;
-    const descLower = description.toLowerCase();
-    const descPrefix = descLower.substring(0, Math.min(descLower.length, 25));
+    const TIMESTAMP_TOLERANCE = 60; // 秒
 
-    logger.info({ awemeId, descPrefix }, '[Drawer] Searching for target video in drawer');
+    logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
 
-    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS_DRAWER; scrollAttempt++) {
+    // 检查"没有更多视频"标记（避免无意义滚动）
+    const noMoreVideo = await page.evaluate(() => {
+      const els = document.querySelectorAll('[class*="loading"]');
+      for (const el of els) {
+        if (el.textContent?.includes('没有更多视频')) return true;
+      }
+      return false;
+    }).catch(() => false);
+
+    if (noMoreVideo) {
+      logger.info('[Drawer] 抽屉已无更多视频，跳过滚动');
+    }
+
+    const maxScrolls = noMoreVideo ? 0 : MAX_SCROLL_ATTEMPTS_DRAWER;
+
+    for (let scrollAttempt = 0; scrollAttempt <= maxScrolls; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
       const containerSelector = getSelector('drawer.video-item').css || '[class*="douyin-creator-interactive-list-items"] > div';
       const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
       if (!containerElements || containerElements.length === 0) {
-        logger.info({ scrollAttempt }, '[Drawer] No video containers found in current viewport');
-        if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-          await this.scrollDrawerForMore(page, scrollAttempt);
-        }
+        if (scrollAttempt < maxScrolls) await this.scrollDrawerForMore(page, scrollAttempt);
         continue;
       }
 
       logger.info({ count: containerElements.length, scrollAttempt }, '[Drawer] Found video containers');
 
-      let matchedContainer: { nodeId: number; text: string } | null = null;
-      let matchType = '';
-
       for (const container of containerElements) {
         const containerText = container.text || '';
-        const matchedExact = containerText.includes(descLower);
-        const matchedPartial = containerText.includes(descPrefix);
-        const matchedReverse = descLower.length > 5 && containerText.length > 5 && descLower.includes(containerText.substring(0, Math.min(containerText.length, 25)));
 
-        if (matchedExact || matchedPartial || matchedReverse) {
-          matchedContainer = { nodeId: container.nodeId, text: containerText };
-          matchType = matchedExact ? 'exact' : matchedPartial ? 'partial' : 'reverse';
-          break;
+        // 1. 提取 DOM 时间戳
+        const domTimestamp = parseDomTimestamp(containerText, 'douyin');
+        if (domTimestamp === null) continue; // 时间解析失败，跳过
+
+        // 2. 时间差判断
+        if (!isTimestampMatch(domTimestamp, createTime, TIMESTAMP_TOLERANCE)) continue;
+
+        // 3. 时间匹配后，检查 description 前缀
+        if (!isDescriptionMatch(containerText, description)) continue;
+
+        // 4. 双重确认通过，点击
+        const clicked = await HumanActions.cdpClickNode(page, container.nodeId);
+        if (clicked) {
+          logger.info({ awemeId, domTimestamp, createTime, timeDiff: Math.abs(domTimestamp - createTime), matchType: 'timestamp+description' }, '[Drawer] 匹配成功（时间戳+描述双重确认）');
+          return true;
         }
+
+        // 点击失败，尝试重新查询
+        const reClicked = await this.tryClickMatchedContainer(page, description.toLowerCase(), description.toLowerCase().substring(0, 25));
+        if (reClicked) return true;
+
+        logger.warn({ awemeId }, '[Drawer] Match found but click failed — giving up');
+        return false;
       }
 
-      if (!matchedContainer) {
-        logger.info({ scrollAttempt, containerCount: containerElements.length }, '[Drawer] No match in current containers, scrolling for more');
-        if (scrollAttempt < MAX_SCROLL_ATTEMPTS_DRAWER) {
-          await this.scrollDrawerForMore(page, scrollAttempt);
-        }
-        continue;
+      if (scrollAttempt < maxScrolls) {
+        logger.info({ scrollAttempt, containerCount: containerElements.length }, '[Drawer] 未匹配，滚动加载更多');
+        await this.scrollDrawerForMore(page, scrollAttempt);
       }
-
-      logger.info({ awemeId, matchType, text: matchedContainer.text.substring(0, 50) }, '[Drawer] Found matching video — stopping scroll, attempting click');
-
-      const clicked = await HumanActions.cdpClickNode(page, matchedContainer.nodeId);
-      if (clicked) {
-        logger.info('[Drawer] Successfully clicked video via cdpClickNode');
-        return true;
-      }
-
-      logger.info('[Drawer] Direct cdpClickNode failed, trying re-query + click');
-      await HumanActions.wait(page, 500, 1000);
-
-      const reClicked = await this.tryClickMatchedContainer(page, descLower, descPrefix);
-      if (reClicked) return true;
-
-      logger.warn({ awemeId }, '[Drawer] Match found but click failed after scrollIntoView + re-query — giving up on this video to avoid flicker');
-      return false;
     }
 
-    logger.warn({ awemeId, descPrefix, maxScrolls: MAX_SCROLL_ATTEMPTS_DRAWER }, '[Drawer] Video not found after exhaustive search');
+    logger.warn({ awemeId, maxScrolls }, '[Drawer] 滚动穷尽仍未匹配');
     return false;
   }
 

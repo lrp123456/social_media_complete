@@ -171,6 +171,127 @@ router.put('/selectors/flow-rules', (req: Request, res: Response) => {
 });
 
 /** PUT — 新增或更新选择器 (deprecated: use PUT /selectors/:platform/:categoryKey instead) */
+
+// ============================================================
+// URL 监控配置 — CRUD 路由 (v2.4+)
+// ============================================================
+
+/** GET /api/v1/config-automation/selectors/url-monitors — 获取所有平台的 URL 监控配置 */
+router.get('/selectors/url-monitors', (_req: Request, res: Response) => {
+  try {
+    const reader = getSelectorReader();
+    const config = reader.getConfig();
+    const result: Record<string, { urlMonitors: any; updatedAt: string }> = {};
+    for (const [pName, pSelectors] of Object.entries(config.platforms)) {
+      result[pName] = {
+        urlMonitors: (pSelectors as any).urlMonitors || {},
+        updatedAt: config.updatedAt,
+      };
+    }
+    res.json({ success: true, data: result });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** PUT /api/v1/config-automation/selectors/url-monitors — 整体替换指定平台的 URL 监控配置
+ *  Body: { platform: string, urlMonitors: Record<string, UrlMonitorEntry> | null, reset?: boolean }
+ */
+router.put('/selectors/url-monitors', (req: Request, res: Response) => {
+  try {
+    const { platform, urlMonitors, reset } = req.body ?? {};
+    if (!platform || typeof platform !== 'string') {
+      return res.status(400).json({ success: false, error: '缺少必填字段: platform (string)' });
+    }
+    const reader = getSelectorReader();
+    const platformData = reader.getPlatform(platform);
+    if (!platformData) {
+      return res.status(404).json({ success: false, error: `平台不存在: ${platform}` });
+    }
+    let payload: any = null;
+    if (reset === true) {
+      payload = null;
+    } else {
+      if (!urlMonitors || typeof urlMonitors !== 'object') {
+        return res.status(400).json({ success: false, error: '缺少必填字段: urlMonitors (object)' });
+      }
+      payload = urlMonitors;
+    }
+    const ok = reader.setUrlMonitors(platform, payload);
+    if (!ok) return res.status(500).json({ success: false, error: 'setUrlMonitors 失败' });
+    saveSelectorConfig();
+    res.json({
+      success: true,
+      message: payload === null
+        ? `已重置 ${platform} 的 URL 监控配置`
+        : `已更新 ${platform} 的 URL 监控配置 (${Object.keys(payload).length} 条)`,
+      data: { platform, urlMonitors: payload, updatedAt: reader.getConfig().updatedAt },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** PUT /api/v1/config-automation/selectors/url-monitors/:platform/:name — 新增或更新单条 URL 监控
+ *  Body: { entry: UrlMonitorEntry }
+ */
+router.put('/selectors/url-monitors/:platform/:name', (req: Request, res: Response) => {
+  try {
+    const platform = param(req.params.platform);
+    const name = param(req.params.name);
+    const { entry } = req.body ?? {};
+    if (!entry || typeof entry !== 'object') {
+      return res.status(400).json({ success: false, error: '缺少必填字段: entry (object)' });
+    }
+    // 基本校验
+    if (!Array.isArray(entry.urlPatterns) || entry.urlPatterns.length === 0) {
+      return res.status(400).json({ success: false, error: 'entry.urlPatterns 必须为非空数组' });
+    }
+    if (!entry.method || !['GET', 'POST'].includes(entry.method)) {
+      return res.status(400).json({ success: false, error: 'entry.method 必须为 GET 或 POST' });
+    }
+    if (!entry.extraction || typeof entry.extraction !== 'object' || !entry.extraction.itemsPath || !entry.extraction.idField) {
+      return res.status(400).json({ success: false, error: 'entry.extraction 必须包含 itemsPath 和 idField' });
+    }
+    const reader = getSelectorReader();
+    // 确保平台存在
+    if (!reader.getPlatform(platform)) {
+      return res.status(404).json({ success: false, error: `平台不存在: ${platform}` });
+    }
+    reader.upsertUrlMonitor(platform, name, entry);
+    saveSelectorConfig();
+    res.json({
+      success: true,
+      message: `URL 监控已更新: ${platform}/${name}`,
+      data: { platform, name, entry },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** DELETE /api/v1/config-automation/selectors/url-monitors/:platform/:name — 删除单条 URL 监控 */
+router.delete('/selectors/url-monitors/:platform/:name', (req: Request, res: Response) => {
+  try {
+    const platform = param(req.params.platform);
+    const name = param(req.params.name);
+    const reader = getSelectorReader();
+    const ok = reader.deleteUrlMonitor(platform, name);
+    if (!ok) {
+      return res.status(404).json({ success: false, error: `URL 监控不存在: ${platform}/${name}` });
+    }
+    saveSelectorConfig();
+    res.json({
+      success: true,
+      message: `URL 监控已删除: ${platform}/${name}`,
+      data: { platform, name },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/** PUT — 新增或更新选择器 (deprecated: use PUT /selectors/:platform/:categoryKey instead) */
 router.put('/selectors', (req: Request, res: Response) => {
   res.set('X-Deprecated', 'true');
   res.set('X-Successor', 'PUT /selectors/:platform/:categoryKey');
@@ -353,6 +474,200 @@ router.delete('/selectors/:platform/:categoryKey', (req: Request, res: Response)
 // ============================================================
 // 选择器有效性追踪
 // ============================================================
+
+// ============================================================
+// 大框架容器 CRUD (v2.5+)
+// ============================================================
+
+router.get('/frameworks/:platform', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const frameworks = (config.platforms as any)?.[platform]?.frameworks || {};
+  res.json({ platform, frameworks });
+});
+
+router.put('/frameworks/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const { label, selector, description } = req.body || {};
+  if (!selector) {
+    res.status(400).json({ error: 'selector is required' });
+    return;
+  }
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (!config.platforms[platform]) config.platforms[platform] = {};
+  if (!config.platforms[platform].frameworks) config.platforms[platform].frameworks = {};
+  config.platforms[platform].frameworks[key] = { label: label || key, selector, description: description || '' };
+  saveSelectorConfig(config);
+  res.json({ ok: true, platform, key, entry: config.platforms[platform].frameworks[key] });
+});
+
+router.delete('/frameworks/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (config.platforms[platform]?.frameworks?.[key]) {
+    delete config.platforms[platform].frameworks[key];
+    saveSelectorConfig(config);
+  }
+  res.json({ ok: true });
+});
+
+// ============================================================
+// API Patterns CRUD (v2.5+)
+// ============================================================
+
+router.get('/api-patterns/:platform', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const apiPatterns = (config.platforms as any)?.[platform]?.apiPatterns || {};
+  res.json({ platform, apiPatterns });
+});
+
+router.put('/api-patterns/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const entry = req.body || {};
+  if (!entry.pattern) {
+    res.status(400).json({ error: 'pattern is required' });
+    return;
+  }
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (!config.platforms[platform]) config.platforms[platform] = {};
+  if (!config.platforms[platform].apiPatterns) config.platforms[platform].apiPatterns = {};
+  config.platforms[platform].apiPatterns[key] = entry;
+  saveSelectorConfig(config);
+  res.json({ ok: true, platform, key, entry });
+});
+
+router.delete('/api-patterns/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (config.platforms[platform]?.apiPatterns?.[key]) {
+    delete config.platforms[platform].apiPatterns[key];
+    saveSelectorConfig(config);
+  }
+  res.json({ ok: true });
+});
+
+// ============================================================
+// Data Sources CRUD (v2.5+)
+// ============================================================
+
+router.get('/data-sources/:platform', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const dataSources = (config.platforms as any)?.[platform]?.dataSources || {};
+  res.json({ platform, dataSources });
+});
+
+router.put('/data-sources/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const entry = req.body || {};
+  if (!entry.pageUrl || !entry.apiPatternKey) {
+    res.status(400).json({ error: 'pageUrl and apiPatternKey are required' });
+    return;
+  }
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (!config.platforms[platform]) config.platforms[platform] = {};
+  if (!config.platforms[platform].dataSources) config.platforms[platform].dataSources = {};
+  config.platforms[platform].dataSources[key] = entry;
+  saveSelectorConfig(config);
+  res.json({ ok: true, platform, key, entry });
+});
+
+router.delete('/data-sources/:platform/:key', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const key = param(req.params.key);
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (config.platforms[platform]?.dataSources?.[key]) {
+    delete config.platforms[platform].dataSources[key];
+    saveSelectorConfig(config);
+  }
+  res.json({ ok: true });
+});
+
+// ============================================================
+// Navigation Flows CRUD (v2.5+)
+// ============================================================
+
+router.get('/navigation-flows/:platform', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const reader = getSelectorReader();
+  const config = reader.getConfig();
+  const flows = (config.platforms as any)?.[platform]?.navigationFlows || {};
+  res.json({ platform, navigationFlows: flows });
+});
+
+router.put('/navigation-flows/:platform/:flowName', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const flowName = param(req.params.flowName);
+  const entry = req.body || {};
+  if (!entry.label || !Array.isArray(entry.steps)) {
+    res.status(400).json({ error: 'label and steps[] are required' });
+    return;
+  }
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (!config.platforms[platform]) config.platforms[platform] = {};
+  if (!config.platforms[platform].navigationFlows) config.platforms[platform].navigationFlows = {};
+  config.platforms[platform].navigationFlows[flowName] = entry;
+  saveSelectorConfig(config);
+  res.json({ ok: true, platform, flowName, entry });
+});
+
+router.delete('/navigation-flows/:platform/:flowName', (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const flowName = param(req.params.flowName);
+  const reader = getSelectorReader();
+  const config = JSON.parse(JSON.stringify(reader.getConfig())) as any;
+  if (config.platforms[platform]?.navigationFlows?.[flowName]) {
+    delete config.platforms[platform].navigationFlows[flowName];
+    saveSelectorConfig(config);
+  }
+  res.json({ ok: true });
+});
+
+router.get('/navigation-flows/:platform/:flowName/last-run', async (req: Request, res: Response) => {
+  const platform = param(req.params.platform);
+  const flowName = param(req.params.flowName);
+  try {
+    const { prisma } = await import('../lib/prisma');
+    const execution = await prisma.taskExecution.findFirst({
+      where: { platform, taskType: 'monitor' },
+      orderBy: { startedAt: 'desc' },
+      include: { steps: { orderBy: { stepIndex: 'asc' } } },
+      take: 1,
+    });
+    if (!execution) {
+      res.json({ platform, flowName, steps: [] });
+      return;
+    }
+    const steps = execution.steps.map(s => ({
+      stepIndex: s.stepIndex,
+      label: s.label,
+      status: s.status,
+      durationMs: s.durationMs,
+      selectorTries: s.selectorTries as any,
+      mouseAction: s.mouseAction,
+      extra: s.extra as any,
+    }));
+    res.json({ platform, flowName, executionId: execution.id, steps });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /** GET /api/v1/config-automation/selectors/full — 获取完整嵌套配置 */
 router.get('/selectors/full', (_req: Request, res: Response) => {

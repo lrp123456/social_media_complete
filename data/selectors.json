@@ -1061,6 +1061,96 @@
           "selectorType": "css",
           "description": "SMS验证码输入框"
         }
+      },
+      "apiPatterns": {
+        "video_list.work_list": {
+          "pattern": "/work_list",
+          "description": "内容管理-作品管理API"
+        },
+        "video_list.item_list": {
+          "pattern": "/item/list",
+          "description": "数据中心-投稿列表API"
+        },
+        "comment_list": {
+          "pattern": "/aweme/v1/web/comment/list/select",
+          "description": "评论列表API"
+        },
+        "comment_reply": {
+          "pattern": "/aweme/v1/web/comment/list/reply",
+          "description": "评论回复API"
+        }
+      },
+      "dataSources": {
+        "work_list": {
+          "label": "内容管理-作品管理",
+          "pageUrl": "https://creator.douyin.com/creator-micro/content/manage",
+          "apiPatternKey": "video_list.work_list",
+          "pagination": {
+            "type": "scroll",
+            "maxScrolls": 50
+          },
+          "privateFilter": {
+            "enabled": true,
+            "field": "statistics.play_count",
+            "condition": "=== 0",
+            "dynamicRemove": true
+          },
+          "responseArrayPath": [
+            "items",
+            "video_list",
+            "aweme_list",
+            "data.items",
+            "data.list"
+          ],
+          "hasMoreField": "has_more",
+          "cursorField": "cursor"
+        },
+        "item_list": {
+          "label": "数据中心-投稿列表",
+          "pageUrl": "https://creator.douyin.com/creator-micro/data-center/content",
+          "apiPatternKey": "video_list.item_list",
+          "pagination": {
+            "type": "scroll",
+            "maxScrolls": 50
+          },
+          "privateFilter": {
+            "enabled": true,
+            "field": "statistics.play_count",
+            "condition": "=== 0",
+            "dynamicRemove": true
+          },
+          "responseArrayPath": [
+            "items",
+            "video_list",
+            "aweme_list",
+            "data.items",
+            "data.list"
+          ],
+          "hasMoreField": "has_more",
+          "cursorField": "cursor"
+        }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": "#douyin-creator-master",
+          "description": "抖音创作者中心左侧导航菜单"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".douyin-creator-master-content",
+          "description": "右侧主内容区域"
+        },
+        "drawer": {
+          "label": "选择作品抽屉",
+          "selector": ".douyin-creator-interactive-sidesheet",
+          "description": "评论管理页面弹出选择视频抽屉"
+        },
+        "comment_area": {
+          "label": "评论区",
+          "selector": ".douyin-creator-interactive-tabs-content",
+          "description": "评论列表滚动容器"
+        }
       }
     },
     "kuaishou": {
@@ -1968,6 +2058,85 @@
           "selectorType": "role",
           "description": "快手标题输入框"
         }
+      },
+      "apiPatterns": {
+        "video_list.work_list": {
+          "pattern": "/rest/cp/works/v2/video/pc/photo/list",
+          "description": "内容管理-作品管理API"
+        },
+        "video_list.photo_analysis": {
+          "pattern": "/rest/cp/creator/analysis/pc/photo/list",
+          "description": "数据中心-作品分析API"
+        },
+        "comment_list": {
+          "pattern": "/rest/cp/creator/comment/commentList",
+          "description": "评论列表API"
+        },
+        "comment_reply": {
+          "pattern": "/rest/cp/creator/comment/subCommentList",
+          "description": "评论回复API"
+        },
+        "comment_home": {
+          "pattern": "/rest/cp/creator/comment/home",
+          "description": "评论首页API"
+        }
+      },
+      "dataSources": {
+        "work_list": {
+          "label": "内容管理-作品管理",
+          "pageUrl": "https://cp.kuaishou.com/article/manage/video",
+          "apiPatternKey": "video_list.work_list",
+          "pagination": {
+            "type": "scroll",
+            "maxScrolls": 50
+          },
+          "privateFilter": {
+            "enabled": true,
+            "field": "photoStatus",
+            "condition": "!== undefined && !== 0"
+          },
+          "responseArrayPath": [
+            "data.list",
+            "data.photoList.photoItems"
+          ],
+          "hasMoreField": "has_more",
+          "cursorField": "cursor"
+        },
+        "photo_analysis": {
+          "label": "数据中心-作品分析",
+          "pageUrl": "https://cp.kuaishou.com/rest/cp/creator/analysis/pc/photo",
+          "apiPatternKey": "video_list.photo_analysis",
+          "pagination": {
+            "type": "page",
+            "maxPages": 20,
+            "nextPageBtnSelector": "page.next-page-btn"
+          },
+          "privateFilter": {
+            "enabled": false,
+            "description": "作品分析源天然无私密"
+          },
+          "responseArrayPath": [
+            "data.analysisList"
+          ],
+          "hasMoreField": "has_more"
+        }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".side-nav",
+          "description": "快手创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".main-content",
+          "description": "右侧主内容区域"
+        },
+        "drawer": {
+          "label": "选择视频抽屉",
+          "selector": ".el-drawer",
+          "description": "评论管理页面弹出选择视频抽屉"
+        }
       }
     },
     "xiaohongshu": {
@@ -2470,6 +2639,60 @@
           "selectorType": "placeholder",
           "description": "小红书话题标签输入框"
         }
+      },
+      "apiPatterns": {
+        "note_list": {
+          "pattern": "/api/galaxy/v2/creator/note/user/posted",
+          "description": "笔记管理API"
+        },
+        "comment_page": {
+          "pattern": "/api/sns/web/v2/comment/page",
+          "description": "评论分页API"
+        },
+        "comment_sub_page": {
+          "pattern": "/api/sns/web/v2/comment/sub/page",
+          "description": "子评论分页API"
+        }
+      },
+      "dataSources": {
+        "note_list": {
+          "label": "笔记管理",
+          "pageUrl": "https://creator.xiaohongshu.com/new/note-manager",
+          "apiPatternKey": "note_list",
+          "pagination": {
+            "type": "scroll",
+            "maxScrolls": 50
+          },
+          "privateFilter": {
+            "enabled": true,
+            "field": "permission_code",
+            "condition": "!== 0"
+          },
+          "responseArrayPath": [
+            "data.notes",
+            "data.note_infos",
+            "data.note_list"
+          ],
+          "hasMoreField": "data.page",
+          "hasMoreCondition": "=== -1"
+        }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".creator-sidebar",
+          "description": "小红书创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".creator-content",
+          "description": "右侧主内容区域"
+        },
+        "note_list": {
+          "label": "笔记列表",
+          "selector": ".note-list",
+          "description": "笔记管理页面笔记卡片列表"
+        }
       }
     },
     "tencent": {
@@ -2773,7 +2996,57 @@
           "selectorType": "css"
         }
       },
-      "textboxes": {}
+      "textboxes": {},
+      "apiPatterns": {
+        "post_list": {
+          "pattern": "/mmfinderassistant-bin/post/post_list",
+          "description": "内容管理-视频API"
+        },
+        "comment_list": {
+          "pattern": "/mmfinderassistant-bin/comment/comment_list",
+          "description": "评论列表API"
+        }
+      },
+      "dataSources": {
+        "post_list": {
+          "label": "内容管理-视频",
+          "pageUrl": "https://channels.weixin.qq.com/micro/content/post/list",
+          "apiPatternKey": "post_list",
+          "pagination": {
+            "type": "page",
+            "maxPages": 20,
+            "nextPageBtnCss": "#container-wrap > div.container-center > div > div.main-body-wrap > div.main-body > div.weui-desktop-block.main-card > div > div > div > div:nth-child(2) > div.list-wrapper > div.footer.post-list-footer > div > span.weui-desktop-pagination__nav > a",
+            "nextPageBtnText": "下一页"
+          },
+          "privateFilter": {
+            "enabled": true,
+            "field": "visibleType",
+            "condition": "!== undefined && !== 1"
+          },
+          "responseArrayPath": [
+            "data.list"
+          ],
+          "hasMoreField": "data.downContinueFlag",
+          "hasMoreCondition": "=== 1"
+        }
+      },
+      "frameworks": {
+        "sidebar": {
+          "label": "侧边栏菜单",
+          "selector": ".weui-desktop-nav",
+          "description": "视频号创作者中心左侧导航"
+        },
+        "main_content": {
+          "label": "主内容区域",
+          "selector": ".weui-desktop-block",
+          "description": "右侧主内容区域"
+        },
+        "video_list": {
+          "label": "视频列表",
+          "selector": ".feeds-container",
+          "description": "评论管理页面侧边视频列表（shadow DOM）"
+        }
+      }
     }
   }
 }

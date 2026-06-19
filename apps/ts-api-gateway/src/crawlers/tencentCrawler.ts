@@ -4,6 +4,7 @@ import * as db from '../services/monitorDatabaseService';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
+import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getSelectorReader } from '../lib/selectorStore';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
@@ -57,6 +58,7 @@ export type TencentCommentInfo = {
 export interface CommentQueueItem {
   exportId: string;
   description: string;
+  createTime: number;
   oldCount: number;
   newCount: number;
   isFirstCrawl: boolean;
@@ -440,8 +442,8 @@ export class TencentCrawler {
           await frame.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
           await page.waitForTimeout(1500);
 
-          // ── 1a. 点击刷新二维码（每次截取前都刷新）──
-          await this.clickQRRefresh(frame, page);
+          // ── 1a. 仅在二维码过期时点击刷新（避免无条件刷新导致二维码进入异常状态）──
+          await this.clickQRRefreshIfNeeded(frame, page);
 
           // ── 1b. 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
           const qrInfo = await frame.evaluate(() => {
@@ -552,10 +554,25 @@ export class TencentCrawler {
   }
 
   /**
-   * 点击刷新二维码 — 在 iframe 内部查找刷新按钮并点击
+   * 仅在二维码过期时点击刷新 — 避免无条件刷新导致二维码进入异常状态
+   * 检查 iframe 内是否显示"已过期"/"已失效"/"刷新"等文字，只有检测到过期才点击刷新
    */
-  private async clickQRRefresh(frame: any, page: Page): Promise<void> {
+  private async clickQRRefreshIfNeeded(frame: any, page: Page): Promise<void> {
     try {
+      // 先检查二维码是否已过期（通过 iframe 内的文字判断）
+      const isExpired = await frame.evaluate(() => {
+        const bodyText = document.body?.innerText || '';
+        return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+          || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
+      }).catch(() => false);
+
+      if (!isExpired) {
+        logger.info('[Login] QR code not expired, skipping refresh');
+        return;
+      }
+
+      logger.info('[Login] QR code expired, clicking refresh');
+
       // 方式1: 查找刷新按钮（常见 class/text）
       const refreshSelectors = [
         '.qrcode-refresh-btn',
@@ -568,7 +585,8 @@ export class TencentCrawler {
         const btn = await frame.$(sel).catch(() => null);
         if (btn) {
           await btn.click().catch(() => {});
-          await page.waitForTimeout(2000);
+          // 等待刷新完成（新二维码加载）
+          await page.waitForTimeout(3000);
           logger.info({ selector: sel }, '[Login] QR refresh button clicked');
           return;
         }
@@ -579,7 +597,7 @@ export class TencentCrawler {
         const els = document.querySelectorAll('a, button, span, div, p');
         for (const el of els) {
           const text = el.textContent?.trim() || '';
-          if (text.includes('刷新') || text.includes('重新生成') || text.includes('点击刷新') || text.includes('重新获取')) {
+          if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
             (el as HTMLElement).click();
             return true;
           }
@@ -587,7 +605,7 @@ export class TencentCrawler {
         return false;
       }).catch(() => false);
       if (refreshed) {
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[Login] QR refreshed via text click');
         return;
       }
@@ -596,7 +614,7 @@ export class TencentCrawler {
       const qrEl = await frame.$('img[src*="qr"], img[src*="qrcode"], canvas, [class*="qr"] img').catch(() => null);
       if (qrEl) {
         await qrEl.click().catch(() => {});
-        await page.waitForTimeout(2000);
+        await page.waitForTimeout(3000);
         logger.info('[Login] QR area clicked for refresh');
       }
     } catch {}
@@ -843,6 +861,20 @@ export class TencentCrawler {
 
     // 对比数据库中的评论数
     const dbVideos = await db.getVideosByUserId(userId);
+
+    // 动态剔除：已入库视频变为非公开时从数据库删除
+    for (const dbVideo of dbVideos) {
+      const freshVideo = videos.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
+      if (!freshVideo) {
+        // 视频不在新列表中，可能已删除或变为私密
+        continue;
+      }
+      if (freshVideo.visibleType !== undefined && freshVideo.visibleType !== 1) {
+        logger.info({ exportId: freshVideo.exportId, visibleType: freshVideo.visibleType }, '[Phase1] 已入库视频变为非公开，剔除');
+        await prisma.video.delete({ where: { id: dbVideo.id } });
+      }
+    }
+
     const commentsQueue: CommentQueueItem[] = [];
 
     for (const video of videos.slice(0, this.maxMonitorVideos)) {
@@ -852,15 +884,33 @@ export class TencentCrawler {
         continue;
       }
 
-      const dbVideo = dbVideos.find(v => v.id === video.exportId);
+      // 私密视频过滤：visibleType !== 1 为非公开（必须先检查 undefined，旧数据可能无此字段）
+      if (video.visibleType !== undefined && video.visibleType !== 1) {
+        logger.info({ exportId: video.exportId, visibleType: video.visibleType }, '[Phase1] 过滤非公开视频（visibleType!=1）');
+        continue;
+      }
+
+      const encodedId = video.exportId.replace(/\//g, '_');
+      const dbVideo = dbVideos.find(v => v.id === encodedId);
       const newCount = video.commentCount ?? 0;
 
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.exportId } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.exportId,
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新视频
         if (newCount > 0) {
           commentsQueue.push({
-            exportId: video.exportId,
+            exportId: video.exportId.replace(/\//g, '_'),
             description: video.desc?.description || '',
+            createTime: video.createTime,
             oldCount: 0,
             newCount,
             isFirstCrawl: true,
@@ -872,8 +922,9 @@ export class TencentCrawler {
 
       if (newCount > dbVideo.commentCount) {
         commentsQueue.push({
-          exportId: video.exportId,
+          exportId: video.exportId.replace(/\//g, '_'),
           description: video.desc?.description || '',
+          createTime: video.createTime,
           oldCount: dbVideo.commentCount,
           newCount,
           isFirstCrawl: false,
@@ -884,7 +935,7 @@ export class TencentCrawler {
 
     // 保存视频到数据库
     const videoInfos = videos.slice(0, this.maxMonitorVideos).map(v => ({
-      aweme_id: v.exportId,
+      aweme_id: v.exportId.replace(/\//g, '_'), // URL安全编码，/ → _
       description: v.desc?.description || '',
       create_time: v.createTime,
       comment_count: v.commentCount ?? 0,
@@ -1114,10 +1165,11 @@ export class TencentCrawler {
     page: Page,
     exportId: string,
     videoTitle: string,
+    createTime: number,
     userId: number,
     clearPrevious: boolean = true,
   ): Promise<{ success: boolean; allComments: any[]; error?: string }> {
-    logger.info({ exportId, videoTitle, clearPrevious }, '[Phase3:Collect] Starting comment collection');
+    logger.info({ exportId, videoTitle, createTime, clearPrevious }, '[Phase3:Collect] Starting comment collection');
 
     // 清除之前捕获的评论数据
     if (clearPrevious) {
@@ -1125,7 +1177,7 @@ export class TencentCrawler {
     }
 
     // ── 步骤0: 滚动视频列表找到目标视频（瀑布流可能未加载目标视频）──
-    const videoFound = await this.scrollToFindVideo(page, videoTitle);
+    const videoFound = await this.scrollToFindVideo(page, videoTitle, createTime);
     if (!videoFound) {
       logger.warn({ exportId, videoTitle }, '[Phase3:Collect] Target video not found in scroll list, trying first video');
       await this.clickFirstVideoInCommentPage(page);
@@ -1543,45 +1595,62 @@ export class TencentCrawler {
    *
    * 通过 shadow DOM 直接查询目标视频，未找到时用 scrollShadowContainer
    * 滚动加载更多（鼠标 wheel → IntersectionObserver → API 加载）。
+   *
+   * 使用时间戳 + description 双重匹配提高准确性。
    */
-  private async scrollToFindVideo(page: Page, videoTitle: string): Promise<boolean> {
-    logger.info({ videoTitle }, '[Phase3:Scroll] Scrolling to find video in waterfall list');
-
+  private async scrollToFindVideo(page: Page, videoTitle: string, createTime: number): Promise<boolean> {
     const MAX_SCROLLS = 20;
+    const TIMESTAMP_TOLERANCE = 60;
 
-    for (let i = 0; i < MAX_SCROLLS; i++) {
-      // 在 shadow DOM 中查找目标视频
-      const found = await page.evaluate((title: string) => {
-        const wujieApps = document.querySelectorAll('wujie-app');
-        for (const app of Array.from(wujieApps)) {
-          const sr = (app as HTMLElement).shadowRoot;
-          if (!sr) continue;
-          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-          if (feeds.some(f =>
-            f.querySelector('.feed-title')?.textContent?.trim() === title
-            || f.querySelector('.feed-title')?.textContent?.trim().includes(title.slice(0, 10))
-          )) return true;
+    logger.info({ videoTitle, createTime }, '[Tencent] Searching for target video in sidebar');
+
+    for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLLS; scrollAttempt++) {
+      // 在 shadow DOM 中查找匹配的视频
+      const matchResult = await page.evaluate(({ title, createTimeNum, tolerance }: { title: string; createTimeNum: number; tolerance: number }) => {
+        const app = document.querySelector('wujie-app');
+        if (!app?.shadowRoot) return { found: false, reason: 'no shadow root' };
+
+        const wraps = app.shadowRoot.querySelectorAll('.comment-feed-wrap');
+        for (const wrap of wraps) {
+          const titleEl = wrap.querySelector('.feed-title');
+          const timeEl = wrap.querySelector('.feed-time');
+          const titleText = titleEl?.textContent?.trim() || '';
+          const timeText = timeEl?.textContent?.trim() || '';
+          const fullText = titleText + ' ' + timeText;
+
+          // 解析时间（视频号格式：2026/06/13 13:58）
+          const dateMatch = timeText.match(/(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
+          if (!dateMatch) continue;
+          const [, y, m, d, h, min] = dateMatch;
+          const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:00+08:00`).getTime() / 1000);
+
+          // 时间差判断
+          if (Math.abs(domTimestamp - createTimeNum) > tolerance) continue;
+
+          // description 前缀匹配
+          const descPrefix = title.toLowerCase().substring(0, 10);
+          if (descPrefix.length > 0 && !fullText.toLowerCase().includes(descPrefix)) continue;
+
+          // 匹配成功，点击
+          (wrap as HTMLElement).click();
+          return { found: true, domTimestamp, title: titleText.substring(0, 50) };
         }
-        return false;
-      }, videoTitle);
+        return { found: false };
+      }, { title: videoTitle, createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
 
-      if (found) {
-        logger.info({ videoTitle, scrolls: i }, '[Phase3:Scroll] Video found');
+      if (matchResult.found) {
+        logger.info({ videoTitle, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Tencent] 匹配成功');
         return true;
       }
 
-      // 未找到，用鼠标滚轮滚动视频列表容器加载更多
-      // 使用 scrollShadowContainer 确保 wheel 事件精准发送到 shadow DOM 容器
-      const scrolled = await this.scrollShadowContainer(page, '.feeds-container', 500, 4);
-      if (!scrolled) {
-        logger.warn({ videoTitle }, '[Phase3:Scroll] Cannot access scroll container, giving up');
-        break;
+      // 未匹配，滚动加载更多
+      if (scrollAttempt < MAX_SCROLLS) {
+        logger.info({ scrollAttempt }, '[Tencent] 未匹配，滚动加载更多');
+        await this.scrollShadowContainer(page, '.feeds-container', 500, 4);
       }
-
-      await HumanActions.wait(page, 1500, 2500);
     }
 
-    logger.warn({ videoTitle, maxScrolls: MAX_SCROLLS }, '[Phase3:Scroll] Video not found after max scrolls');
+    logger.warn({ videoTitle, maxScrolls: MAX_SCROLLS }, '[Tencent] 滚动穷尽仍未匹配');
     return false;
   }
 
@@ -1617,7 +1686,7 @@ export class TencentCrawler {
         // 采集该视频的完整评论树
         // 第一个视频不清除拦截器数据（保留 Phase2 导航时捕获的初始 comment_list 响应）
         const collectResult = await this.collectVideoComments(
-          page, item.exportId, item.description, userId, i > 0
+          page, item.exportId, item.description, item.createTime, userId, i > 0
         );
 
         results.push({

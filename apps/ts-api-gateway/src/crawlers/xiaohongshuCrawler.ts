@@ -3,6 +3,7 @@ import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager } from '
 import { getSelector, getSelectorChain, getRandomExitSubmenuKeyForPlatform, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
+import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import fs from 'fs';
 import path from 'path';
@@ -58,6 +59,8 @@ export class XiaohongshuCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
   private currentMenuSection: 'note_manage' | 'data_dashboard' | 'unknown' = 'unknown';
+  private commentInterceptor: RequestInterceptor | null = null;
+  private commentListenerId: string | null = null;
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -653,6 +656,17 @@ export class XiaohongshuCrawler {
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[XHS-Light] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新笔记首次入库：如果有评论，记录为有更新
         if (video.comment_count > 0) {
           logger.info({
@@ -802,14 +816,14 @@ export class XiaohongshuCrawler {
     const listenerId = await interceptor.register(newPage, patterns);
     logger.info({ patterns }, '[XHS-Phase3] Comment API interceptor registered');
 
-    (this as any)._commentInterceptor = interceptor;
-    (this as any)._commentListenerId = listenerId;
+    this.commentInterceptor = interceptor;
+    this.commentListenerId = listenerId;
   }
 
   async scrollLoadRootComments(newPage: Page): Promise<any[]> {
     logger.info('[XHS-Phase3] Loading root comments via scroll');
 
-    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
+    const interceptor = this.commentInterceptor as RequestInterceptor;
     const pattern = '/api/sns/web/v2/comment/page';
 
     await interceptor.waitForResponse(pattern, 15000).catch(() => {});
@@ -900,7 +914,7 @@ export class XiaohongshuCrawler {
     digg_count: number; create_time: number; reply_id: string;
     rootId?: string; parentId?: string; level: number; replyToName?: string; is_author?: boolean;
   }> {
-    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
+    const interceptor = this.commentInterceptor as RequestInterceptor;
     const comments: Array<any> = [];
 
     // 解析根评论 /comment/page
@@ -1038,13 +1052,13 @@ export class XiaohongshuCrawler {
       }
     }
 
-    const interceptor = (this as any)._commentInterceptor as RequestInterceptor;
-    const listenerId = (this as any)._commentListenerId;
+    const interceptor = this.commentInterceptor as RequestInterceptor;
+    const listenerId = this.commentListenerId;
     if (interceptor && listenerId) {
       interceptor.unregister(listenerId);
       interceptor.clearAll();
-      (this as any)._commentInterceptor = undefined;
-      (this as any)._commentListenerId = undefined;
+      this.commentInterceptor = null;
+      this.commentListenerId = null;
     }
 
     return results;
