@@ -177,8 +177,6 @@ export async function truncateVideosByUser(userId: number, maxVideos: number): P
  * DB 中存在但不在输入列表中的视频 → 删除（场景 B/C/G 合并处理）
  *
  * 保护机制：若 visibleVideos 为空且 DB 有视频，跳过删除（避免 API 异常误删）
- *
- * @deprecated 请使用此函数替代 upsertVideosBatch + truncateVideosByUser
  */
 export async function reconcileVideosForUser(
   userId: number,
@@ -213,7 +211,7 @@ export async function reconcileVideosForUser(
       { userId, dbCount: dbIds.size },
       '[reconcileVideosForUser] visibleVideos is empty but DB has records — skipping deletion (protection)',
     );
-    // 仍执行 upsert（即使 source 空也允许首次建立）
+    // 保护模式：跳过删除但仍记录日志
   } else {
     // 3) 找出需要删除的 ID（在 DB 中但不在 source 中）
     const toRemove = [...dbIds].filter((id) => !sourceIds.has(id));
