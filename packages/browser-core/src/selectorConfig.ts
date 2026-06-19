@@ -479,3 +479,24 @@ export class SelectorReader {
     return true;
   }
 }
+
+/**
+ * 将旧格式选择器（primary: string）自动转换为新格式 ScopedSelector。
+ * 旧格式：{ primary: "css-selector", selectorType: "css", filterTag: "BUTTON", ... }
+ * 新格式：{ type: "css", value: "css-selector", scopeMode: "none", filterTag: "BUTTON", ... }
+ */
+export function normalizeSelector(entry: any): { type: string; value: string; scopeMode: string; frameworkKey?: string; subContainer?: string; customContainer?: string; filterTag?: string; filterText?: string } {
+  // 新格式：primary 是对象
+  if (typeof entry?.primary === 'object' && entry.primary !== null) {
+    return entry.primary;
+  }
+  // 旧格式：primary 是字符串
+  return {
+    type: (entry?.selectorType as string) || 'css',
+    value: (entry?.primary as string) || '',
+    scopeMode: 'none',
+    frameworkKey: entry?.scopeKey,
+    filterTag: entry?.filterTag,
+    filterText: entry?.filterText,
+  };
+}
