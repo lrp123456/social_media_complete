@@ -333,6 +333,7 @@ export class DouyinCrawler {
     // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
     const rawResponses = this.interceptor.getResponses(pattern) || [];
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToPlayCount = new Map<string, number>();
     for (const resp of rawResponses) {
       const body = (resp as any)?.body;
       if (!body || typeof body !== 'object') continue;
@@ -356,6 +357,11 @@ export class DouyinCrawler {
             nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
           });
         }
+        // 提取 play_count 用于私密过滤（parseVideoItem 会剥离 statistics 字段）
+        const playCount = raw.statistics?.play_count ?? raw.stat?.play_count ?? raw.play_count;
+        if (id && playCount !== undefined) {
+          awemeIdToPlayCount.set(String(id), Number(playCount));
+        }
       }
     }
     logger.info(
@@ -372,17 +378,28 @@ export class DouyinCrawler {
       };
     });
 
+    // 私密视频过滤：play_count === 0 视为私密
+    const filtered = sliced.filter((item: any) => {
+      const playCount = awemeIdToPlayCount.get(String(item.aweme_id));
+      if (playCount === 0) {
+        logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤私密视频（play_count=0）');
+        return false;
+      }
+      return true; // playCount 为 undefined 时视为公开（字段缺失不等于私密）
+    });
+
     logger.info({
       source,
       step: 'FETCH_COMPLETE',
       totalCollected: allItems.length,
       totalResponses: this.interceptor.getResponseCount(pattern),
-      finalCount: sliced.length,
+      finalCount: filtered.length,
+      privateFiltered: sliced.length - filtered.length,
       maxMonitor: this.maxMonitorVideos,
-      awemeIds: sliced.map(i => i.aweme_id),
+      awemeIds: filtered.map(i => i.aweme_id),
     }, 'Video list fetch completed');
 
-    return sliced;
+    return filtered;
   }
 
   private async scrollToLoadMoreWithDualStop(page: Page, pattern: string): Promise<void> {
@@ -1218,6 +1235,18 @@ export class DouyinCrawler {
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
       if (!dbVideo) {
+        // 跨用户保护：视频可能已被其他用户首次爬取入库（窗口登录态混淆等）
+        // 此时不应重复爬取和通知，直接跳过
+        const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
+        if (existingVideo && existingVideo.userId !== userId) {
+          logger.warn({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            ownerUserId: existingVideo.userId,
+            currentUserId: userId,
+          }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
+          continue;
+        }
         // 新视频首次入库：如果有评论，入队获取（ID归一化已修复跨源重复）
         if (video.comment_count > 0) {
           logger.info({
@@ -1787,6 +1816,38 @@ export class DouyinCrawler {
           }
 
           logger.info({ awemeId: item.awemeId, groupCount: firstCrawlGroups.length, totalComments: allFlat.length }, '[Tree] First crawl: built %d commentGroups for summary notification', firstCrawlGroups.length);
+
+          // 通知去重：检查评论是否已存在于 DB（可能被其他用户首次爬取过）
+          // 如果某个 group 的所有评论都已存在，则该 group 不需要发通知
+          if (firstCrawlGroups.length > 0) {
+            const allCids = firstCrawlGroups.flatMap(g => g.newInGroup.map(n => n.cid));
+            if (allCids.length > 0) {
+              const existingCids = new Set(
+                (await prisma.comment.findMany({
+                  where: { cid: { in: allCids } },
+                  select: { cid: true },
+                })).map(c => c.cid)
+              );
+
+              const originalCount = firstCrawlGroups.length;
+              for (let i = firstCrawlGroups.length - 1; i >= 0; i--) {
+                const g = firstCrawlGroups[i];
+                const hasNewComment = g.newInGroup.some(n => !existingCids.has(n.cid));
+                if (!hasNewComment) {
+                  firstCrawlGroups.splice(i, 1);
+                }
+              }
+
+              if (firstCrawlGroups.length < originalCount) {
+                logger.info({
+                  awemeId: item.awemeId,
+                  originalGroups: originalCount,
+                  filteredGroups: firstCrawlGroups.length,
+                  existingCidCount: existingCids.size,
+                }, '[Tree] First crawl: filtered groups where all comments already exist in DB (cross-user dedup)');
+              }
+            }
+          }
 
           results.push({ awemeId: item.awemeId, success: true, comments: [], commentGroups: firstCrawlGroups } as any);
         } else {
