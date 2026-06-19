@@ -644,6 +644,7 @@ export class KuaishouCrawler {
       awemeIds: filtered.map(i => i.aweme_id),
     }, 'Kuaishou video list fetch completed');
 
+    (this as any)._awemeIdToPhotoStatus = awemeIdToPhotoStatus;
     return filtered;
   }
 
@@ -1250,6 +1251,19 @@ export class KuaishouCrawler {
     }
 
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
+
+    // 动态剔除：已入库视频变为私密（photoStatus!=0）时从数据库删除
+    const awemeIdToPhotoStatus = (this as any)._awemeIdToPhotoStatus || new Map<string, number>();
+    for (const dbVideo of dbVideos) {
+      const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
+      if (!freshItem) {
+        const photoStatus = awemeIdToPhotoStatus.get(dbVideo.id);
+        if (photoStatus !== undefined && photoStatus !== 0) {
+          logger.info({ awemeId: dbVideo.id, photoStatus }, '[Phase1] 已入库视频变为私密，剔除');
+          await prisma.video.delete({ where: { id: dbVideo.id } });
+        }
+      }
+    }
 
     const commentsQueue: KuaishouCommentQueueItem[] = [];
 

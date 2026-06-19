@@ -399,6 +399,7 @@ export class DouyinCrawler {
       awemeIds: filtered.map(i => i.aweme_id),
     }, 'Video list fetch completed');
 
+    (this as any)._awemeIdToPlayCount = awemeIdToPlayCount;
     return filtered;
   }
 
@@ -1229,6 +1230,19 @@ export class DouyinCrawler {
     }
 
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
+
+    // 动态剔除：已入库视频变为私密（play_count=0）时从数据库删除
+    const awemeIdToPlayCount = (this as any)._awemeIdToPlayCount || new Map<string, number>();
+    for (const dbVideo of dbVideos) {
+      const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
+      if (!freshItem) {
+        const playCount = awemeIdToPlayCount.get(dbVideo.id);
+        if (playCount === 0) {
+          logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为私密，剔除');
+          await prisma.video.delete({ where: { id: dbVideo.id } });
+        }
+      }
+    }
 
     const commentsQueue: CommentQueueItem[] = [];
 

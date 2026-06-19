@@ -859,6 +859,20 @@ export class TencentCrawler {
 
     // 对比数据库中的评论数
     const dbVideos = await db.getVideosByUserId(userId);
+
+    // 动态剔除：已入库视频变为非公开时从数据库删除
+    for (const dbVideo of dbVideos) {
+      const freshVideo = videos.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
+      if (!freshVideo) {
+        // 视频不在新列表中，可能已删除或变为私密
+        continue;
+      }
+      if (freshVideo.visibleType !== undefined && freshVideo.visibleType !== 1) {
+        logger.info({ exportId: freshVideo.exportId, visibleType: freshVideo.visibleType }, '[Phase1] 已入库视频变为非公开，剔除');
+        await prisma.video.delete({ where: { id: dbVideo.id } });
+      }
+    }
+
     const commentsQueue: CommentQueueItem[] = [];
 
     for (const video of videos.slice(0, this.maxMonitorVideos)) {
