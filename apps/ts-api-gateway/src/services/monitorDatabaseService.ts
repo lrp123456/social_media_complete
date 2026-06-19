@@ -24,6 +24,8 @@ export function getVideosByUserId(userId: number) {
 /**
  * 批量 upsert 视频（仅更新基础信息，不更新 commentCount）
  * commentCount 仅在 Phase3 成功采集评论后才更新
+ *
+ * @deprecated 请使用 reconcileVideosForUser 替代
  */
 export async function upsertVideosBatch(
   userId: number,
@@ -143,6 +145,8 @@ export async function updateCommentCount(videoId: string, count: number): Promis
 
 /**
  * 删除用户超出保留数量的最旧视频
+ *
+ * @deprecated 请使用 reconcileVideosForUser 替代
  */
 export async function truncateVideosByUser(userId: number, maxVideos: number): Promise<void> {
   const excess = await prisma.video.findMany({
@@ -164,6 +168,108 @@ export async function truncateVideosByUser(userId: number, maxVideos: number): P
     });
     logger.debug(`清理用户 ${userId} 的旧视频: deleted=${excess.length}`);
   }
+}
+
+/**
+ * 协调用户视频列表与 DB，统一处理生命周期（替代 upsertVideosBatch + truncateVideosByUser）
+ *
+ * 调用方负责传入【已过滤可监控的视频列表】（公开 + 未删除·前 N 条）
+ * DB 中存在但不在输入列表中的视频 → 删除（场景 B/C/G 合并处理）
+ *
+ * 保护机制：若 visibleVideos 为空且 DB 有视频，跳过删除（避免 API 异常误删）
+ *
+ * @deprecated 请使用此函数替代 upsertVideosBatch + truncateVideosByUser
+ */
+export async function reconcileVideosForUser(
+  userId: number,
+  visibleVideos: Array<{
+    aweme_id: string;
+    description: string;
+    create_time: number;
+    comment_count: number;
+    metrics?: any;
+  }>,
+  maxVideos: number,
+): Promise<{
+  newVideoIds: string[];
+  removedVideoIds: string[];
+  unchangedCount: number;
+}> {
+  const newVideoIds: string[] = [];
+  const removedVideoIds: string[] = [];
+  let unchangedCount = 0;
+
+  // 1) 获取 DB 中该用户的全部视频 ID
+  const dbVideos = await prisma.video.findMany({
+    where: { userId },
+    select: { id: true },
+  });
+  const dbIds = new Set(dbVideos.map((v) => v.id));
+
+  // 2) 保护机制：源为空且 DB 有数据 → 跳过删除
+  const sourceIds = new Set(visibleVideos.slice(0, maxVideos).map((v) => v.aweme_id));
+  if (sourceIds.size === 0 && dbIds.size > 0) {
+    logger.warn(
+      { userId, dbCount: dbIds.size },
+      '[reconcileVideosForUser] visibleVideos is empty but DB has records — skipping deletion (protection)',
+    );
+    // 仍执行 upsert（即使 source 空也允许首次建立）
+  } else {
+    // 3) 找出需要删除的 ID（在 DB 中但不在 source 中）
+    const toRemove = [...dbIds].filter((id) => !sourceIds.has(id));
+    if (toRemove.length > 0) {
+      // 先清理无 FK 关联的子表
+      await prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: toRemove } } });
+      await prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: toRemove } } });
+      await prisma.videoCommentCount.deleteMany({ where: { videoId: { in: toRemove } } });
+      // Video 删除 → 级联删除 Comment
+      await prisma.video.deleteMany({
+        where: { id: { in: toRemove } },
+      });
+      removedVideoIds.push(...toRemove);
+      logger.debug({ userId, removed: toRemove.length }, '[reconcileVideosForUser] 删除已消失的视频');
+    }
+  }
+
+  // 4) UPSERT 可见视频
+  const upsertVideos = visibleVideos.slice(0, maxVideos);
+  if (upsertVideos.length > 0) {
+    await prisma.$transaction(
+      upsertVideos.map((v) =>
+        prisma.video.upsert({
+          where: { id: v.aweme_id },
+          update: {
+            description: v.description,
+            metrics: JSON.stringify(v.metrics || {}),
+          },
+          create: {
+            id: v.aweme_id,
+            userId,
+            description: v.description,
+            createTime: BigInt(v.create_time),
+            commentCount: 0,
+            metrics: JSON.stringify(v.metrics || {}),
+          },
+        }),
+      ),
+    );
+
+    // 标记新增/不变
+    for (const v of upsertVideos) {
+      if (!dbIds.has(v.aweme_id)) {
+        newVideoIds.push(v.aweme_id);
+      } else {
+        unchangedCount++;
+      }
+    }
+  }
+
+  logger.info(
+    { userId, newCount: newVideoIds.length, removedCount: removedVideoIds.length, unchangedCount },
+    '[reconcileVideosForUser] 视频生命周期协调完成',
+  );
+
+  return { newVideoIds, removedVideoIds, unchangedCount };
 }
 
 /**
