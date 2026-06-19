@@ -620,8 +620,7 @@ export class XiaohongshuCrawler {
     }
 
     logger.info({ userId, videoCount: videos.length }, '[XHS-Light] Comparison done, upserting videos to database');
-    await db.upsertVideosBatch(userId, videos);
-    await db.truncateVideosByUser(userId, this.maxMonitorVideos);
+    await db.reconcileVideosForUser(userId, videos, this.maxMonitorVideos);
 
     for (const update of updatedVideos) {
       await db.updateCommentCount(update.awemeId, update.newCount);

@@ -1319,8 +1319,7 @@ export class KuaishouCrawler {
     }
 
     logger.info({ userId, videoCount: videos.length }, '[Phase1] Comparison done, upserting videos to database');
-    await db.upsertVideosBatch(userId, videos);
-    await db.truncateVideosByUser(userId, this.maxMonitorVideos);
+    await db.reconcileVideosForUser(userId, videos, this.maxMonitorVideos);
 
     if (commentsQueue.length === 0) {
       logger.info({ userId }, '[Phase1] No comment updates found — task complete');

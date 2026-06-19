@@ -903,8 +903,7 @@ export class TencentCrawler {
         favCount: v.favCount,
       },
     }));
-    await db.upsertVideosBatch(userId, videoInfos);
-    await db.truncateVideosByUser(userId, this.maxMonitorVideos);
+    await db.reconcileVideosForUser(userId, videoInfos, this.maxMonitorVideos);
 
     this.unregisterListener();
 
