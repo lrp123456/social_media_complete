@@ -34,6 +34,7 @@ export default function QueueBar({ onClickViewAll }: QueueBarProps) {
           const config = TASK_TYPE_CONFIG[task.taskType] ?? { label: task.taskType, color: '#94a3b8', icon: 'help' };
           const phaseName = task.progress?.phase || task.taskType;
           const percent = task.progress?.percent ?? 0;
+          const displayName = task.windowName || task.platform;
           return (
             <div
               key={task.taskId}
@@ -47,7 +48,7 @@ export default function QueueBar({ onClickViewAll }: QueueBarProps) {
                 {config.label}
               </span>
               <span className="text-xs text-on-surface-variant whitespace-nowrap">
-                {phaseName} · {percent}%
+                {displayName} · {phaseName} · {percent}%
               </span>
             </div>
           );
