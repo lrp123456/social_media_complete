@@ -11,7 +11,7 @@ const logger = rootLogger.child({ name: 'selector-config' });
 // ============================================================
 
 /** 选择器类型 */
-export type SelectorType = 'css' | 'role' | 'text' | 'placeholder' | 'label';
+export type SelectorType = 'css' | 'role' | 'text' | 'placeholder' | 'label' | 'xpath';
 
 /** 选择器用途 */
 export type SelectorPurpose = 'publish' | 'monitor';
@@ -478,4 +478,33 @@ export class SelectorReader {
     logger.info({ platform, name }, 'UrlMonitor deleted');
     return true;
   }
+}
+
+// ============================================================
+// 向后兼容函数 (v2.6+) — normalizeSelector
+// ============================================================
+
+export type ScopeMode = 'none' | 'framework' | 'custom';
+
+export interface ScopedSelector {
+  type: SelectorType;
+  value: string;
+  scopeMode?: ScopeMode;
+  frameworkKey?: string;
+  subContainer?: string;
+  customContainer?: string;
+  filterTag?: string;
+  filterText?: string;
+}
+
+export function normalizeSelector(entry: any): ScopedSelector {
+  if (typeof entry.primary === 'object') return entry.primary as ScopedSelector;
+  return {
+    type: (entry.selectorType as SelectorType) || 'css',
+    value: entry.primary as string,
+    scopeMode: 'none',
+    frameworkKey: entry.scopeKey,
+    filterTag: entry.filterTag,
+    filterText: entry.filterText,
+  };
 }
