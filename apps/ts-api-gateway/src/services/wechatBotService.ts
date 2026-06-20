@@ -458,6 +458,7 @@ class WeChatBotManager {
         jump_list: [
           { type: 3, title: '✅ 已登录，继续监控', question: `继续监控 ${userId} ${platform}` },
           { type: 3, title: '🔄 强制刷新登录页', question: `强制刷新 ${userId} ${platform}` },
+          { type: 3, title: '♻️ F5刷新QR码', question: `F5刷新 ${userId} ${platform}` },
         ],
         card_action: { type: 1, url: 'https://work.weixin.qq.com' },
       };
@@ -608,6 +609,46 @@ async function autoStartBot(): Promise<void> {
             await botManager.sendTextMessage([userid], `❌ 刷新登录页失败: ${err.message || '未知错误'}`);
           } finally {
             await bm.disconnectSession(windowId, targetPlatform as any).catch(() => {});
+          }
+          return;
+        }
+
+        // 匹配"F5刷新"意图: 格式 "F5刷新 <userId> <platform>"（来自登录告警 jump_list）
+        const f5RefreshSetup = content.match(/^F5刷新\s+(\d+)\s+(\S+)$/);
+        if (f5RefreshSetup) {
+          const targetUserId = parseInt(f5RefreshSetup[1], 10);
+          const targetPlatform = f5RefreshSetup[2];
+
+          const { prisma: prismaF5 } = await import('../lib/prisma');
+          const userF5 = await prismaF5.user.findUnique({
+            where: { id: targetUserId },
+            select: { fingerprintWindowId: true, wechatUserid: true },
+          }).catch(() => null);
+
+          if (!userF5) {
+            await botManager.sendTextMessage([userid], '❌ 未找到用户');
+            return;
+          }
+
+          const { getBrowserManager: getBMF5 } = await import('../lib/browserManager');
+          const bmF5 = getBMF5();
+          const windowIdF5 = String(userF5.fingerprintWindowId);
+
+          try {
+            const { page: pageF5 } = await bmF5.connect(windowIdF5, '', targetPlatform);
+            // F5 刷新：不重新导航，只刷新当前页面（适用于 QR 码过期但页面还在）
+            await pageF5.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+            await pageF5.waitForTimeout(3000);
+
+            const { captureAndSendQR: captureQR } = await import('./monitorService');
+            await captureQR(pageF5, targetUserId, targetPlatform, userF5.wechatUserid || userid);
+
+            await botManager.sendTextMessage([userid], `♻️ 已F5刷新 ${targetPlatform} 页面，新二维码已发送`);
+          } catch (err: any) {
+            logger.error({ targetUserId, targetPlatform, err }, 'F5刷新页面失败');
+            await botManager.sendTextMessage([userid], `❌ F5刷新失败: ${err.message || '未知错误'}`);
+          } finally {
+            await bmF5.disconnectSession(windowIdF5, targetPlatform as any).catch(() => {});
           }
           return;
         }
