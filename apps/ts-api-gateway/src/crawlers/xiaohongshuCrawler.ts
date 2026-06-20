@@ -207,13 +207,13 @@ export class XiaohongshuCrawler {
     await this.scrollToLoadMoreWithDualStop(page, pattern);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
-    // ★ 私密过滤：仅保留 permission_code === 0 的公开笔记
+    // ★ 非公开过滤：仅保留 permission_code === 0 的公开笔记
     const filteredItems = allItems.filter((item: any) => {
       const permissionCode = item.permission_code ?? item.permissionCode ?? item.permission?.code;
       if (permissionCode !== undefined && permissionCode !== null) {
         const isPublic = Number(permissionCode) === 0;
         if (!isPublic) {
-          logger.info({ noteId: item.id || item.note_id }, '[XHS-fetch] 过滤私密笔记（permission_code=%s）', permissionCode);
+          logger.info({ noteId: item.id || item.note_id }, '[XHS-fetch] 过滤非公开笔记（permission_code=%s）', permissionCode);
         }
         return isPublic;
       }
@@ -540,15 +540,24 @@ export class XiaohongshuCrawler {
 
   /**
    * Phase 2: 检查主站登录态
-   * 打开 www.xiaohongshu.com → 检测用户头像存在 → 未登录则发 QR → 回退 light
+   * 打开 www.xiaohongshu.com → 检测登录态 → 未登录则发 QR → 回退 light
+   *
+   * DOM 分析结论：
+   * - 未登录：页面自动弹出 .login-modal 弹窗，侧边栏显示 #login-btn "登录" 按钮
+   * - 已登录：无弹窗，侧边栏显示用户头像 + "我" 文字，无 #login-btn
+   *
+   * 检测策略：优先检测未登录特征（#login-btn / .login-modal），更可靠
+   *
+   * @param sendQR 未登录时是否发送 QR 码（首次检测=true，recheck=false 避免重复发送）
    * @returns true=已登录，false=未登录
    */
   async checkMainsiteLogin(
     context: any,  // BrowserContext
     userId: number,
     wechatUserid: string,
+    sendQR = true,
   ): Promise<boolean> {
-    logger.info({ userId }, '[XHS-Phase2] 开始检查主站登录态');
+    logger.info({ userId, sendQR }, '[XHS-Phase2] 开始检查主站登录态');
     const mainsitePage = await context.newPage();
 
     try {
@@ -558,25 +567,42 @@ export class XiaohongshuCrawler {
       });
       await HumanActions.wait(mainsitePage, 3000, 5000);
 
-      // 检测用户头像（已登录标识）
-      const avatarDef = getSelector('region.mainsite-user-avatar', XHS_PLATFORM);
-      let loggedIn = false;
-      if (avatarDef.css) {
+      // 检测未登录特征：#login-btn（侧边栏登录按钮）或 .login-modal（登录弹窗）
+      // 未登录时这两个元素至少有一个存在；已登录时都不存在
+      let loggedOut = false;
+      try {
+        // 快速检测 #login-btn（未登录时侧边栏会立即渲染）
+        const loginBtn = await mainsitePage.$('#login-btn');
+        if (loginBtn) {
+          loggedOut = true;
+          logger.info({ userId }, '[XHS-Phase2] 检测到 #login-btn — 未登录');
+        }
+      } catch {
+        // 忽略查询异常
+      }
+
+      if (!loggedOut) {
+        // 双重确认：检测 .login-modal 弹窗
         try {
-          await mainsitePage.waitForSelector(avatarDef.css, { timeout: 8000 });
-          loggedIn = true;
+          const loginModal = await mainsitePage.$('.login-modal');
+          if (loginModal) {
+            loggedOut = true;
+            logger.info({ userId }, '[XHS-Phase2] 检测到 .login-modal — 未登录');
+          }
         } catch {
-          loggedIn = false;
+          // 忽略查询异常
         }
       }
 
-      if (!loggedIn) {
+      const loggedIn = !loggedOut;
+      logger.info({ userId, loggedIn }, '[XHS-Phase2] 登录态检测结果');
+
+      if (!loggedIn && sendQR) {
         logger.info({ userId }, '[XHS-Phase2] 主站未登录，发送 QR 码');
 
-        // 截图 QR 码区域
-        const qrDef = getSelector('region.mainsite-qr-code', XHS_PLATFORM);
+        // 截图 QR 码 — 位于 .login-container 内的 .qrcode-img
         try {
-          const qrEl = await mainsitePage.waitForSelector(qrDef.css || '.qrcode-img', { timeout: 15000 });
+          const qrEl = await mainsitePage.waitForSelector('.login-container .qrcode-img, .qrcode-img', { timeout: 15000 });
           const qrBuffer = await qrEl.screenshot({ type: 'png' });
 
           // 发送到企微 — 使用 botManager.sendLoginAlert（与抖音/快手/视频号一致）
@@ -586,6 +612,8 @@ export class XiaohongshuCrawler {
         } catch (err: any) {
           logger.warn({ userId, error: err.message }, '[XHS-Phase2] QR 码截图失败');
         }
+      } else if (!loggedIn && !sendQR) {
+        logger.info({ userId }, '[XHS-Phase2] 主站仍未登录（recheck，不重复发送 QR）');
       }
 
       return loggedIn;
@@ -987,7 +1015,7 @@ export class XiaohongshuCrawler {
     page: Page,
     item: { exportId: string; description: string },
     userId: number,
-  ): Promise<{ success: boolean; awemeId: string; error?: string }> {
+  ): Promise<{ success: boolean; awemeId: string; error?: string; loginRequired?: boolean }> {
     const { exportId, description } = item;
     logger.info({ exportId, desc: description?.slice(0, 30) }, '[XHS-Phase3] Processing note');
 
@@ -995,6 +1023,46 @@ export class XiaohongshuCrawler {
       const newPage = await this.clickThumbnailAndWaitNewTab(page, exportId);
       if (!newPage) {
         return { success: false, awemeId: exportId, error: 'Failed to open note detail page' };
+      }
+
+      // ── 内联登录检测：点击缩略图跳到主站后检测是否弹出登录框 ──
+      let loggedOut = false;
+      try {
+        const loginBtn = await newPage.$('#login-btn');
+        if (loginBtn) {
+          loggedOut = true;
+          logger.info({ exportId }, '[XHS-Phase3] 检测到 #login-btn — 主站未登录');
+        }
+      } catch { /* 忽略查询异常 */ }
+
+      if (!loggedOut) {
+        try {
+          const loginModal = await newPage.$('.login-modal');
+          if (loginModal) {
+            loggedOut = true;
+            logger.info({ exportId }, '[XHS-Phase3] 检测到 .login-modal — 主站未登录');
+          }
+        } catch { /* 忽略查询异常 */ }
+      }
+
+      if (loggedOut) {
+        logger.info({ exportId }, '[XHS-Phase3] 主站未登录，截取 QR 码发送企微');
+        try {
+          const qrEl = await newPage.waitForSelector('.login-container .qrcode-img, .qrcode-img', { timeout: 15000 });
+          const qrBuffer = await qrEl.screenshot({ type: 'png' });
+          const { botManager } = await import('../services/wechatBotService');
+          const { prisma: prismaLogin } = await import('../lib/prisma');
+          const loginUser = await prismaLogin.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+          if (loginUser?.wechatUserid) {
+            await botManager.sendLoginAlert(loginUser.wechatUserid, 'xiaohongshu', userId, qrBuffer);
+            logger.info({ exportId }, '[XHS-Phase3] QR 码已发送到企微');
+          }
+        } catch (qrErr: any) {
+          logger.warn({ exportId, error: qrErr.message }, '[XHS-Phase3] QR 码截图发送失败');
+        }
+        await newPage.close().catch(() => {});
+        await page.bringToFront();
+        return { success: false, awemeId: exportId, loginRequired: true };
       }
 
       try {
@@ -1046,6 +1114,13 @@ export class XiaohongshuCrawler {
       const result = await this.processOneNoteComments(page, item, userId);
       results.push(result);
 
+      // 登录失效 → 终止队列
+      if (result.loginRequired) {
+        logger.warn({ userId, awemeId: item.exportId }, '[XHS-Phase3] Login required — aborting queue');
+        break;
+      }
+
+      // 风控检测
       if (result.error?.includes('captcha') || result.error?.includes('Risk control')) {
         logger.warn({ userId, awemeId: item.exportId }, '[XHS-Phase3] Risk detected, aborting queue');
         break;
