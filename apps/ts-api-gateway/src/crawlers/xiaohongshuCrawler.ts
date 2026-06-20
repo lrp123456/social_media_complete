@@ -50,6 +50,7 @@ export interface XiaohongshuCheckResult {
     description: string;
     oldCount: number;
     newCount: number;
+    isFirstCrawl: boolean;
   }>;
   riskControlDetected: boolean;
   riskControlInfo?: RiskControlDetection;
@@ -773,12 +774,23 @@ export class XiaohongshuCrawler {
       };
     }
 
-    const commentsQueue = updatedVideos.map((v) => ({
-      exportId: v.awemeId,
-      description: v.description,
-      oldCount: v.oldCount,
-      newCount: v.newCount,
-    }));
+    const commentsQueue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl: boolean }> = [];
+    for (const v of updatedVideos) {
+      // 检查该笔记是否已有评论快照记录（VideoRootCommentCount）
+      // 无记录 = 首次爬取（isFirstCrawl），有记录 = 增量更新
+      const existingSnapshot = await prisma.videoRootCommentCount.findFirst({
+        where: { videoId: v.awemeId },
+        select: { cid: true },
+      });
+      commentsQueue.push({
+        exportId: v.awemeId,
+        description: v.description,
+        oldCount: v.oldCount,
+        newCount: v.newCount,
+        isFirstCrawl: !existingSnapshot,
+      });
+      logger.info({ awemeId: v.awemeId, isFirstCrawl: !existingSnapshot }, '[XHS-Light] Queue item crawl mode');
+    }
 
     return {
       hasUpdate: updatedVideos.length > 0,
@@ -1103,7 +1115,7 @@ export class XiaohongshuCrawler {
 
   async processCommentsQueue(
     page: Page,
-    queue: Array<{ exportId: string; description: string; oldCount: number; newCount: number }>,
+    queue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl?: boolean }>,
     userId: number,
   ): Promise<Array<{ success: boolean; awemeId: string; error?: string }>> {
     logger.info({ queueLength: queue.length, userId }, '[XHS-Phase3] Processing comments queue');
