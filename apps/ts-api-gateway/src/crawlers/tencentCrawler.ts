@@ -806,7 +806,7 @@ export class TencentCrawler {
     // 等待 API 响应（菜单导航后页面会自动加载数据，无需手动刷新）
     await HumanActions.wait(page, 3000, 5000);
 
-    // 获取拦截到的视频列表
+    // 获取拦截到的视频列表（支持翻页加载）
     // 响应结构: { errCode, errMsg, data: { list: [...], totalCount, continueFlag, lastBuff } }
     const intercepted = await this.interceptor.waitForResponse(POST_LIST_PATTERN, 15000);
     // 从拦截到的请求 payload 中提取 _log_finder_id（视频号作者标识）
@@ -826,9 +826,38 @@ export class TencentCrawler {
       logger.info({ userId, finderId }, '[Phase1] Synced tencent finder_id as platform author ID');
     }
 
-    const videos: TencentVideoInfo[] = intercepted?.body?.data?.list || [];
+    // 翻页加载：视频号通过滚动页面触发下一页，响应携带 continueFlag 和 lastBuff 分页字段
+    const allRawVideos: TencentVideoInfo[] = [...(intercepted?.body?.data?.list || [])];
+    let continueFlag = intercepted?.body?.data?.continueFlag;
+    let lastBuff = intercepted?.body?.data?.lastBuff || '';
+    let pageNum = 1;
 
-    logger.info({ userId, videoCount: videos.length, intercepted: !!intercepted }, '[Phase1] Videos fetched');
+    while (continueFlag === 1 && allRawVideos.length < this.maxMonitorVideos * 1.5 && pageNum < 10) {
+      // 滚动页面触发下一页加载
+      await HumanActions.humanScroll(page, 600, { minPause: 500, maxPause: 1000 });
+      await HumanActions.wait(page, 2000, 3000);
+
+      const nextIntercepted = await this.interceptor.waitForResponse(POST_LIST_PATTERN, 10000);
+      if (!nextIntercepted) break;
+
+      const nextVideos: TencentVideoInfo[] = nextIntercepted?.body?.data?.list || [];
+      allRawVideos.push(...nextVideos);
+      continueFlag = nextIntercepted?.body?.data?.continueFlag;
+      lastBuff = nextIntercepted?.body?.data?.lastBuff || '';
+      pageNum++;
+
+      logger.info({ pageVideos: nextVideos.length, totalVideos: allRawVideos.length, continueFlag, pageNum }, '[Phase1] Tencent video list page loaded');
+    }
+
+    // 去重（翻页可能产生重复的 exportId）
+    const seenExportIds = new Set<string>();
+    const videos: TencentVideoInfo[] = allRawVideos.filter(v => {
+      if (seenExportIds.has(v.exportId)) return false;
+      seenExportIds.add(v.exportId);
+      return true;
+    });
+
+    logger.info({ userId, videoCount: videos.length, totalRaw: allRawVideos.length, intercepted: !!intercepted }, '[Phase1] Videos fetched');
 
     // 检测会话失效：拦截器超时或返回空列表，且之前有视频记录
     if (videos.length === 0) {
@@ -866,7 +895,7 @@ export class TencentCrawler {
     for (const dbVideo of dbVideos) {
       const freshVideo = videos.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
       if (!freshVideo) {
-        // 视频不在新列表中，可能已删除或变为私密
+        // 视频不在新列表中，可能已删除或变为非公开
         continue;
       }
       if (freshVideo.visibleType !== undefined && freshVideo.visibleType !== 1) {
@@ -877,19 +906,20 @@ export class TencentCrawler {
 
     const commentsQueue: CommentQueueItem[] = [];
 
-    for (const video of videos.slice(0, this.maxMonitorVideos)) {
-      // 跳过评论已关闭的视频
+    // 先过滤非公开和评论已关闭的视频，再截断到 maxMonitorVideos
+    const filteredVideos = videos.filter(video => {
       if (video.commentClose === 1) {
         logger.debug({ exportId: video.exportId }, '[Phase1] Skipping video with comments closed');
-        continue;
+        return false;
       }
-
-      // 私密视频过滤：visibleType !== 1 为非公开（必须先检查 undefined，旧数据可能无此字段）
       if (video.visibleType !== undefined && video.visibleType !== 1) {
         logger.info({ exportId: video.exportId, visibleType: video.visibleType }, '[Phase1] 过滤非公开视频（visibleType!=1）');
-        continue;
+        return false;
       }
+      return true;
+    }).slice(0, this.maxMonitorVideos);
 
+    for (const video of filteredVideos) {
       const encodedId = video.exportId.replace(/\//g, '_');
       const dbVideo = dbVideos.find(v => v.id === encodedId);
       const newCount = video.commentCount ?? 0;
@@ -933,8 +963,8 @@ export class TencentCrawler {
       }
     }
 
-    // 保存视频到数据库
-    const videoInfos = videos.slice(0, this.maxMonitorVideos).map(v => ({
+    // 保存视频到数据库（使用已过滤截断的列表）
+    const videoInfos = filteredVideos.map(v => ({
       aweme_id: v.exportId.replace(/\//g, '_'), // URL安全编码，/ → _
       description: v.desc?.description || '',
       create_time: v.createTime,
@@ -956,7 +986,7 @@ export class TencentCrawler {
     return {
       hasUpdate: commentsQueue.length > 0,
       commentsQueue,
-      updatedVideos: videos.slice(0, this.maxMonitorVideos).map(v => ({
+      updatedVideos: filteredVideos.map(v => ({
         exportId: v.exportId,
         description: v.desc?.description || '',
         oldCount: dbVideos.find(d => d.id === v.exportId)?.commentCount ?? 0,

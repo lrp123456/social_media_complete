@@ -169,7 +169,7 @@ id,type,user_id,create_time,description,cover,metrics,visibility,review,video_in
 | 描述 | `item.description` | string |
 | 封面图 | `item.cover.url_list[]` | string[] |
 | 视频时长 | `item.video_info.duration` | int(秒) |
-| 可见性 | `item.visibility.status` | 1公开/2好友/3私密 |
+| 可见性 | `item.visibility.status` | 1公开/2好友/3非公开 |
 | 播放量 | `item.metrics.view_count` | string |
 | 点赞数 | `item.metrics.like_count` | string |
 | 评论数 | `item.metrics.comment_count` | string |

@@ -27,8 +27,8 @@ Crawler 的实例字段被所有窗口共享。当两个窗口同时监控同一
 | `commentListenerPageId` | ✅ | ✅ | ❌ | ❌ | Phase 3 评论监听器 ID |
 | `currentMenuSection` | ✅ | ✅ | ✅ | ❌ | 当前菜单位置 |
 | `page` | ✅ | ✅ | ❌ | ❌ | 当前页面引用 |
-| `_awemeIdToPlayCount` | ✅ | ❌ | ❌ | ❌ | 私密过滤映射（fetchVideoList→checkForUpdates 传递） |
-| `_awemeIdToPhotoStatus` | ❌ | ✅ | ❌ | ❌ | 私密过滤映射（同上） |
+| `_awemeIdToPlayCount` | ✅ | ❌ | ❌ | ❌ | 非公开过滤映射（fetchVideoList→checkForUpdates 传递） |
+| `_awemeIdToPhotoStatus` | ❌ | ✅ | ❌ | ❌ | 非公开过滤映射（同上） |
 | `_commentInterceptor` | ❌ | ❌ | ✅ | ❌ | 独立的评论拦截器实例 |
 | `_commentListenerId` | ❌ | ❌ | ✅ | ❌ | 评论监听器 ID |
 

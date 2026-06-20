@@ -205,7 +205,31 @@ export class XiaohongshuCrawler {
     const initialItems = this.interceptor.getCollectedItems(pattern);
     logger.info({ step: 'INITIAL_ITEMS', initialCount: initialItems.length }, 'Initial note items parsed');
 
-    await this.scrollToLoadMoreWithDualStop(page, pattern);
+    // 非公开笔记 ID 集合，用于计算公开笔记数（供滚动循环停止条件使用）
+    const privateNotesIds = new Set<string>();
+
+    /** 从 collected items 中增量更新 privateNotesIds，返回当前公开笔记数 */
+    const updatePermissionMapAndGetPublicCount = (): number => {
+      const allCollected = this.interceptor.getCollectedItems(pattern);
+      for (const item of allCollected) {
+        const noteId = item.id || item.note_id;
+        if (!noteId) continue;
+        const permissionCode = item.permission_code ?? item.permissionCode ?? item.permission?.code;
+        if (permissionCode !== undefined && permissionCode !== null && Number(permissionCode) !== 0) {
+          privateNotesIds.add(String(noteId));
+        }
+      }
+      const collectedCount = this.interceptor.getCollectedCount(pattern);
+      const publicCount = collectedCount - privateNotesIds.size;
+      return publicCount;
+    };
+
+    // 初始更新一次，获取初始公开笔记数
+    const initialPublicCount = updatePermissionMapAndGetPublicCount();
+    logger.info({ step: 'INITIAL_PUBLIC', collected: initialItems.length, publicCount: initialPublicCount, privateCount: privateNotesIds.size }, 'Initial permission map built');
+
+    // 传入公开笔记计数回调，让滚动循环用公开笔记数判断是否停止
+    await this.scrollToLoadMoreWithDualStop(page, pattern, updatePermissionMapAndGetPublicCount);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
     // ★ 非公开过滤：仅保留 permission_code === 0 的公开笔记
@@ -287,7 +311,15 @@ export class XiaohongshuCrawler {
     logger.error({ finalUrl: page.url() }, '[XHS-nav-note] Menu navigation to note management FAILED after all retries');
   }
 
-  private async scrollToLoadMoreWithDualStop(page: Page, pattern: string): Promise<void> {
+  /**
+   * 滚动加载笔记列表，支持双停止条件：
+   * 1. 公开笔记数达到 maxMonitorVideos（通过 getPublicCount 回调计算）
+   * 2. 连续无新数据
+   *
+   * @param getPublicCount 可选回调，返回当前已收集的公开笔记数（过滤非公开后）
+   *                       如果不提供，则使用原始 collectedCount 作为停止条件
+   */
+  private async scrollToLoadMoreWithDualStop(page: Page, pattern: string, getPublicCount?: () => number): Promise<void> {
     let totalScrolls = 0;
     let scrollsSinceNewData = 0;
     let lastKnownCount = this.interceptor.getCollectedCount(pattern);
@@ -296,6 +328,7 @@ export class XiaohongshuCrawler {
     while (totalScrolls < MAX_SCROLL_ATTEMPTS) {
       const collectedCount = this.interceptor.getCollectedCount(pattern);
       const responseCount = this.interceptor.getResponseCount(pattern);
+      const publicCount = getPublicCount ? getPublicCount() : collectedCount;
 
       if (collectedCount > lastKnownCount || responseCount > lastKnownResponseCount) {
         scrollsSinceNewData = 0;
@@ -305,6 +338,7 @@ export class XiaohongshuCrawler {
           step: 'DAEMON_DATA_ARRIVED',
           totalScrolls,
           collectedCount,
+          publicCount,
           responseCount,
           maxMonitor: this.maxMonitorVideos,
         }, 'XHS background daemon detected new data');
@@ -314,24 +348,26 @@ export class XiaohongshuCrawler {
         step: 'SCROLL_ITERATION',
         totalScrolls,
         collectedCount,
+        publicCount,
         responseCount,
         maxMonitor: this.maxMonitorVideos,
         scrollsSinceNewData,
         dataExhausted: this.interceptor.hasDataExhausted(pattern),
       }, 'XHS scroll loop iteration (async dual-track)');
 
-      if (collectedCount >= this.maxMonitorVideos) {
-        logger.info({ collectedCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'XHS quantity cap reached - stopping scroll');
+      // 使用公开笔记数判断是否达到目标数量
+      if (publicCount >= this.maxMonitorVideos) {
+        logger.info({ collectedCount, publicCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'XHS public note quantity cap reached - stopping scroll');
         break;
       }
 
       if (this.interceptor.hasDataExhausted(pattern)) {
-        logger.info({ totalScrolls, collectedCount }, 'XHS data exhausted (page=-1) - stopping scroll');
+        logger.info({ totalScrolls, collectedCount, publicCount }, 'XHS data exhausted (page=-1) - stopping scroll');
         break;
       }
 
       if (scrollsSinceNewData >= MAX_SCROLL_NO_NEW_DATA) {
-        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount }, 'XHS no new data after consecutive scrolls - stopping');
+        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount, publicCount }, 'XHS no new data after consecutive scrolls - stopping');
         break;
       }
 
@@ -352,6 +388,7 @@ export class XiaohongshuCrawler {
           step: 'SCROLL_IMMEDIATE_HIT',
           totalScrolls,
           newCount: postScrollCount,
+          publicCount: getPublicCount ? getPublicCount() : postScrollCount,
           increment: postScrollCount - collectedCount,
         }, 'XHS new data arrived immediately after scroll');
       } else {
@@ -377,7 +414,13 @@ export class XiaohongshuCrawler {
       }
     }
 
-    logger.info({ step: 'SCROLL_LOOP_DONE', totalScrolls, finalCollected: this.interceptor.getCollectedCount(pattern), finalResponses: this.interceptor.getResponseCount(pattern) }, 'XHS scroll loop finished');
+    logger.info({
+      step: 'SCROLL_LOOP_DONE',
+      totalScrolls,
+      finalCollected: this.interceptor.getCollectedCount(pattern),
+      finalPublic: getPublicCount ? getPublicCount() : this.interceptor.getCollectedCount(pattern),
+      finalResponses: this.interceptor.getResponseCount(pattern),
+    }, 'XHS scroll loop finished');
   }
 
   private async humanReadingPause(page: Page): Promise<void> {
@@ -656,18 +699,9 @@ export class XiaohongshuCrawler {
     logger.info({ userId, videoCount: videos.length }, '[XHS-Light] Comparison done, upserting videos to database');
     await db.reconcileVideosForUser(userId, videos, this.maxMonitorVideos);
 
-    for (const update of updatedVideos) {
-      await db.updateCommentCount(update.awemeId, update.newCount);
-      // Light 模式：创建合成 Comment 记录，供前端 new-comments API 显示
-      await db.markCommentsAsNotified(update.awemeId);
-      const newCount = update.newCount - update.oldCount;
-      if (newCount > 0) {
-        await db.upsertLightModeComment(update.awemeId, {
-          text: `[轻量模式] ${newCount} 条新评论`,
-          create_time: Math.floor(Date.now() / 1000),
-        });
-      }
-    }
+    // 注意：不在 Phase1 更新评论数和标记已通知
+    // 这些操作移到 Phase3 成功之后，避免 Phase3 失败时数据库状态不一致
+    // Phase1 只负责检测哪些视频有评论数变化，返回 commentsQueue 供 Phase3 使用
 
     if (updatedVideos.length === 0) {
       logger.info({ userId }, '[XHS-Light] No comment updates found');
@@ -992,6 +1026,9 @@ export class XiaohongshuCrawler {
 
       try {
         await this.registerCommentInterceptor(newPage);
+        // 注册拦截器后刷新页面，重新触发评论 API（页面加载时的响应已被错过）
+        await newPage.reload({ waitUntil: 'domcontentloaded' });
+        await HumanActions.wait(newPage, 2000, 4000);
         const rootComments = await this.scrollLoadRootComments(newPage);
         await this.expandSubCommentsForRoots(newPage, rootComments);
 

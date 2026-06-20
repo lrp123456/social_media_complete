@@ -2,9 +2,9 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 重构视频监控系统：外置化选择器配置、私密视频过滤、抽屉匹配改用时间戳+标题
+**目标：** 重构视频监控系统：外置化选择器配置、非公开视频过滤、抽屉匹配改用时间戳+标题
 
-**架构：** 扩展 selectors.json 新增 apiPatterns/dataSources 配置节点，在各 Crawler 的 fetchVideoListFromSource 中新增私密视频过滤（二次提取 raw response 字段），在 findAndClickVideoInDrawer 中用 parseDomTimestamp + description 双重匹配替代纯文本匹配
+**架构：** 扩展 selectors.json 新增 apiPatterns/dataSources 配置节点，在各 Crawler 的 fetchVideoListFromSource 中新增非公开视频过滤（二次提取 raw response 字段），在 findAndClickVideoInDrawer 中用 parseDomTimestamp + description 双重匹配替代纯文本匹配
 
 **技术栈：** TypeScript, Playwright CDP, Prisma, PostgreSQL
 
@@ -240,7 +240,7 @@ git commit -m "feat(config): extend selectorStore for apiPatterns/dataSources/na
     "pageUrl": "https://cp.kuaishou.com/rest/cp/creator/analysis/pc/photo",
     "apiPatternKey": "video_list.photo_analysis",
     "pagination": { "type": "page", "maxPages": 20, "nextPageBtnSelector": "page.next-page-btn" },
-    "privateFilter": { "enabled": false, "description": "作品分析源天然无私密" },
+    "privateFilter": { "enabled": false, "description": "作品分析源天然无非公开" },
     "responseArrayPath": ["data.analysisList"],
     "hasMoreField": "has_more"
   }
@@ -303,7 +303,7 @@ git commit -m "feat(config): add apiPatterns and dataSources to selectors.json f
 
 ---
 
-## Phase 2: 私密视频过滤（C 章）
+## Phase 2: 非公开视频过滤（C 章）
 
 ### 任务 3：抖音 — play_count 二次提取与过滤
 
@@ -321,26 +321,26 @@ const awemeIdToPlayCount = new Map<string, number>();
 在 L349 `for (const raw of rawItems)` 循环体内，L357 `}` 之后（author 提取完成后），新增：
 
 ```typescript
-// 提取 play_count 用于私密过滤（parseVideoItem 会剥离 statistics 字段）
+// 提取 play_count 用于非公开过滤（parseVideoItem 会剥离 statistics 字段）
 const playCount = raw.statistics?.play_count ?? raw.stat?.play_count ?? raw.play_count;
 if (id && playCount !== undefined) {
   awemeIdToPlayCount.set(String(id), Number(playCount));
 }
 ```
 
-- [ ] **步骤 2：在 sliced 之后新增私密过滤**
+- [ ] **步骤 2：在 sliced 之后新增非公开过滤**
 
 在 `douyinCrawler.ts` L373（`sliced` 变量定义完成后），新增：
 
 ```typescript
-// 私密视频过滤：play_count === 0 视为私密
+// 非公开视频过滤：play_count === 0 视为非公开
 const filtered = sliced.filter((item: any) => {
   const playCount = awemeIdToPlayCount.get(String(item.aweme_id));
   if (playCount === 0) {
-    logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤私密视频（play_count=0）');
+    logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤非公开视频（play_count=0）');
     return false;
   }
-  return true; // playCount 为 undefined 时视为公开（字段缺失不等于私密）
+  return true; // playCount 为 undefined 时视为公开（字段缺失不等于非公开）
 });
 ```
 
@@ -391,23 +391,23 @@ const awemeIdToPhotoStatus = new Map<string, number>();
 在 L599 `for (const raw of rawItems)` 循环体内，L606 `}` 之后，新增：
 
 ```typescript
-// 提取 photoStatus 用于私密过滤（photo_analysis 源无此字段，undefined 视为公开）
+// 提取 photoStatus 用于非公开过滤（photo_analysis 源无此字段，undefined 视为公开）
 const photoStatus = raw.photoStatus ?? raw.status;
 if (id && photoStatus !== undefined) {
   awemeIdToPhotoStatus.set(String(id), Number(photoStatus));
 }
 ```
 
-- [ ] **步骤 2：在 sliced 之后新增私密过滤**
+- [ ] **步骤 2：在 sliced 之后新增非公开过滤**
 
 在 `kuaishouCrawler.ts` L619（`sliced` 变量定义完成后），新增：
 
 ```typescript
-// 私密视频过滤：photoStatus !== 0 视为私密（必须先检查 undefined，photo_analysis 源无此字段）
+// 非公开视频过滤：photoStatus !== 0 视为非公开（必须先检查 undefined，photo_analysis 源无此字段）
 const filtered = sliced.filter((item: any) => {
   const photoStatus = awemeIdToPhotoStatus.get(String(item.aweme_id));
   if (photoStatus !== undefined && photoStatus !== 0) {
-    logger.info({ awemeId: item.aweme_id, photoStatus }, '[Phase1] 过滤私密视频（photoStatus!=0）');
+    logger.info({ awemeId: item.aweme_id, photoStatus }, '[Phase1] 过滤非公开视频（photoStatus!=0）');
     return false;
   }
   return true;
@@ -435,7 +435,7 @@ git commit -m "feat(kuaishou): filter private videos with photoStatus!=0"
 在 `tencentCrawler.ts` L868（`commentClose` 过滤的 `continue` 之后），新增：
 
 ```typescript
-// 私密视频过滤：visibleType !== 1 为非公开（必须先检查 undefined，旧数据可能无此字段）
+// 非公开视频过滤：visibleType !== 1 为非公开（必须先检查 undefined，旧数据可能无此字段）
 if (video.visibleType !== undefined && video.visibleType !== 1) {
   logger.info({ exportId: video.exportId, visibleType: video.visibleType }, '[Phase1] 过滤非公开视频（visibleType!=1）');
   continue;
@@ -467,7 +467,7 @@ git commit -m "feat(tencent): filter private videos with visibleType!=1, encode 
 
 ---
 
-### 任务 6：已入库私密视频动态剔除（三平台通用逻辑）
+### 任务 6：已入库非公开视频动态剔除（三平台通用逻辑）
 
 **文件：**
 - 修改：`apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`（checkForUpdates 函数）
@@ -479,13 +479,13 @@ git commit -m "feat(tencent): filter private videos with visibleType!=1, encode 
 找到抖音 `checkForUpdates` 函数中已有视频对比逻辑的位置（通常在获取 `dbVideos` 之后、构建 `commentsQueue` 之前），新增：
 
 ```typescript
-// 动态剔除：已入库视频变为私密（play_count=0）时从数据库删除
+// 动态剔除：已入库视频变为非公开（play_count=0）时从数据库删除
 for (const dbVideo of dbVideos) {
   const freshItem = filtered.find((f: any) => f.aweme_id === dbVideo.id);
   if (!freshItem) {
     const playCount = awemeIdToPlayCount.get(dbVideo.id);
     if (playCount === 0) {
-      logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为私密，剔除');
+      logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为非公开，剔除');
       await prisma.video.delete({ where: { id: dbVideo.id } });
     }
   }
@@ -894,7 +894,7 @@ git commit -m "chore: video monitoring redesign — all phases complete"
 |-------|------|
 | 规格覆盖度 — A 章（数据源调研） | ✅ 已内联到 selectors.json 配置中 |
 | 规格覆盖度 — B 章（选择器配置） | ✅ 任务 1-2 覆盖 |
-| 规格覆盖度 — C 章（私密过滤） | ✅ 任务 3-6 覆盖 |
+| 规格覆盖度 — C 章（非公开过滤） | ✅ 任务 3-6 覆盖 |
 | 规格覆盖度 — D 章（抽屉匹配） | ✅ 任务 7-10 覆盖 |
 | 占位符扫描 | ✅ 无 TODO/待定 |
 | 类型一致性 | ✅ parseDomTimestamp 签名在所有调用处一致 |

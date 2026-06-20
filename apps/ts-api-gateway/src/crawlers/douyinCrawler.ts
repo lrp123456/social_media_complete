@@ -8,7 +8,7 @@ import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
-import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
+import { isDescriptionMatch } from './timeParser';
 import fs from 'fs';
 import path from 'path';
 
@@ -144,7 +144,7 @@ export class DouyinCrawler {
   private commentListenerPageId: string | null = null;
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
   private page?: Page;
-  private awemeIdToPlayCount: Map<string, number> = new Map();
+  private awemeIdToViewCount: Map<string, number> = new Map();
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -327,52 +327,69 @@ export class DouyinCrawler {
     }));
     logger.info({ source, step: 'INITIAL_ITEMS', initialCount: initialItems.length, sampleItems }, 'Initial video items parsed with comment diagnostics');
 
-    await this.scrollToLoadMoreWithDualStop(page, pattern);
+    // 从 raw responses 中提取 authorUid 和 view_count（增量构建，供滚动循环和后处理共用）
+    // 抖音 item_list 实际字段：item.user_id（字符串），不是嵌套的 author 对象
+    // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
+    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToViewCount = new Map<string, number>();
+    const privateAwemeIds = new Set<string>();
+
+    /** 从 raw responses 中增量更新 viewCount map，返回当前公开视频数 */
+    const updateViewCountMapAndGetPublicCount = (): number => {
+      const rawResponses = this.interceptor.getResponses(pattern) || [];
+      for (const resp of rawResponses) {
+        const body = (resp as any)?.body;
+        if (!body || typeof body !== 'object') continue;
+        const rawItems: any[] =
+          (Array.isArray(body.items) ? body.items : null) ||
+          (Array.isArray(body.video_list) ? body.video_list : null) ||
+          (Array.isArray(body.aweme_list) ? body.aweme_list : null) ||
+          (Array.isArray(body.item_list) ? body.item_list : null) ||
+          (Array.isArray(body.data?.items) ? body.data.items : null) ||
+          (Array.isArray(body.data?.list) ? body.data.list : null) ||
+          (Array.isArray(body.data?.aweme_list) ? body.data.aweme_list : null) ||
+          (Array.isArray(body.data?.videoList) ? body.data.videoList : null) ||
+          [];
+        for (const raw of rawItems) {
+          const id = raw.aweme_id || raw.item_id || raw.id;
+          const uid = raw.user_id || raw.author?.uid || raw.author_id;
+          if (id && uid) {
+            awemeIdToAuthor.set(String(id), {
+              uid: String(uid),
+              nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
+            });
+          }
+          const viewCount = raw.metrics?.view_count;
+          if (id && viewCount !== undefined) {
+            awemeIdToViewCount.set(String(id), Number(viewCount));
+            if (Number(viewCount) === 0) {
+              privateAwemeIds.add(String(id));
+            }
+          }
+        }
+      }
+      // 公开视频数 = 已收集总数 - 已知非公开数
+      const collectedCount = this.interceptor.getCollectedCount(pattern);
+      const publicCount = collectedCount - privateAwemeIds.size;
+      return publicCount;
+    };
+
+    // 初始更新一次，获取初始公开视频数
+    const initialPublicCount = updateViewCountMapAndGetPublicCount();
+    logger.info({ source, collected: initialItems.length, publicCount: initialPublicCount, privateCount: privateAwemeIds.size }, '[Phase1] Initial view count map built');
+
+    // 传入公开视频计数回调，让滚动循环用公开视频数判断是否停止
+    await this.scrollToLoadMoreWithDualStop(page, pattern, updateViewCountMapAndGetPublicCount);
 
     const allItems = this.interceptor.getCollectedItems(pattern);
 
-    // 从 raw responses 中提取 authorUid（parseVideoItem 会剥离 author 字段）
-    // 抖音 item_list 实际字段：item.user_id（字符串），不是嵌套的 author 对象
-    // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
-    const rawResponses = this.interceptor.getResponses(pattern) || [];
-    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
-    const awemeIdToPlayCount = new Map<string, number>();
-    for (const resp of rawResponses) {
-      const body = (resp as any)?.body;
-      if (!body || typeof body !== 'object') continue;
-      const rawItems: any[] =
-        (Array.isArray(body.items) ? body.items : null) ||
-        (Array.isArray(body.video_list) ? body.video_list : null) ||
-        (Array.isArray(body.aweme_list) ? body.aweme_list : null) ||
-        (Array.isArray(body.item_list) ? body.item_list : null) ||
-        (Array.isArray(body.data?.items) ? body.data.items : null) ||
-        (Array.isArray(body.data?.list) ? body.data.list : null) ||
-        (Array.isArray(body.data?.aweme_list) ? body.data.aweme_list : null) ||
-        (Array.isArray(body.data?.videoList) ? body.data.videoList : null) ||
-        [];
-      for (const raw of rawItems) {
-        const id = raw.aweme_id || raw.item_id || raw.id;
-        // item_list: user_id 是直接字段；work_list: 可能在 author.uid
-        const uid = raw.user_id || raw.author?.uid || raw.author_id;
-        if (id && uid) {
-          awemeIdToAuthor.set(String(id), {
-            uid: String(uid),
-            nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
-          });
-        }
-        // 提取 play_count 用于私密过滤（parseVideoItem 会剥离 statistics 字段）
-        const playCount = raw.statistics?.play_count ?? raw.stat?.play_count ?? raw.play_count;
-        if (id && playCount !== undefined) {
-          awemeIdToPlayCount.set(String(id), Number(playCount));
-        }
-      }
-    }
     logger.info(
       { source, mapSize: awemeIdToAuthor.size, sampleAuthor: awemeIdToAuthor.size > 0 ? Array.from(awemeIdToAuthor.values())[0] : null },
       '[Phase1] Author extraction from raw responses',
     );
 
-    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => {
+    // 先过滤非公开，再截断到 maxMonitorVideos（确保返回的公开视频数尽量达到目标）
+    const enriched = allItems.map((item: any) => {
       const author = awemeIdToAuthor.get(String(item.aweme_id));
       return {
         ...item,
@@ -381,14 +398,14 @@ export class DouyinCrawler {
       };
     });
 
-    // 私密视频过滤：play_count === 0 视为私密
-    const filtered = sliced.filter((item: any) => {
-      const playCount = awemeIdToPlayCount.get(String(item.aweme_id));
-      if (playCount === 0) {
-        logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤私密视频（play_count=0）');
+    // 非公开视频过滤：metrics.view_count === 0 视为非公开
+    const filtered = enriched.filter((item: any) => {
+      const viewCount = awemeIdToViewCount.get(String(item.aweme_id));
+      if (viewCount === 0) {
+        logger.info({ awemeId: item.aweme_id }, '[Phase1] 过滤非公开视频（view_count=0）');
         return false;
       }
-      return true; // playCount 为 undefined 时视为公开（字段缺失不等于私密）
+      return true; // viewCount 为 undefined 时视为公开（字段缺失不等于非公开）
     });
 
     logger.info({
@@ -397,16 +414,28 @@ export class DouyinCrawler {
       totalCollected: allItems.length,
       totalResponses: this.interceptor.getResponseCount(pattern),
       finalCount: filtered.length,
-      privateFiltered: sliced.length - filtered.length,
+      privateFiltered: enriched.length - filtered.length,
       maxMonitor: this.maxMonitorVideos,
       awemeIds: filtered.map(i => i.aweme_id),
     }, 'Video list fetch completed');
 
-    this.awemeIdToPlayCount = awemeIdToPlayCount;
+    this.awemeIdToViewCount = awemeIdToViewCount;
     return filtered;
   }
 
-  private async scrollToLoadMoreWithDualStop(page: Page, pattern: string): Promise<void> {
+  /**
+   * 滚动加载视频列表，支持双停止条件：
+   * 1. 公开视频数达到 maxMonitorVideos（通过 getPublicCount 回调计算）
+   * 2. 连续无新数据
+   *
+   * @param getPublicCount 可选回调，返回当前已收集的公开视频数（过滤非公开后）
+   *                      如果不提供，则使用原始 collectedCount 作为停止条件
+   */
+  private async scrollToLoadMoreWithDualStop(
+    page: Page,
+    pattern: string,
+    getPublicCount?: () => number,
+  ): Promise<void> {
     let totalScrolls = 0;
     let scrollsSinceNewData = 0;
     let lastKnownCount = this.interceptor.getCollectedCount(pattern);
@@ -415,6 +444,7 @@ export class DouyinCrawler {
     while (totalScrolls < MAX_SCROLL_ATTEMPTS) {
       const collectedCount = this.interceptor.getCollectedCount(pattern);
       const responseCount = this.interceptor.getResponseCount(pattern);
+      const publicCount = getPublicCount ? getPublicCount() : collectedCount;
 
       if (collectedCount > lastKnownCount || responseCount > lastKnownResponseCount) {
         scrollsSinceNewData = 0;
@@ -424,6 +454,7 @@ export class DouyinCrawler {
           step: 'DAEMON_DATA_ARRIVED',
           totalScrolls,
           collectedCount,
+          publicCount,
           responseCount,
           maxMonitor: this.maxMonitorVideos,
         }, 'Background daemon detected new data');
@@ -433,24 +464,26 @@ export class DouyinCrawler {
         step: 'SCROLL_ITERATION',
         totalScrolls,
         collectedCount,
+        publicCount,
         responseCount,
         maxMonitor: this.maxMonitorVideos,
         scrollsSinceNewData,
         dataExhausted: this.interceptor.hasDataExhausted(pattern),
       }, 'Scroll loop iteration (async dual-track)');
 
-      if (collectedCount >= this.maxMonitorVideos) {
-        logger.info({ collectedCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'Quantity cap reached - stopping scroll');
+      // 使用公开视频数判断是否达到目标数量
+      if (publicCount >= this.maxMonitorVideos) {
+        logger.info({ collectedCount, publicCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'Public video quantity cap reached - stopping scroll');
         break;
       }
 
       if (this.interceptor.hasDataExhausted(pattern)) {
-        logger.info({ totalScrolls, collectedCount }, 'Data exhausted (has_more=false) - stopping scroll');
+        logger.info({ totalScrolls, collectedCount, publicCount }, 'Data exhausted (has_more=false) - stopping scroll');
         break;
       }
 
       if (scrollsSinceNewData >= MAX_SCROLL_NO_NEW_DATA) {
-        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount }, 'No new data after consecutive scrolls - stopping');
+        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount, publicCount }, 'No new data after consecutive scrolls - stopping');
         break;
       }
 
@@ -471,6 +504,7 @@ export class DouyinCrawler {
           step: 'SCROLL_IMMEDIATE_HIT',
           totalScrolls,
           newCount: postScrollCount,
+          publicCount: getPublicCount ? getPublicCount() : postScrollCount,
           increment: postScrollCount - collectedCount,
         }, 'New data arrived immediately after scroll');
       } else {
@@ -496,7 +530,13 @@ export class DouyinCrawler {
       }
     }
 
-    logger.info({ step: 'SCROLL_LOOP_DONE', totalScrolls, finalCollected: this.interceptor.getCollectedCount(pattern), finalResponses: this.interceptor.getResponseCount(pattern) }, 'Scroll loop finished');
+    logger.info({
+      step: 'SCROLL_LOOP_DONE',
+      totalScrolls,
+      finalCollected: this.interceptor.getCollectedCount(pattern),
+      finalPublic: getPublicCount ? getPublicCount() : this.interceptor.getCollectedCount(pattern),
+      finalResponses: this.interceptor.getResponseCount(pattern),
+    }, 'Scroll loop finished');
   }
 
   private async humanReadingPause(page: Page): Promise<void> {
@@ -1234,14 +1274,14 @@ export class DouyinCrawler {
 
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
-    // 动态剔除：已入库视频变为私密（play_count=0）时从数据库删除
-    const awemeIdToPlayCount = this.awemeIdToPlayCount;
+    // 动态剔除：已入库视频变为非公开（view_count=0）时从数据库删除
+    const awemeIdToViewCount = this.awemeIdToViewCount;
     for (const dbVideo of dbVideos) {
       const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
       if (!freshItem) {
-        const playCount = awemeIdToPlayCount.get(dbVideo.id);
-        if (playCount === 0) {
-          logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为私密，剔除');
+        const viewCount = awemeIdToViewCount.get(dbVideo.id);
+        if (viewCount === 0) {
+          logger.info({ awemeId: dbVideo.id }, '[Phase1] 已入库视频变为非公开，剔除');
           await prisma.video.delete({ where: { id: dbVideo.id } });
         }
       }
@@ -1565,7 +1605,7 @@ export class DouyinCrawler {
           }
 
           const clickT0 = Date.now();
-          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer video click completed');
           if (!clicked) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to find/click video in drawer — manually closing and skipping');
@@ -2377,12 +2417,10 @@ export class DouyinCrawler {
     page: Page,
     awemeId: string,
     description: string,
-    createTime: number,
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS_DRAWER = 25;
-    const TIMESTAMP_TOLERANCE = 60; // 秒
 
-    logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
+    logger.info({ awemeId, descPrefix: description.substring(0, 30) }, '[Drawer] Searching for target video in drawer');
 
     // 检查"没有更多视频"标记（避免无意义滚动）
     const noMoreVideo = await page.evaluate(() => {
@@ -2414,20 +2452,15 @@ export class DouyinCrawler {
       for (const container of containerElements) {
         const containerText = container.text || '';
 
-        // 1. 提取 DOM 时间戳
-        const domTimestamp = parseDomTimestamp(containerText, 'douyin');
-        if (domTimestamp === null) continue; // 时间解析失败，跳过
-
-        // 2. 时间差判断
-        if (!isTimestampMatch(domTimestamp, createTime, TIMESTAMP_TOLERANCE)) continue;
-
-        // 3. 时间匹配后，检查 description 前缀
+        // 纯描述前缀匹配（不依赖时间戳）
+        // API create_time（创建时间）与 DOM 发布时间差异可达 30 天，时间戳匹配不可靠
+        // 抽屉按发布时间倒序排列，第一个匹配的就是最新的同名视频
         if (!isDescriptionMatch(containerText, description)) continue;
 
-        // 4. 双重确认通过，点击
+        // 描述匹配，点击
         const clicked = await HumanActions.cdpClickNode(page, container.nodeId);
         if (clicked) {
-          logger.info({ awemeId, domTimestamp, createTime, timeDiff: Math.abs(domTimestamp - createTime), matchType: 'timestamp+description' }, '[Drawer] 匹配成功（时间戳+描述双重确认）');
+          logger.info({ awemeId, matchType: 'description' }, '[Drawer] 匹配成功（描述前缀）');
           return true;
         }
 
@@ -2754,6 +2787,7 @@ export class DouyinCrawler {
     const preScrollResult = await page.evaluate(() => {
       const viewportH = window.innerHeight;
       const all = Array.from(document.querySelectorAll('*'));
+      const hiddenButtons: Array<{ top: number; bottom: number }> = [];
       for (const el of all) {
         const t = (el.textContent || '').trim();
         if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
@@ -2762,18 +2796,29 @@ export class DouyinCrawler {
         );
         if (!isLeaf) continue;
         const rect = el.getBoundingClientRect();
-        if (rect.top < 0 || rect.bottom > viewportH) {
-          return { found: true, scrolled: true, top: Math.round(rect.top) };
+        if (rect.bottom > viewportH || rect.top < 0) {
+          hiddenButtons.push({ top: Math.round(rect.top), bottom: Math.round(rect.bottom) });
         }
+      }
+      if (hiddenButtons.length > 0) {
+        // 找到最下方的隐藏按钮，计算需要滚动的距离
+        const maxBottom = Math.max(...hiddenButtons.map(b => b.bottom));
+        const minTop = Math.min(...hiddenButtons.map(b => b.top));
+        // 如果按钮在视窗下方，滚动距离 = 按钮底部 - 视窗高度 + 余量
+        // 如果按钮在视窗上方（已滚过头），滚动距离 = 按钮顶部 - 余量（负值=向上滚）
+        const scrollNeeded = maxBottom > viewportH
+          ? maxBottom - viewportH + 150  // 向下滚
+          : minTop - 150;                 // 向上滚（负值）
+        return { found: true, count: hiddenButtons.length, scrollNeeded };
       }
       return { found: false };
     });
 
-    if (preScrollResult.found && preScrollResult.scrolled) {
-      // 向下滚动评论区域以将按钮带入视窗（直接操作 scrollTop，避免 wheel 事件滚页面 body）
-      await this.scrollCommentArea(page, 300);
-      logger.info({ awemeId, buttonTop: preScrollResult.top }, '[SmartScroll] Expand button outside viewport, scrolled into view');
-      await HumanActions.wait(page, 500, 800);
+    if (preScrollResult.found && preScrollResult.scrollNeeded) {
+      const scrollPx = preScrollResult.scrollNeeded;
+      await this.scrollCommentArea(page, scrollPx);
+      logger.info({ awemeId, hiddenBtnCount: preScrollResult.count, scrollPx }, '[SmartScroll] Expand buttons outside viewport, scrolled into view');
+      await HumanActions.wait(page, 800, 1200);
     }
 
     for (let scrollRound = 0; scrollRound < MAX_SCROLL_ROUNDS; scrollRound++) {

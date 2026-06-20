@@ -16,14 +16,14 @@
 
 1. **deep 模式**：支持小红书完整评论树的采集（一级评论 + 子评论），对齐抖音/快手的 Phase 1→2→3 三阶段流水线
 2. **评论回复**：支持在笔记评论区执行回复操作（手动回复 + AI 建议回复），对齐抖音 `replyToComment` 流程
-3. **视频生命周期管理**：全平台统一处理视频删除、私密化、新增等场景
+3. **视频生命周期管理**：全平台统一处理视频删除、非公开化、新增等场景
 4. **选择器外置化**：所有涉及的选择器放入 `selectors.json`，优先文本选择器，参考抖音"先定位容器再操作"的模式
 
 ### 约束
 
 - 主站（`www.xiaohongshu.com`）与创作者中心（`creator.xiaohongshu.com`）账号不互通，需两次独立登录校验
 - 必须通过"点击笔记管理页面的缩略图"方式进入主站（不能直接 `page.goto` 构造 URL）
-- 私密视频（`仅自己可见`）的缩略图不可点击跳转，必须提前过滤
+- 非公开视频（`仅自己可见`）的缩略图不可点击跳转，必须提前过滤
 - 所有选择器必须外置化到 `selectors.json`，优先文本选择器
 - 操作模式：先定位容器，再在容器内定位按钮/元素（参照抖音 `comment_root_container` 模式）
 
@@ -46,7 +46,7 @@
 Phase 0: 创作者中心登录态校验
   └─ 失败 → 截 QR 发企微（platform=xiaohongshu 创作者）→ 终止本轮
 
-Phase 1: 笔记列表扫描 + 私密过滤（必须执行，light 模式也用）
+Phase 1: 笔记列表扫描 + 非公开过滤（必须执行，light 模式也用）
   ├─ 拦截 /api/galaxy/v2/creator/note/user/posted
   ├─ 滚动加载至 maxMonitorVideos（默认 20）
   ├─ 从响应解析：id, comments_count, permission_code
@@ -80,8 +80,8 @@ Phase 4: 退出策略
 
 | 模式 | Phase 1 | Phase 2 | Phase 3 | 输出 |
 |------|---------|---------|---------|------|
-| light | ✓（含私密过滤）| ✗ | ✗ | 评论数变化合成 Comment |
-| deep  | ✓（含私密过滤）| ✓ | ✓ | 完整评论树入 Comment 表 |
+| light | ✓（含非公开过滤）| ✗ | ✗ | 评论数变化合成 Comment |
+| deep  | ✓（含非公开过滤）| ✓ | ✓ | 完整评论树入 Comment 表 |
 
 ---
 
@@ -93,8 +93,8 @@ Phase 4: 退出策略
 |------|----------|---------|----------|
 | A. 新视频发布 | 可见 | 不存在 | 入库（若有评论 → 进队列）|
 | B. 视频删除 | 不可见 | 存在 | 删除 DB 记录 |
-| C. XHS 改私密 | `permission_code=1` | 存在 | 删除 DB 记录 |
-| D. 私密→公开 | `permission_code=0` | 不存在 | 视为新视频 |
+| C. XHS 改非公开 | `permission_code=1` | 存在 | 删除 DB 记录 |
+| D. 非公开→公开 | `permission_code=0` | 不存在 | 视为新视频 |
 | E. 评论数变化 | 可见 | 存在 | 进队列采集 |
 | F. 评论数不变 | 可见 | 存在 | 更新元数据 |
 | G. 超 maxVideos | 不在源端前 N 条 | 存在 | 删除 |
@@ -148,7 +148,7 @@ else:
 | 抖音 | `upsertVideosBatch + truncateVideosByUser` | `reconcileVideosForUser` |
 | 快手 | 同上 | 同上 |
 | 视频号 | 同上 | 同上 |
-| 小红书 | 同上 + 私密过滤前置 | `permission_code === 0` 过滤 + `reconcileVideosForUser` |
+| 小红书 | 同上 + 非公开过滤前置 | `permission_code === 0` 过滤 + `reconcileVideosForUser` |
 
 旧函数标记 `@deprecated`，保留向后兼容。
 
@@ -174,7 +174,7 @@ model Video {
 }
 ```
 
-**不引入 `xsecToken`/`permissionCode`/`isPrivate` 字段**——私密视频**永不入库**，`xsec_token` 在 Phase 1 内存中持有。
+**不引入 `xsecToken`/`permissionCode`/`isPrivate` 字段**——非公开视频**永不入库**，`xsec_token` 在 Phase 1 内存中持有。
 
 ### 4.2 Comment 表（无变更）
 
@@ -209,7 +209,7 @@ model Video {
 |----|----------|------|------|
 | `region.note-card-by-id` | `.note-card[data-impression*="\"noteId\":\"{noteId}\""]` | css | 按 noteId 定位笔记卡片 |
 | `region.note-card-cover` | `.note-card__cover .media-body` | css | 缩略图可点击区域 |
-| `region.note-card-private-marker` | `getByText("仅自己可见", exact=True)` | text | 私密防护检测 |
+| `region.note-card-private-marker` | `getByText("仅自己可见", exact=True)` | text | 非公开防护检测 |
 
 **B. 主站登录态检测（3 项）**
 
@@ -343,7 +343,7 @@ export interface ReplyTarget {
 | `douyinCrawler.ts` | 修改 | reconcileVideosForUser + 共享 ReplyTarget 导入 |
 | `kuaishouCrawler.ts` | 修改 | 同上 |
 | `tencentCrawler.ts` | 修改 | 同上 |
-| `xiaohongshuCrawler.ts` | **大改** | 新增 Phase 2/3 + replyToComment + 私密过滤 |
+| `xiaohongshuCrawler.ts` | **大改** | 新增 Phase 2/3 + replyToComment + 非公开过滤 |
 | `menuSelectors.ts` | 修改 | CRAWLER_KEY_MAP 新增 22 个键 |
 | `selectors.json` | 修改 | XHS 节点新增 22 条目 |
 | `monitorService.ts` | 修改 | runXiaohongshuCheck 三阶段 + executeReplyAction XHS 分支 |
@@ -370,7 +370,7 @@ export interface ReplyTarget {
 |------|------|------|
 | **P0** | 新增 `reconcileVideosForUser` + 保护机制 | — |
 | **P1** | 全平台调用方迁移到新函数 | P0 |
-| **P2** | XHS Phase 1 私密过滤 + 解除 deep 限制 | P1 |
+| **P2** | XHS Phase 1 非公开过滤 + 解除 deep 限制 | P1 |
 | **P3** | selectors.json + menuSelectors.ts 新增 22 键 | P2 |
 | **P4** | replyTypes.ts 共享接口 + 更新 import | P3 |
 | **P5** | XHS Phase 2 主站登录校验 + QR 流程 | P3 |
@@ -382,6 +382,6 @@ export interface ReplyTarget {
 
 ## 10. 废弃的设计决策
 
-1. ~~Video 表新增 `xsecToken`/`permissionCode`/`isPrivate` 字段~~ → 私密视频不入库，可见性在 Phase 1 API 解析时过滤
+1. ~~Video 表新增 `xsecToken`/`permissionCode`/`isPrivate` 字段~~ → 非公开视频不入库，可见性在 Phase 1 API 解析时过滤
 2. ~~通过 `page.goto` 直接导航到主站~~ → 必须点击缩略图（主站与 creator 账号不互通）
 3. ~~每个视频独开新标签页~~ → 保留该方案（串行单击逐个采集）

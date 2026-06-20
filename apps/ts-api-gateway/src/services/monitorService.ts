@@ -1091,6 +1091,21 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
       oldCount: v.oldCount,
       newCount: v.newCount,
     }));
+
+    // Light 模式：更新评论数和标记已通知（Phase3 不会运行）
+    for (const u of updates) {
+      const diff = u.newCount - u.oldCount;
+      if (diff > 0) {
+        await db.updateCommentCount(u.awemeId, u.newCount);
+        await db.markCommentsAsNotified(u.awemeId);
+        // 创建轻量模式合成评论，供前端 new-comments API 显示
+        await db.upsertLightModeComment(u.awemeId, {
+          text: `[轻量模式] ${diff} 条新评论`,
+          create_time: Math.floor(Date.now() / 1000),
+        });
+      }
+    }
+
     return { hasUpdate: phase1Result.hasUpdate, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
   }
 
@@ -1146,6 +1161,35 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
       oldCount: q.oldCount,
       newCount: q.newCount,
     }));
+
+  // Phase3 成功后更新评论数和标记已通知（之前在 Phase1 中做，现在移到 Phase3 之后）
+  for (const u of updates) {
+    await db.updateCommentCount(u.awemeId, u.newCount);
+    await db.markCommentsAsNotified(u.awemeId);
+  }
+
+  // Phase3 失败的视频：如果 Phase3 没有成功采集评论树，仍然更新评论数（使用 API 返回的轻量计数）
+  // 这样至少能保证数据库中的评论数是最新的，即使没有详细的评论树
+  const failedUpdates = queue
+    .filter((q: any) => failed.some((r: any) => r.awemeId === q.exportId))
+    .map((q: any) => ({
+      awemeId: q.exportId,
+      description: q.description,
+      oldCount: q.oldCount,
+      newCount: q.newCount,
+    }));
+  for (const u of failedUpdates) {
+    const diff = u.newCount - u.oldCount;
+    if (diff > 0) {
+      await db.updateCommentCount(u.awemeId, u.newCount);
+      await db.markCommentsAsNotified(u.awemeId);
+      // 创建轻量模式合成评论，供前端 new-comments API 显示
+      await db.upsertLightModeComment(u.awemeId, {
+        text: `[轻量模式] ${diff} 条新评论（Phase3 采集失败）`,
+        create_time: Math.floor(Date.now() / 1000),
+      });
+    }
+  }
 
   logger.info({
     userId: task.userId,

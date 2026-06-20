@@ -8,7 +8,7 @@ import { createLogger } from '../lib/logger';
 import { submitPublishTask, publishQueue } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
-import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, markJobCancelled, cancelledJobIds } from '../services/monitorService';
+import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
 import { enqueueReply, platformQueue } from '../services/unifiedQueue';
 
 const router = Router();
@@ -1287,20 +1287,61 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
   }
 });
 
-/** POST /api/v1/matrix/monitor/videos/clear — 清空视频及评论数据（测试用） */
+/** POST /api/v1/matrix/monitor/videos/clear — 清空视频及评论数据，同时清空队列并暂停所有平台 */
 router.post('/monitor/videos/clear', async (_req: Request, res: Response) => {
   try {
+    // 1. 清空执行队列（取消所有 active/waiting/delayed 任务）
+    const [active, waiting, delayed] = await Promise.all([
+      monitorQueue.getJobs(['active']),
+      monitorQueue.getJobs(['waiting']),
+      monitorQueue.getJobs(['delayed']),
+    ]);
+    const allJobs = [...active, ...waiting, ...delayed];
+    const redis = monitorQueue.client;
+    const queueName = 'platform';
+    for (const job of allJobs) {
+      try {
+        markJobCancelled(job.id);
+        await job.discard().catch(() => {});
+        const keysToDelete = [
+          `bull:${queueName}:${job.id}`,
+          `bull:${queueName}:${job.id}:logs`,
+          `bull:${queueName}:${job.id}:lock`,
+          `bull:${queueName}:lock:${job.id}`,
+        ];
+        await redis.del(...keysToDelete).catch(() => {});
+        await redis.lrem(`bull:${queueName}:active`, 1, job.id).catch(() => {});
+        for (const setName of [`bull:${queueName}:wait`, `bull:${queueName}:waiting`, `bull:${queueName}:delayed`]) {
+          await redis.zrem(setName, job.id).catch(() => {});
+        }
+      } catch {}
+    }
+    logger.info({ cancelled: allJobs.length }, '清空数据时已取消所有队列任务');
+
+    // 2. 暂停所有平台（禁用所有用户的监控）
+    await prisma.user.updateMany({
+      data: { monitoringEnabled: false },
+    });
+    logger.info('已暂停所有平台监控');
+
+    // 3. 重启调度器（清除所有卡死的 scheduleAfterCompletion 状态）
+    restartMonitorScheduler();
+    logger.info('已重启调度器');
+
+    // 4. 清空视频及评论数据
     await prisma.videoRootCommentCount.deleteMany();
     await prisma.videoCommentRecord.deleteMany();
     await prisma.videoCommentCount.deleteMany();
     await prisma.comment.deleteMany();
     await prisma.video.deleteMany();
     await prisma.monitorStatus.deleteMany();
-    // 重置用户状态
+
+    // 4. 重置用户状态
     await prisma.user.updateMany({
       data: { consecutiveNoUpdate: 0, cooldownUntil: 0, status: 'init', platformAuthorId: null, platformAuthorName: null },
     });
-    res.json({ success: true, message: '视频数据库已清空' });
+
+    res.json({ success: true, message: '视频数据库已清空，队列已清空，所有平台已暂停' });
   } catch (err) {
     handleError(res, logger, err, '清空视频数据库失败');
   }
@@ -1380,13 +1421,19 @@ router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Respons
       },
     });
 
-    // 同步重启调度器，使其感知 monitoringEnabled 变化
+    // 同步该 (窗口, 平台) 的调度器状态（不重启全局调度器，避免影响其他平台）
     try {
-      const { restartMonitorScheduler } = await import('../services/monitorService');
-      restartMonitorScheduler();
-      logger.info({ userId, enabled }, '[toggle] 调度器已重启');
+      const { resetSchedulerTimer } = await import('../services/monitorService');
+      if (enabled) {
+        // 启用时：立即重置该 (窗口, 平台) 的调度器，触发即时调度
+        resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+        logger.info({ userId, windowId: user.fingerprintWindowId, platform: user.platform }, '[toggle] 调度器已重置，等待即时调度');
+      } else {
+        // 禁用时：无需操作，getAllActiveUsers() 已过滤 monitoringEnabled=false 的用户
+        logger.info({ userId, windowId: user.fingerprintWindowId, platform: user.platform }, '[toggle] 用户已禁用，调度器将在下次运行时自动跳过');
+      }
     } catch (restartErr: any) {
-      logger.warn({ err: restartErr.message }, '[toggle] 调度器重启失败（不影响 toggle 结果）');
+      logger.warn({ err: restartErr.message }, '[toggle] 调度器重置失败（不影响 toggle 结果）');
     }
 
     res.json({ success: true, enabled });

@@ -177,7 +177,7 @@ export default function DataSourceManager({ platform, onClose }: DataSourceManag
               </div>
               <div className="border border-outline-variant rounded-xl p-4 space-y-3">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-label-sm font-bold text-on-surface">私密过滤 (privateFilter)</h4>
+                  <h4 className="text-label-sm font-bold text-on-surface">非公开过滤 (privateFilter)</h4>
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input type="checkbox" checked={editingEntry.privateFilter?.enabled || false} onChange={(e) => { if (e.target.checked) { setPrivateFilter({ enabled: true, field: "", condition: "", dynamicRemove: false }); } else { setEditingEntry((prev) => ({ ...prev, privateFilter: undefined })); } }} className="rounded" />
                     <span className="text-body-xs text-on-surface">启用</span>

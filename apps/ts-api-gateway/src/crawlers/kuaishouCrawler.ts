@@ -573,82 +573,104 @@ export class KuaishouCrawler {
     }));
     logger.info({ source, step: 'INITIAL_ITEMS', initialCount: initialItems.length, sampleItems }, 'Kuaishou video items parsed with comment diagnostics');
 
+    // 从 raw responses 中提取 authorUid 和 photoStatus（增量构建，供滚动循环和后处理共用）
+    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToPhotoStatus = new Map<string, number>();
+    const privateAwemeIds = new Set<string>();
+
+    /** 从 raw responses 中增量更新 photoStatus map，返回当前公开视频数 */
+    const updatePhotoStatusMapAndGetPublicCount = (): number => {
+      const rawResponses = this.interceptor.getResponses(pattern) || [];
+      for (const resp of rawResponses) {
+        const body = (resp as any)?.body;
+        if (!body || typeof body !== 'object') continue;
+        const rawItems: any[] =
+          (Array.isArray(body.items) ? body.items : null) ||
+          (Array.isArray(body.list) ? body.list : null) ||
+          (Array.isArray(body.feeds) ? body.feeds : null) ||
+          (Array.isArray(body.data?.items) ? body.data.items : null) ||
+          (Array.isArray(body.data?.list) ? body.data.list : null) ||
+          (Array.isArray(body.data?.feeds) ? body.data.feeds : null) ||
+          (Array.isArray(body.data?.photoList?.photoItems) ? body.data.photoList.photoItems : null) ||
+          (Array.isArray(body.data?.photoList) ? body.data.photoList : null) ||
+          (Array.isArray(body.data?.analysisList) ? body.data.analysisList : null) ||
+          (Array.isArray(body.data?.worksList) ? body.data.worksList : null) ||
+          [];
+        for (const raw of rawItems) {
+          const id = raw.workId || raw.photoId || raw.id;
+          const uid = raw.userId || raw.authorId;
+          if (id && uid) {
+            awemeIdToAuthor.set(String(id), {
+              uid: String(uid),
+              nickname: raw.userName || raw.authorName || '',
+            });
+          }
+          // 提取 photoStatus 用于非公开过滤（photo_analysis 源无此字段，undefined 视为公开）
+          const photoStatus = raw.photoStatus ?? raw.status;
+          if (id && photoStatus !== undefined) {
+            awemeIdToPhotoStatus.set(String(id), Number(photoStatus));
+            if (Number(photoStatus) !== 0) {
+              privateAwemeIds.add(String(id));
+            }
+          }
+        }
+      }
+      // 公开视频数 = 已收集总数 - 已知非公开数
+      const collectedCount = this.interceptor.getCollectedCount(pattern);
+      const publicCount = collectedCount - privateAwemeIds.size;
+      return publicCount;
+    };
+
+    // 初始更新一次，获取初始公开视频数
+    const initialPublicCount = updatePhotoStatusMapAndGetPublicCount();
+    logger.info({ source, collected: initialItems.length, publicCount: initialPublicCount, privateCount: privateAwemeIds.size }, '[Phase1] Initial photo status map built');
+
     if (source === 'photo_analysis') {
       await this.paginateNextPage(page, pattern);
     } else {
-      await this.scrollToLoadMoreWithDualStop(page, pattern);
+      // 传入公开视频计数回调，让滚动循环用公开视频数判断是否停止
+      await this.scrollToLoadMoreWithDualStop(page, pattern, updatePhotoStatusMapAndGetPublicCount);
     }
 
     const allItems = this.interceptor.getCollectedItems(pattern);
 
-    // 从 raw responses 中提取 authorUid（探测所有可能的形状路径）
-    const rawResponses = this.interceptor.getResponses(pattern) || [];
-    const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
-    const awemeIdToPhotoStatus = new Map<string, number>();
-    for (const resp of rawResponses) {
-      const body = (resp as any)?.body;
-      if (!body || typeof body !== 'object') continue;
-      const rawItems: any[] =
-        (Array.isArray(body.items) ? body.items : null) ||
-        (Array.isArray(body.list) ? body.list : null) ||
-        (Array.isArray(body.feeds) ? body.feeds : null) ||
-        (Array.isArray(body.data?.items) ? body.data.items : null) ||
-        (Array.isArray(body.data?.list) ? body.data.list : null) ||
-        (Array.isArray(body.data?.feeds) ? body.data.feeds : null) ||
-        (Array.isArray(body.data?.photoList?.photoItems) ? body.data.photoList.photoItems : null) ||
-        (Array.isArray(body.data?.photoList) ? body.data.photoList : null) ||
-        (Array.isArray(body.data?.analysisList) ? body.data.analysisList : null) ||
-        (Array.isArray(body.data?.worksList) ? body.data.worksList : null) ||
-        [];
-      for (const raw of rawItems) {
-        const id = raw.workId || raw.photoId || raw.id;
-        const uid = raw.userId || raw.authorId;
-        if (id && uid) {
-          awemeIdToAuthor.set(String(id), {
-            uid: String(uid),
-            nickname: raw.userName || raw.authorName || '',
-          });
-        }
-        // 提取 photoStatus 用于私密过滤（photo_analysis 源无此字段，undefined 视为公开）
-        const photoStatus = raw.photoStatus ?? raw.status;
-        if (id && photoStatus !== undefined) {
-          awemeIdToPhotoStatus.set(String(id), Number(photoStatus));
-        }
-      }
-    }
     logger.info(
       { source, mapSize: awemeIdToAuthor.size, sampleAuthor: awemeIdToAuthor.size > 0 ? Array.from(awemeIdToAuthor.values())[0] : null },
       '[Kuaishou Phase1] Author extraction from raw responses',
     );
 
-    const sliced = allItems.slice(0, this.maxMonitorVideos).map((item: any) => ({
+    // 先 enrich，再过滤非公开，最后截断到 maxMonitorVideos（确保返回的公开视频数尽量达到目标）
+    const enriched = allItems.map((item: any) => ({
       ...item,
       authorUid: awemeIdToAuthor.get(String(item.aweme_id))?.uid || String(item.userId || item.authorId || ''),
       authorNickname: awemeIdToAuthor.get(String(item.aweme_id))?.nickname || item.userName || item.authorName || '',
     }));
 
-    // 私密视频过滤：photoStatus !== 0 视为私密（必须先检查 undefined，photo_analysis 源无此字段）
-    const filtered = sliced.filter((item: any) => {
+    // 非公开视频过滤：photoStatus !== 0 视为非公开（必须先检查 undefined，photo_analysis 源无此字段）
+    const filtered = enriched.filter((item: any) => {
       const photoStatus = awemeIdToPhotoStatus.get(String(item.aweme_id));
       if (photoStatus !== undefined && photoStatus !== 0) {
-        logger.info({ awemeId: item.aweme_id, photoStatus }, '[Phase1] 过滤私密视频（photoStatus!=0）');
+        logger.info({ awemeId: item.aweme_id, photoStatus }, '[Phase1] 过滤非公开视频（photoStatus!=0）');
         return false;
       }
       return true;
     });
+
+    const sliced = filtered.slice(0, this.maxMonitorVideos);
 
     logger.info({
       source,
       step: 'FETCH_COMPLETE',
       totalCollected: allItems.length,
       totalResponses: this.interceptor.getResponseCount(pattern),
-      finalCount: filtered.length,
+      finalCount: sliced.length,
+      privateFiltered: enriched.length - filtered.length,
       maxMonitor: this.maxMonitorVideos,
-      awemeIds: filtered.map(i => i.aweme_id),
+      awemeIds: sliced.map(i => i.aweme_id),
     }, 'Kuaishou video list fetch completed');
 
     this.awemeIdToPhotoStatus = awemeIdToPhotoStatus;
-    return filtered;
+    return sliced;
   }
 
   private isOnTargetPage(page: Page, source: KuaishouQuerySource): boolean {
@@ -845,7 +867,7 @@ export class KuaishouCrawler {
     logger.info({ step: 'PAGE_LOOP_DONE', totalPages, finalCollected: this.interceptor.getCollectedCount(pattern) }, 'Kuaishou page loop finished');
   }
 
-  private async scrollToLoadMoreWithDualStop(page: Page, pattern: string): Promise<void> {
+  private async scrollToLoadMoreWithDualStop(page: Page, pattern: string, getPublicCount?: () => number): Promise<void> {
     let totalScrolls = 0;
     let scrollsSinceNewData = 0;
     let lastKnownCount = this.interceptor.getCollectedCount(pattern);
@@ -854,6 +876,7 @@ export class KuaishouCrawler {
     while (totalScrolls < MAX_SCROLL_ATTEMPTS) {
       const collectedCount = this.interceptor.getCollectedCount(pattern);
       const responseCount = this.interceptor.getResponseCount(pattern);
+      const publicCount = getPublicCount ? getPublicCount() : collectedCount;
 
       if (collectedCount > lastKnownCount || responseCount > lastKnownResponseCount) {
         scrollsSinceNewData = 0;
@@ -863,6 +886,7 @@ export class KuaishouCrawler {
           step: 'DAEMON_DATA_ARRIVED',
           totalScrolls,
           collectedCount,
+          publicCount,
           responseCount,
           maxMonitor: this.maxMonitorVideos,
         }, 'Kuaishou background daemon detected new data');
@@ -872,24 +896,25 @@ export class KuaishouCrawler {
         step: 'SCROLL_ITERATION',
         totalScrolls,
         collectedCount,
+        publicCount,
         responseCount,
         maxMonitor: this.maxMonitorVideos,
         scrollsSinceNewData,
         dataExhausted: this.interceptor.hasDataExhausted(pattern),
       }, 'Kuaishou scroll loop iteration');
 
-      if (collectedCount >= this.maxMonitorVideos) {
-        logger.info({ collectedCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'Kuaishou quantity cap reached - stopping scroll');
+      if (publicCount >= this.maxMonitorVideos) {
+        logger.info({ collectedCount, publicCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'Kuaishou quantity cap reached - stopping scroll');
         break;
       }
 
       if (this.interceptor.hasDataExhausted(pattern)) {
-        logger.info({ totalScrolls, collectedCount }, 'Kuaishou data exhausted - stopping scroll');
+        logger.info({ totalScrolls, collectedCount, publicCount }, 'Kuaishou data exhausted - stopping scroll');
         break;
       }
 
       if (scrollsSinceNewData >= MAX_SCROLL_NO_NEW_DATA) {
-        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount }, 'Kuaishou no new data after consecutive scrolls - stopping');
+        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount, publicCount }, 'Kuaishou no new data after consecutive scrolls - stopping');
         break;
       }
 
@@ -935,7 +960,7 @@ export class KuaishouCrawler {
       }
     }
 
-    logger.info({ step: 'SCROLL_LOOP_DONE', totalScrolls, finalCollected: this.interceptor.getCollectedCount(pattern), finalResponses: this.interceptor.getResponseCount(pattern) }, 'Kuaishou scroll loop finished');
+    logger.info({ step: 'SCROLL_LOOP_DONE', totalScrolls, finalCollected: this.interceptor.getCollectedCount(pattern), finalPublic: getPublicCount ? getPublicCount() : this.interceptor.getCollectedCount(pattern), finalResponses: this.interceptor.getResponseCount(pattern) }, 'Kuaishou scroll loop finished');
   }
 
   private async humanReadingPause(page: Page): Promise<void> {
@@ -1256,14 +1281,14 @@ export class KuaishouCrawler {
 
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[Phase1] Comparing with database records (pre-upsert)');
 
-    // 动态剔除：已入库视频变为私密（photoStatus!=0）时从数据库删除
+    // 动态剔除：已入库视频变为非公开（photoStatus!=0）时从数据库删除
     const awemeIdToPhotoStatus = this.awemeIdToPhotoStatus;
     for (const dbVideo of dbVideos) {
       const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
       if (!freshItem) {
         const photoStatus = awemeIdToPhotoStatus.get(dbVideo.id);
         if (photoStatus !== undefined && photoStatus !== 0) {
-          logger.info({ awemeId: dbVideo.id, photoStatus }, '[Phase1] 已入库视频变为私密，剔除');
+          logger.info({ awemeId: dbVideo.id, photoStatus }, '[Phase1] 已入库视频变为非公开，剔除');
           await prisma.video.delete({ where: { id: dbVideo.id } });
         }
       }
