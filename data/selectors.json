@@ -1091,7 +1091,7 @@
           },
           "privateFilter": {
             "enabled": true,
-            "field": "statistics.play_count",
+            "field": "metrics.view_count",
             "condition": "=== 0",
             "dynamicRemove": true
           },
@@ -1115,7 +1115,7 @@
           },
           "privateFilter": {
             "enabled": true,
-            "field": "statistics.play_count",
+            "field": "metrics.view_count",
             "condition": "=== 0",
             "dynamicRemove": true
           },
@@ -1143,7 +1143,9 @@
               "id": "click_work_manage",
               "action": "click_menu",
               "description": "点击「内容管理」→「作品管理」",
-              "selector": { "key": "menus.menu_work_manage" }
+              "selector": {
+                "key": "menus.menu_work_manage"
+              }
             },
             {
               "id": "enable_interceptor",
@@ -1165,13 +1167,17 @@
               "id": "click_comment_manage",
               "action": "click_menu",
               "description": "点击「互动管理」→「评论管理」",
-              "selector": { "key": "menus.menu_comment_manage_new" }
+              "selector": {
+                "key": "menus.menu_comment_manage_new"
+              }
             },
             {
               "id": "click_select_works",
               "action": "click_button",
               "description": "点击「选择作品」",
-              "selector": { "key": "buttons.btn_select_works" }
+              "selector": {
+                "key": "buttons.btn_select_works"
+              }
             },
             {
               "id": "done",
@@ -1192,19 +1198,25 @@
               "id": "click_publish_hd",
               "action": "click_menu",
               "description": "点击「高清发布」",
-              "selector": { "key": "menus.menu_publish_hd" }
+              "selector": {
+                "key": "menus.menu_publish_hd"
+              }
             },
             {
               "id": "click_upload_video",
               "action": "click_button",
               "description": "点击「上传视频」",
-              "selector": { "key": "buttons.btn_upload_video" }
+              "selector": {
+                "key": "buttons.btn_upload_video"
+              }
             },
             {
               "id": "click_publish_submit",
               "action": "click_button",
               "description": "点击「发布」",
-              "selector": { "key": "buttons.btn_publish_submit" }
+              "selector": {
+                "key": "buttons.btn_publish_submit"
+              }
             },
             {
               "id": "done",
@@ -1220,13 +1232,17 @@
               "id": "click_comment_manage",
               "action": "click_menu",
               "description": "点击「互动管理」→「评论管理」",
-              "selector": { "key": "menus.menu_comment_manage_new" }
+              "selector": {
+                "key": "menus.menu_comment_manage_new"
+              }
             },
             {
               "id": "click_select_works",
               "action": "click_button",
               "description": "点击「选择作品」",
-              "selector": { "key": "buttons.btn_select_works" }
+              "selector": {
+                "key": "buttons.btn_select_works"
+              }
             },
             {
               "id": "enable_interceptor",
@@ -2230,7 +2246,7 @@
           },
           "privateFilter": {
             "enabled": false,
-            "description": "作品分析源天然无私密"
+            "description": "作品分析源天然无非公开"
           },
           "responseArrayPath": [
             "data.analysisList"
@@ -2251,7 +2267,9 @@
               "id": "click_work_manage",
               "action": "click_menu",
               "description": "点击「内容管理」→「作品管理」",
-              "selector": { "key": "menus.menu_work_manage" }
+              "selector": {
+                "key": "menus.menu_work_manage"
+              }
             },
             {
               "id": "enable_interceptor",
@@ -2273,7 +2291,9 @@
               "id": "click_comment_manage",
               "action": "click_menu",
               "description": "点击「互动管理」→「评论管理」",
-              "selector": { "key": "menus.menu_comment_manage" }
+              "selector": {
+                "key": "menus.menu_comment_manage"
+              }
             },
             {
               "id": "done",
@@ -2309,7 +2329,9 @@
               "id": "click_comment_manage",
               "action": "click_menu",
               "description": "点击「互动管理」→「评论管理」",
-              "selector": { "key": "menus.menu_comment_manage" }
+              "selector": {
+                "key": "menus.menu_comment_manage"
+              }
             },
             {
               "id": "enable_interceptor",
@@ -2806,6 +2828,49 @@
           ],
           "selectorType": "text",
           "description": "小红书发布成功提示"
+        },
+        "region_mainsite_user_avatar": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".reds-img-box img.reds-img, .reds-img",
+          "fallbacks": [
+            "img[class*=\"reds-img\"]",
+            ".reds-img-box img",
+            "img[src*=\"avatar\"][class*=\"reds\"]",
+            "[class*=\"user-avatar\"]",
+            ".avatar-container img"
+          ],
+          "selectorType": "css",
+          "description": "小红书主站用户头像（登录状态标识）"
+        },
+        "region_mainsite_qr_code": {
+          "purposes": [
+            "monitor"
+          ],
+          "primary": ".qrcode-img, [class*=\"qrcode\"], [class*=\"qr-code\"]",
+          "fallbacks": [
+            "img[class*=\"qr\"]",
+            ".login-qr img",
+            "[class*=\"scan\"] img",
+            "canvas[class*=\"qr\"]",
+            "[class*=\"login\"] img",
+            ".login-container img"
+          ],
+          "selectorType": "css",
+          "description": "小红书主站登录二维码"
+        },
+        "region_note_card_by_id": {
+          "purposes": ["monitor"],
+          "primary": ".note-card[data-impression*=\"{noteId}\"]",
+          "fallbacks": [".note-card[data-impression*=\"{noteId}\"] .note-card__cover"],
+          "description": "笔记管理页面笔记卡片，通过 data-impression 属性中的 noteId 子串匹配"
+        },
+        "region_note_card_cover": {
+          "purposes": ["monitor"],
+          "primary": ".note-card__cover .note-card__media",
+          "fallbacks": [".note-card__cover"],
+          "description": "笔记卡片缩略图可点击区域"
         }
       },
       "textboxes": {
