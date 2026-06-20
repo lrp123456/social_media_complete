@@ -1045,8 +1045,16 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const xhs = getXiaohongshuCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('xiaohongshu');
+  const redis = getRedis();
 
   logger.info({ userId: task.userId, crawlMode }, '[XHS-monitor] Starting xiaohongshu check');
+
+  // 登录态恢复标记检测（仅日志，实际验证在 Phase 3 内联完成）
+  const loginRecheckKey = `xhs:login_recheck:${task.userId}`;
+  const needsLoginRecheck = await redis.get(loginRecheckKey);
+  if (needsLoginRecheck) {
+    logger.info({ userId: task.userId }, '[XHS-monitor] 检测到登录态恢复标记，将在 Phase 3 内联验证');
+  }
 
   await xhs.registerListener(page, ['/api/galaxy/v2/creator/note/user/posted']);
 
@@ -1055,7 +1063,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     await xhs.navigateToCreatorHome(page);
   }
 
-  // Phase 1: 笔记列表扫描 + 私密过滤
+  // Phase 1: 笔记列表扫描 + 非公开过滤
   onProgress?.({ phase: 'Phase1', step: '扫描笔记列表', percent: 20, detail: '正在获取笔记列表并对比评论数' });
   const phase1Result = await xhs.checkForUpdates(page, task.userId);
   xhs.unregisterListener();
@@ -1069,8 +1077,13 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   const queue = phase1Result.commentsQueue || [];
 
-  // 无新评论 → 执行退出并返回
+  // 无新评论或 Light 模式 → 正常退出
   if (crawlMode === 'light' || queue.length === 0) {
+    // recheck 标记清理：无新评论说明登录态不影响，清除标记
+    if (needsLoginRecheck && queue.length === 0) {
+      await redis.del(loginRecheckKey);
+      logger.info({ userId: task.userId }, '[XHS-monitor] 无评论变化，清除登录态恢复标记');
+    }
     await xhs.executeExitStrategy(page);
     const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
       awemeId: v.awemeId,
@@ -1081,26 +1094,30 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     return { hasUpdate: phase1Result.hasUpdate, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
   }
 
-  // Phase 2: 主站登录校验
-  onProgress?.({ phase: 'Phase2', step: '检查主站登录', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
-  const user = await db.getUserById(task.userId);
-  const wechatUserid = (user as any)?.wechatUserid || '';
-  const loggedIn = await xhs.checkMainsiteLogin(
-    (page as any).context(),
-    task.userId,
-    wechatUserid,
-  );
+  // Phase 3: 评论树采集（有新评论 + Deep 模式）
+  // 登录检测已内联到 processOneNoteComments（点击缩略图时）
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
 
-  if (!loggedIn) {
-    logger.info({ userId: task.userId }, '[XHS-monitor] 主站未登录 — 回退到 Light 模式');
-    await xhs.executeExitStrategy(page);
+  const phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
+
+  // 退出策略
+  await xhs.executeExitStrategy(page);
+
+  // 处理登录失效（Phase 3 内联检测到的）
+  const hasLoginRequired = phase3Result.some((r: any) => r.loginRequired);
+  if (hasLoginRequired) {
+    logger.info({ userId: task.userId }, '[XHS-monitor] 主站未登录 — 暂停监控，等待扫码恢复');
+    await db.updateUserStatus(task.userId, 'login_required');
+    await redis.set(loginRecheckKey, '1', 'EX', 86400); // 24h TTL
+
+    // Light 模式合成 Comment
     const updates = (phase1Result.updatedVideos || []).map((v: any) => ({
       awemeId: v.awemeId,
       description: v.description,
       oldCount: v.oldCount,
       newCount: v.newCount,
     }));
-    // Light 模式合成 Comment
     for (const u of updates) {
       const diff = u.newCount - u.oldCount;
       if (diff > 0) {
@@ -1110,17 +1127,14 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
         });
       }
     }
-    return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase2', riskDetected: false };
+    return { hasUpdate: updates.length > 0, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase3', riskDetected: false };
   }
 
-  // Phase 3: 评论树采集
-  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
-
-  const phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
-
-  // 退出策略
-  await xhs.executeExitStrategy(page);
+  // 登录正常 → 清除 recheck 标记
+  if (needsLoginRecheck) {
+    await redis.del(loginRecheckKey);
+    logger.info({ userId: task.userId }, '[XHS-monitor] 主站登录已恢复 — 清除恢复标记');
+  }
 
   const successful = phase3Result.filter((r: any) => r.success);
   const failed = phase3Result.filter((r: any) => !r.success);
@@ -1519,7 +1533,9 @@ export function reportMonitorComplete(windowId: string, platform: string, hadUpd
 }
 
 /**
- * 手动触发后重置倒计时 — 只设置标志，由任务完成后 reportMonitorComplete 触发下一轮
+ * 手动触发后重置倒计时
+ * - 如果当前无任务运行中（pendingTaskCount === 0），立即调度下一轮
+ * - 如果有任务运行中，设置标志由 reportMonitorComplete 触发下一轮
  */
 export function resetSchedulerTimer(windowId: string, platform: string): void {
   const st = getOrCreateSchedulerState(windowId, platform);
@@ -1530,9 +1546,15 @@ export function resetSchedulerTimer(windowId: string, platform: string): void {
     st.timer = null;
   }
 
-  // 设置标志：当前批完成后自动安排下一轮
-  st.scheduleAfterCompletion = true;
-  logger.info({ windowId, platform }, '🔄 调度器手动重置，等待任务完成后重新计时');
+  if (st.pendingTaskCount === 0) {
+    // 无任务运行中，立即调度下一轮
+    scheduleNext(windowId, platform, 3000); // 3秒后立即执行
+    logger.info({ windowId, platform }, '🔄 调度器手动重置，3秒后立即执行');
+  } else {
+    // 有任务运行中，设置标志由 reportMonitorComplete 触发下一轮
+    st.scheduleAfterCompletion = true;
+    logger.info({ windowId, platform }, '🔄 调度器手动重置，等待任务完成后重新计时');
+  }
 }
 
 /** 为该 (windowId, platform) 设置下一次调度定时器 */
