@@ -13,13 +13,13 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      POSTGRES_USER: sm_admin
-      POSTGRES_PASSWORD: your_postgres_password
-      POSTGRES_DB: social_media
+      POSTGRES_USER: ${POSTGRES_USER:-sm_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-social_media}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sm_admin -d social_media"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sm_admin} -d ${POSTGRES_DB:-social_media}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -32,11 +32,11 @@ services:
     container_name: sm-redis
     network_mode: host
     restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass your_redis_password --port 6379
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?请在 .env 中设置 REDIS_PASSWORD} --port 6379
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "your_redis_password", "--raw", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "--raw", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -55,15 +55,15 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/litellm_db"
-      LITELLM_MASTER_KEY: "your_litellm_master_key"
+      DATABASE_URL: ${LITELLM_DATABASE_URL:-postgresql://${POSTGRES_USER:-sm_admin}:${POSTGRES_PASSWORD}@localhost:5432/litellm_db}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?请在 .env 中设置 LITELLM_MASTER_KEY}
       STORE_MODEL_IN_DB: "true"
       LITELLM_MIGRATION_DIR: "/tmp/litellm_migrations"
-      UI_USERNAME: "admin"
-      UI_PASSWORD: "your_litellm_master_key"
-      HTTP_PROXY: "http://localhost:7897"
-      HTTPS_PROXY: "http://localhost:7897"
-      NO_PROXY: "localhost,127.0.0.1,open.bigmodel.cn"
+      UI_USERNAME: ${UI_USERNAME:-admin}
+      UI_PASSWORD: ${UI_PASSWORD:?请在 .env 中设置 UI_PASSWORD}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-localhost,127.0.0.1,open.bigmodel.cn}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ZHIPU_API_KEY: ${ZHIPU_API_KEY:-}
@@ -96,30 +96,32 @@ services:
         condition: service_healthy
     environment:
       # Database (host 模式下用 localhost)
-      DATABASE_URL: "postgresql://sm_admin:your_postgres_password@localhost:5432/social_media"
-      REDIS_URL: "redis://:your_redis_password@localhost:6379"
+      DATABASE_URL: ${DATABASE_URL:?请在 .env 中设置 DATABASE_URL}
+      REDIS_URL: ${REDIS_URL:?请在 .env 中设置 REDIS_URL}
       # Server
       NODE_ENV: production
-      TS_API_PORT: "3001"
-      TZ: Asia/Shanghai
+      TS_API_PORT: ${TS_API_PORT:-3001}
+      TZ: ${TZ:-Asia/Shanghai}
       # OSS
-      OSS_REGION: cn-beijing
-      OSS_BUCKET: naite-mes
-      OSS_ENDPOINT: img.naite.cc
-      OSS_ACCESS_KEY_ID: your_oss_access_key_id
-      OSS_ACCESS_KEY_SECRET: your_oss_access_key_secret
+      OSS_REGION: ${OSS_REGION:-cn-beijing}
+      OSS_BUCKET: ${OSS_BUCKET:?请在 .env 中设置 OSS_BUCKET}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:?请在 .env 中设置 OSS_ENDPOINT}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:?请在 .env 中设置 OSS_ACCESS_KEY_ID}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:?请在 .env 中设置 OSS_ACCESS_KEY_SECRET}
       # Python Worker (同 host 网络)
-      PYTHON_WORKER_URL: "http://localhost:8000"
+      PYTHON_WORKER_URL: ${PYTHON_WORKER_URL:-http://localhost:8000}
       # LiteLLM (同 host 网络)
-      LITELLM_URL: "http://localhost:4000"
-      LITELLM_API_KEY: "your_litellm_master_key"
+      LITELLM_URL: ${LITELLM_URL:-http://localhost:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?请在 .env 中设置 LITELLM_API_KEY}
       # 指纹浏览器 (network_mode: host, 直接访问 localhost)
-      ROXY_BROWSER_URL: "http://localhost:54345"
-      ROXY_BROWSER_KEY: "your_roxy_browser_key"
-      BIT_BROWSER_URL: "http://localhost:54346"
+      ROXY_BROWSER_URL: ${ROXY_BROWSER_URL:-http://localhost:54345}
+      ROXY_BROWSER_KEY: ${ROXY_BROWSER_KEY:?请在 .env 中设置 ROXY_BROWSER_KEY}
+      BIT_BROWSER_URL: ${BIT_BROWSER_URL:-http://localhost:54346}
       # 企业微信机器人
-      WECOM_BOT_ID: "your_wecom_bot_id"
-      WECOM_BOT_SECRET: "your_wecom_bot_secret"
+      WECOM_BOT_ID: ${WECOM_BOT_ID:?请在 .env 中设置 WECOM_BOT_ID}
+      WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:?请在 .env 中设置 WECOM_BOT_SECRET}
+      # API Gateway
+      API_GATEWAY_KEY: ${API_GATEWAY_KEY:?请在 .env 中设置 API_GATEWAY_KEY}
     volumes:
       - ts_api_data:/app/apps/ts-api-gateway/data
 
@@ -139,18 +141,18 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: "postgresql+asyncpg://sm_admin:your_postgres_password@localhost:5432/social_media"
-      REDIS_URL: "redis://:your_redis_password@localhost:6379"
-      PYTHON_WORKER_PORT: "8000"
-      TZ: Asia/Shanghai
-      OSS_REGION: cn-beijing
-      OSS_BUCKET: naite-mes
-      OSS_ENDPOINT: img.naite.cc
-      OSS_ACCESS_KEY_ID: your_oss_access_key_id
-      OSS_ACCESS_KEY_SECRET: your_oss_access_key_secret
-      TS_WEBHOOK_URL: "http://localhost:3001/api/v1/webhook/python-callback"
-      LITELLM_URL: "http://localhost:4000"
-      LITELLM_API_KEY: "your_litellm_master_key"
+      DATABASE_URL: ${PYTHON_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-sm_admin}:${POSTGRES_PASSWORD}@localhost:5432/social_media}
+      REDIS_URL: ${REDIS_URL:?请在 .env 中设置 REDIS_URL}
+      PYTHON_WORKER_PORT: ${PYTHON_WORKER_PORT:-8000}
+      TZ: ${TZ:-Asia/Shanghai}
+      OSS_REGION: ${OSS_REGION:-cn-beijing}
+      OSS_BUCKET: ${OSS_BUCKET:?请在 .env 中设置 OSS_BUCKET}
+      OSS_ENDPOINT: ${OSS_ENDPOINT:?请在 .env 中设置 OSS_ENDPOINT}
+      OSS_ACCESS_KEY_ID: ${OSS_ACCESS_KEY_ID:?请在 .env 中设置 OSS_ACCESS_KEY_ID}
+      OSS_ACCESS_KEY_SECRET: ${OSS_ACCESS_KEY_SECRET:?请在 .env 中设置 OSS_ACCESS_KEY_SECRET}
+      TS_WEBHOOK_URL: ${TS_WEBHOOK_URL:-http://localhost:3001/api/v1/webhook/python-callback}
+      LITELLM_URL: ${LITELLM_URL:-http://localhost:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:?请在 .env 中设置 LITELLM_API_KEY}
 
   # ============================================================
   # Admin Dashboard - Next.js 前端
@@ -163,10 +165,10 @@ services:
     network_mode: host
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: "http://localhost:3001/api/v1"
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:3001/api/v1}
       NODE_ENV: production
-      TZ: Asia/Shanghai
-      PORT: "3000"
+      TZ: ${TZ:-Asia/Shanghai}
+      PORT: ${PORT:-3000}
       HOSTNAME: "0.0.0.0"
 
 volumes:

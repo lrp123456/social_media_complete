@@ -12,10 +12,10 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # PostgreSQL (仅用于冷启动加载配置)
-    database_url: str = "postgresql+asyncpg://sm_admin:your_postgres_password@localhost:5432/social_media"
+    database_url: str = "postgresql+asyncpg://localhost:5432/social_media"
 
     # Redis
-    redis_url: str = "redis://:your_redis_password@localhost:6379"
+    redis_url: str = "redis://localhost:6379"
 
     # OSS
     oss_region: str = "cn-beijing"

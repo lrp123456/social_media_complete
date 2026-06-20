@@ -3,7 +3,7 @@ import { Router, Request, Response } from 'express';
 
 const router = Router();
 
-let API_KEY = 'your_api_gateway_key';
+let API_KEY = process.env.API_GATEWAY_KEY || 'your_api_gateway_key';
 
 /** GET /api/v1/security/api-key — 返回脱敏后的 API Key */
 router.get('/api-key', (_req: Request, res: Response) => {

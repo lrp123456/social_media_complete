@@ -5,16 +5,16 @@ const router = Router();
 
 // in-memory 模拟(生产应持久化到 .env / PostgreSQL)
 let INFRA: Record<string, string | number> = {
-  DB_HOST: '127.0.0.1',
-  DATABASE_URL: 'postgresql://sm_admin:your_postgres_password@127.0.0.1:5432/social_media',
-  REDIS_HOST: '127.0.0.1',
-  REDIS_PORT: 6379,
-  REDIS_PASSWORD: 'your_redis_password',
-  LITELLM_MASTER_KEY: 'your_litellm_master_key',
-  LITELLM_BASE_URL: 'http://127.0.0.1:4000/v1',
-  WEB_PORT: 3000,
-  DATA_DIR: './data',
-  LOG_LEVEL: 'info',
+  DB_HOST: process.env.DB_HOST || '127.0.0.1',
+  DATABASE_URL: process.env.DATABASE_URL || 'postgresql://localhost:5432/social_media',
+  REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
+  REDIS_PORT: parseInt(process.env.REDIS_PORT || '6379'),
+  REDIS_PASSWORD: process.env.REDIS_PASSWORD || '',
+  LITELLM_MASTER_KEY: process.env.LITELLM_MASTER_KEY || '',
+  LITELLM_BASE_URL: process.env.LITELLM_BASE_URL || 'http://127.0.0.1:4000/v1',
+  WEB_PORT: parseInt(process.env.WEB_PORT || '3000'),
+  DATA_DIR: process.env.DATA_DIR || './data',
+  LOG_LEVEL: process.env.LOG_LEVEL || 'info',
 };
 
 /** GET /api/v1/config-infra */
