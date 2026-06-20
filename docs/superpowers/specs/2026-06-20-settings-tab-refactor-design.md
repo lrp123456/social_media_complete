@@ -101,7 +101,7 @@ apps/admin-dashboard/src/app/settings/
 
 `/settings/selectors` → 301 重定向到 `/settings`。
 
-Next.js App Router 实现方式：在 `next.config.js` 的 `redirects()` 中配置，或在 `settings/selectors/page.tsx` 中使用 `redirect()` 函数。
+实现方式：在 `settings/selectors/page.tsx` 中使用 Next.js `redirect()` 函数（App Router 原生方式），删除原有的 FlowGraphView 渲染逻辑。
 
 ### Tab 状态管理
 
