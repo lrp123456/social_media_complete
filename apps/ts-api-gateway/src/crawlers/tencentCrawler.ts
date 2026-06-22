@@ -177,9 +177,31 @@ export class TencentCrawler {
    */
   private async handleQRLogin(page: Page, userId: number): Promise<boolean> {
     const { botManager } = await import('../services/wechatBotService');
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
 
-    if (user?.wechatUserid) {
+    // 优先使用 LoginTabRegistry
+    const tcWindowId = user?.fingerprintWindowId ? String(user.fingerprintWindowId) : '';
+    const { loginTabRegistry: tcRegistry, getLoginFlowConfig: tcGetConfig } = await import('../services/loginFlowHelpers');
+    const { getBrowserManager: tcGetBM } = await import('../lib/browserManager');
+    const tcConfig = tcGetConfig('tencent', 'creator');
+    let tcLoginTabUsed = false;
+    if (tcConfig && tcWindowId && user?.wechatUserid) {
+      const tcBm = tcGetBM();
+      const tcBrowser = await tcBm.getBrowser(tcWindowId);
+      if (tcBrowser) {
+        const tcRecord = await tcRegistry.openLoginTab(tcWindowId, userId, 'creator', tcBrowser, tcConfig);
+        if (tcRecord) {
+          const tcQrBuf = await tcRegistry.captureQR(tcRecord.page, tcConfig);
+          if (tcQrBuf) {
+            await botManager.sendLoginAlert(user.wechatUserid, 'tencent', userId, tcQrBuf);
+            tcLoginTabUsed = true;
+            // 首次 QR 发送后交由后台轮询，直接返回
+            return false;
+          }
+        }
+      }
+    }
+    if (!tcLoginTabUsed && user?.wechatUserid) {
       await this.captureAndSendQR(page, userId, 'tencent', user.wechatUserid, botManager);
     }
 
@@ -197,7 +219,19 @@ export class TencentCrawler {
         logger.info('[Login] QR code expired, refreshing');
         await HumanActions.cdpClick(page, '.qrcode-refresh-btn', { timeout: 5000 });
         await HumanActions.wait(page, 2000, 3000);
-        if (user?.wechatUserid) {
+        if (tcLoginTabUsed && tcConfig && tcWindowId) {
+          const tcBm2 = tcGetBM();
+          const tcBrowser2 = await tcBm2.getBrowser(tcWindowId);
+          if (tcBrowser2) {
+            const tcRecord2 = await tcRegistry.find(tcWindowId, 'creator', tcBrowser2, tcConfig.domain);
+            if (tcRecord2) {
+              const tcQrBuf2 = await tcRegistry.captureQR(tcRecord2.page, tcConfig);
+              if (tcQrBuf2 && user?.wechatUserid) {
+                await botManager.sendLoginAlert(user.wechatUserid, 'tencent', userId, tcQrBuf2);
+              }
+            }
+          }
+        } else if (user?.wechatUserid) {
           await this.captureAndSendQR(page, userId, 'tencent', user.wechatUserid, botManager);
         }
       }
