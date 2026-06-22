@@ -1455,7 +1455,21 @@ router.get('/monitor/new-comments', async (_req: Request, res: Response) => {
         _count: { select: { comments: true } },
         comments: {
           where: { isNew: 1 },
-          select: { id: true },
+          select: {
+            id: true,
+            cid: true,
+            text: true,
+            userNickname: true,
+            userUid: true,
+            diggCount: true,
+            createTime: true,
+            replyId: true,
+            rootId: true,
+            parentId: true,
+            level: true,
+            isAuthor: true,
+          },
+          orderBy: { createTime: 'desc' },
         },
       },
       orderBy: { updatedAt: 'desc' },
@@ -1471,6 +1485,10 @@ router.get('/monitor/new-comments', async (_req: Request, res: Response) => {
       totalComments: v._count.comments,
       newCommentCount: v.comments.length,
       updatedAt: v.updatedAt,
+      comments: v.comments.map((c) => ({
+        ...c,
+        isLightMode: typeof c.cid === 'string' && c.cid.startsWith('light_'),
+      })),
     }));
 
     res.json({ success: true, data });
