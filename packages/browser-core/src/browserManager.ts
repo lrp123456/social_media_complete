@@ -46,7 +46,7 @@ interface MouseTracePoint {
 
 interface UserSession {
   browser: Browser;
-  page: Page;
+  page: Page | null;
   windowId: string;
   platform: Platform;
   connectedAt: number;
@@ -98,6 +98,55 @@ export class BrowserManager {
     return this.mouseTraces;
   }
 
+  async getBrowser(windowId: string, platform?: Platform): Promise<Browser | null> {
+    // 1. 按 platform 精确匹配已有 session
+    if (platform) {
+      const sessionKey = `${windowId}_${platform}`;
+      const session = this.userSessions.get(sessionKey);
+      if (session?.browser?.isConnected()) {
+        try {
+          await Promise.race([
+            session.browser.version(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('browser version timeout')), 5000)),
+          ]);
+          return session.browser;
+        } catch {
+          this.userSessions.delete(sessionKey);
+        }
+      }
+    }
+    // 2. 遍历所有同 windowId 的 session
+    for (const [key, session] of this.userSessions) {
+      if (key.startsWith(`${windowId}_`) && session.browser?.isConnected()) {
+        try {
+          await Promise.race([
+            session.browser.version(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('browser version timeout')), 5000)),
+          ]);
+          return session.browser;
+        } catch { this.userSessions.delete(key); }
+      }
+    }
+    // 3. 建立新 CDP 连接
+    try {
+      const wsEndpoint = await this.getOrCreateWsEndpoint(windowId);
+      const browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 30000 });
+      // 注册轻量 session 防资源泄漏
+      const loginSessionKey = `${windowId}_login`;
+      this.userSessions.set(loginSessionKey, {
+        browser, page: null, windowId, platform: 'login' as any,
+        connectedAt: Date.now(), lastActiveAt: Date.now(),
+        reuseCount: 0, maxReuse: 999,
+      });
+      return browser;
+    } catch (err: any) {
+      logger.error({ windowId, err: err.message }, 'getBrowser: CDP 连接失败');
+      return null;
+    }
+  }
+
   async connect(windowId: string, spaceId: string, platform: Platform = 'douyin'): Promise<{ browser: Browser; page: Page }> {
     const sessionKey = `${windowId}_${platform}`;
 
@@ -105,7 +154,7 @@ export class BrowserManager {
     if (existingSession && existingSession.browser.isConnected()) {
       try {
         const pages = existingSession.browser.contexts()[0]?.pages() || [];
-        const platformPage = this.findPlatformPage(pages, platform);
+        const platformPage = await this.findPlatformPage(pages, platform);
 
         if (platformPage) {
           existingSession.lastActiveAt = Date.now();
@@ -255,7 +304,7 @@ export class BrowserManager {
         logger.info({ windowId, pageCount: pages.length, pageUrls: pages.map((p: Page) => p.url()), platform }, 'Available pages');
 
         let page: Page;
-        const platformPage = this.findPlatformPage(pages, platform);
+        const platformPage = await this.findPlatformPage(pages, platform);
 
         if (platformPage) {
           page = platformPage;
@@ -344,20 +393,24 @@ export class BrowserManager {
     throw lastError || new Error('Failed to connect after retries');
   }
 
-  private findPlatformPage(pages: Page[], platform: Platform): Page | undefined {
-    return pages.find(p => {
+  private async findPlatformPage(pages: Page[], platform: Platform): Promise<Page | undefined> {
+    const candidates = pages.filter(p => {
       const url = p.url();
-      if (platform === 'kuaishou') {
-        return url.includes('kuaishou.com') || url.includes('cp.kuaishou.com');
-      }
-      if (platform === 'xiaohongshu') {
-        return url.includes('xiaohongshu.com') || url.includes('creator.xiaohongshu.com');
-      }
-      if (platform === 'tencent') {
-        return url.includes('channels.weixin.qq.com');
-      }
+      if (platform === 'kuaishou') return url.includes('kuaishou.com') || url.includes('cp.kuaishou.com');
+      if (platform === 'xiaohongshu') return url.includes('xiaohongshu.com') || url.includes('creator.xiaohongshu.com');
+      if (platform === 'tencent') return url.includes('channels.weixin.qq.com');
       return url.includes('douyin.com') || url.includes('creator.douyin.com');
     });
+    // 排除登录标签页（有 __login_tab_mark__ 标记的不作为工作标签页）
+    for (const p of candidates) {
+      try {
+        const isLoginTab = await p.evaluate(() =>
+          !!localStorage.getItem('__login_tab_mark__')
+        );
+        if (!isLoginTab) return p;
+      } catch { continue; }
+    }
+    return candidates[0];
   }
 
   async focusPage(windowId: string, platform: Platform = 'douyin'): Promise<Page | null> {
@@ -370,7 +423,7 @@ export class BrowserManager {
 
     try {
       const pages = session.browser.contexts()[0]?.pages() || [];
-      const page = this.findPlatformPage(pages, platform) || pages[0];
+      const page = await this.findPlatformPage(pages, platform) || pages[0];
 
       if (page) {
         try {
@@ -394,7 +447,8 @@ export class BrowserManager {
 
     try {
       const pages = session.browser.contexts()[0]?.pages() || [];
-      const page = this.findPlatformPage(pages, platform) || session.page;
+      const page = await this.findPlatformPage(pages, platform) || session.page;
+      if (!page) return;
       const roll = Math.random();
 
       if (roll < 0.3) {

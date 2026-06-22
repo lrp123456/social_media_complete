@@ -1005,21 +1005,49 @@ export class XiaohongshuCrawler {
       }
 
       if (loggedOut) {
-        logger.info({ exportId }, '[XHS-Phase3] 主站未登录，截取 QR 码发送企微');
+        logger.info({ exportId }, '[XHS-Phase3] 主站未登录');
         try {
-          const qrEl = await newPage.waitForSelector('.login-container .qrcode-img, .qrcode-img', { timeout: 15000 });
-          const qrBuffer = await qrEl.screenshot({ type: 'png' });
-          const { botManager } = await import('../services/wechatBotService');
-          const { prisma: prismaLogin } = await import('../lib/prisma');
-          const loginUser = await prismaLogin.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
-          if (loginUser?.wechatUserid) {
-            await botManager.sendLoginAlert(loginUser.wechatUserid, 'xiaohongshu', userId, qrBuffer);
-            logger.info({ exportId }, '[XHS-Phase3] QR 码已发送到企微');
+          const { loginTabRegistry, getLoginFlowConfig } = await import('../services/loginFlowHelpers');
+          const { prisma: prismaXhs } = await import('../lib/prisma');
+          const xhsUser = await prismaXhs.user.findUnique({ where: { id: userId }, select: { fingerprintWindowId: true } });
+          const xhsWindowId = xhsUser?.fingerprintWindowId ? String(xhsUser.fingerprintWindowId) : 'unknown';
+
+          const mainsiteConfig = getLoginFlowConfig('xiaohongshu', 'mainsite');
+          if (mainsiteConfig && xhsUser?.fingerprintWindowId) {
+            // 标记标签页 + 注册（不关闭！）
+            const markData = JSON.stringify({ flowId: 'mainsite', userId, openedAt: Date.now() });
+            await newPage.evaluate((data: string) => {
+              localStorage.setItem('__login_tab_mark__', data);
+            }, markData);
+
+            const record = {
+              page: newPage, targetId: (newPage as any)._targetId || 'unknown',
+              domain: mainsiteConfig.domain, flowId: 'mainsite',
+              openedAt: Date.now(), userId,
+            };
+            loginTabRegistry.register(xhsWindowId, 'mainsite', record);
+
+            // 截取 QR（带 padding）
+            const qrBuffer = await loginTabRegistry.captureQR(newPage, mainsiteConfig);
+            if (qrBuffer) {
+              const { botManager } = await import('../services/wechatBotService');
+              const loginUser = await prismaXhs.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+              if (loginUser?.wechatUserid) {
+                await botManager.sendLoginAlert(loginUser.wechatUserid, 'xiaohongshu', userId, qrBuffer);
+              }
+            }
+
+            // per-flowId 冷却
+            const { setFlowState } = await import('../services/monitorService');
+            await setFlowState(userId, 'mainsite', {
+              status: 'login_required', cooldownLevel: 0,
+              cooldownUntil: Date.now() + 30 * 60 * 1000, lastProbeAt: Date.now(),
+            });
           }
         } catch (qrErr: any) {
-          logger.warn({ exportId, error: qrErr.message }, '[XHS-Phase3] QR 码截图发送失败');
+          logger.warn({ exportId, error: qrErr.message }, '[XHS-Phase3] QR 截图发送失败');
         }
-        await newPage.close().catch(() => {});
+        // 注意：不关闭 newPage！回到创作者中心
         await page.bringToFront();
         return { success: false, awemeId: exportId, loginRequired: true };
       }

@@ -408,7 +408,8 @@ class WeChatBotManager {
   /**
    * 发送登录告警 — 上传截图到 OSS，嵌入图文卡片展示
    */
-  async sendLoginAlert(userid: string, platform: string, userId: number, imageBuffer?: Buffer): Promise<void> {
+  async sendLoginAlert(userid: string, platform: string, userId: number, imageBuffer?: Buffer, flowId?: string): Promise<void> {
+    const fid = flowId || 'creator';
     const platformNames: Record<string, string> = {
       douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书', tencent: '视频号',
     };
@@ -456,9 +457,9 @@ class WeChatBotManager {
           { keyname: '状态', value: '等待扫码登录' },
         ],
         jump_list: [
-          { type: 3, title: '✅ 已登录，继续监控', question: `继续监控 ${userId} ${platform}` },
-          { type: 3, title: '🔄 强制刷新登录页', question: `强制刷新 ${userId} ${platform}` },
-          { type: 3, title: '♻️ F5刷新QR码', question: `F5刷新 ${userId} ${platform}` },
+          { type: 3, title: '✅ 已登录，继续监控', question: `继续监控 ${userId} ${platform} ${fid}` },
+          { type: 3, title: '🔄 强制刷新登录页', question: `强制刷新 ${userId} ${platform} ${fid}` },
+          { type: 3, title: '♻️ F5刷新QR码', question: `F5刷新 ${userId} ${platform} ${fid}` },
         ],
         card_action: { type: 1, url: 'https://work.weixin.qq.com' },
       };
@@ -528,45 +529,12 @@ async function autoStartBot(): Promise<void> {
           return;
         }
 
-        // 匹配"继续监控"意图: 格式 "继续监控 <userId> <platform>"（来自登录告警 jump_list）
-        const resumeSetup = content.match(/^继续监控\s+(\d+)\s+(\S+)$/);
+        // 匹配"继续监控"意图: 格式 "继续监控 <userId> <platform> [flowId]"（来自登录告警 jump_list）
+        const resumeSetup = content.match(/^继续监控\s+(\d+)\s+(\S+)(?:\s+(\S+))?$/);
         if (resumeSetup) {
           const targetUserId = parseInt(resumeSetup[1], 10);
           const targetPlatform = resumeSetup[2];
-
-          const { prisma } = await import('../lib/prisma');
-          // 清除冷却状态，恢复正常
-          await prisma.user.update({
-            where: { id: targetUserId },
-            data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true },
-          }).catch(() => null);
-
-          logger.info({ targetUserId, targetPlatform, userid }, '用户点击继续监控按钮，已清除冷却');
-
-          // 立即触发该用户的监控
-          const { monitorQueue } = await import('./monitorService');
-          const user = await prisma.user.findUnique({ where: { id: targetUserId }, select: { fingerprintWindowId: true } }).catch(() => null);
-          if (user) {
-            await monitorQueue.add('monitor', {
-              taskType: 'monitor',
-              taskId: `manual_${Date.now()}_${targetUserId}`,
-              userId: targetUserId,
-              platform: targetPlatform,
-              windowId: user.fingerprintWindowId,
-              fingerprintWindowId: user.fingerprintWindowId,
-            });
-            await botManager.sendTextMessage([userid], `✅ 已恢复 ${targetPlatform} 监控，任务已加入队列`);
-          } else {
-            await botManager.sendTextMessage([userid], `❌ 未找到用户 ${targetUserId} 的窗口信息`);
-          }
-          return;
-        }
-
-        // 匹配"强制刷新"意图: 格式 "强制刷新 <userId> <platform>"（来自登录告警 jump_list）
-        const forceRefreshSetup = content.match(/^强制刷新\s+(\d+)\s+(\S+)$/);
-        if (forceRefreshSetup) {
-          const targetUserId = parseInt(forceRefreshSetup[1], 10);
-          const targetPlatform = forceRefreshSetup[2];
+          const targetFlowId = resumeSetup[3] || 'creator';
 
           const { prisma } = await import('../lib/prisma');
           const user = await prisma.user.findUnique({
@@ -574,81 +542,136 @@ async function autoStartBot(): Promise<void> {
             select: { fingerprintWindowId: true, wechatUserid: true },
           }).catch(() => null);
 
-          if (!user) {
-            await botManager.sendTextMessage([userid], '❌ 未找到用户');
-            return;
-          }
+          if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
 
-          const loginUrls: Record<string, string> = {
-            douyin: 'https://creator.douyin.com/creator-micro/home',
-            kuaishou: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api',
-            xiaohongshu: 'https://creator.xiaohongshu.com/creator/home',
-            tencent: 'https://channels.weixin.qq.com/login.html?from=assistant',
-          };
-          const loginUrl = loginUrls[targetPlatform];
-          if (!loginUrl) {
-            await botManager.sendTextMessage([userid], `❌ 不支持的平台: ${targetPlatform}`);
-            return;
-          }
-
-          const { getBrowserManager } = await import('../lib/browserManager');
-          const bm = getBrowserManager();
           const windowId = String(user.fingerprintWindowId);
+          const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
+          const { getBrowserManager } = await import('../lib/browserManager');
+          const config = getLoginFlowConfig(targetPlatform, targetFlowId);
+          if (!config) { await botManager.sendTextMessage([userid], '❌ 未找到登录配置'); return; }
 
-          try {
-            const { page } = await bm.connect(windowId, '', targetPlatform);
-            await page.goto(loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            await page.waitForTimeout(3000);
+          const bm = getBrowserManager();
+          const browser = await bm.getBrowser(windowId);
+          if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
-            const { captureAndSendQR } = await import('./monitorService');
-            await captureAndSendQR(page, targetUserId, targetPlatform, user.wechatUserid || userid);
+          const record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
+          if (!record) {
+            // 登录标签页不存在，直接恢复（用户可能已在别处登录）
+            await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+            const { platformQueue } = await import('./unifiedQueue');
+            await platformQueue.add('monitor', { taskType: 'monitor', taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, fingerprintWindowId: user.fingerprintWindowId });
+            await botManager.sendTextMessage([userid], `✅ 已恢复 ${targetPlatform} 监控（直接触发）`);
+            return;
+          }
 
-            await botManager.sendTextMessage([userid], `🔄 已刷新 ${targetPlatform} 登录页，新二维码已发送`);
-          } catch (err: any) {
-            logger.error({ targetUserId, targetPlatform, err }, '强制刷新登录页失败');
-            await botManager.sendTextMessage([userid], `❌ 刷新登录页失败: ${err.message || '未知错误'}`);
-          } finally {
-            await bm.disconnectSession(windowId, targetPlatform as any).catch(() => {});
+          const loginState = await loginTabRegistry.checkLoginState(record.page, config);
+          if (loginState === 'logged_in') {
+            if (config.closeOnLoginSuccess) {
+              await loginTabRegistry.closeLoginTab(windowId, targetFlowId);
+            } else {
+              await loginTabRegistry.unregister(windowId, targetFlowId);
+            }
+            const { delFlowState } = await import('./monitorService');
+            await delFlowState(targetUserId, targetFlowId);
+            await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+            const { platformQueue } = await import('./unifiedQueue');
+            await platformQueue.add('monitor', { taskType: 'monitor', taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, fingerprintWindowId: user.fingerprintWindowId });
+            await botManager.sendTextMessage([userid], `✅ ${targetPlatform} 登录成功，已恢复监控`);
+          } else {
+            await botManager.sendTextMessage([userid], `❌ 尚未检测到登录成功，请先扫码或点"刷新"`);
           }
           return;
         }
 
-        // 匹配"F5刷新"意图: 格式 "F5刷新 <userId> <platform>"（来自登录告警 jump_list）
-        const f5RefreshSetup = content.match(/^F5刷新\s+(\d+)\s+(\S+)$/);
-        if (f5RefreshSetup) {
-          const targetUserId = parseInt(f5RefreshSetup[1], 10);
-          const targetPlatform = f5RefreshSetup[2];
+        // 匹配"强制刷新"意图: 格式 "强制刷新 <userId> <platform> [flowId]"（来自登录告警 jump_list）
+        const forceRefreshSetup = content.match(/^强制刷新\s+(\d+)\s+(\S+)(?:\s+(\S+))?$/);
+        if (forceRefreshSetup) {
+          const targetUserId = parseInt(forceRefreshSetup[1], 10);
+          const targetPlatform = forceRefreshSetup[2];
+          const targetFlowId = forceRefreshSetup[3] || 'creator';
 
-          const { prisma: prismaF5 } = await import('../lib/prisma');
-          const userF5 = await prismaF5.user.findUnique({
+          const { prisma } = await import('../lib/prisma');
+          const user = await prisma.user.findUnique({
             where: { id: targetUserId },
             select: { fingerprintWindowId: true, wechatUserid: true },
           }).catch(() => null);
 
-          if (!userF5) {
-            await botManager.sendTextMessage([userid], '❌ 未找到用户');
-            return;
-          }
+          if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
 
-          const { getBrowserManager: getBMF5 } = await import('../lib/browserManager');
-          const bmF5 = getBMF5();
-          const windowIdF5 = String(userF5.fingerprintWindowId);
+          const windowId = String(user.fingerprintWindowId);
+          const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
+          const { getBrowserManager } = await import('../lib/browserManager');
+          const config = getLoginFlowConfig(targetPlatform, targetFlowId);
+          if (!config) { await botManager.sendTextMessage([userid], '❌ 未找到登录配置'); return; }
+
+          const bm = getBrowserManager();
+          const browser = await bm.getBrowser(windowId);
+          if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           try {
-            const { page: pageF5 } = await bmF5.connect(windowIdF5, '', targetPlatform);
-            // F5 刷新：不重新导航，只刷新当前页面（适用于 QR 码过期但页面还在）
-            await pageF5.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
-            await pageF5.waitForTimeout(3000);
+            let record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
+            if (!record) {
+              record = await loginTabRegistry.openLoginTab(windowId, targetUserId, targetFlowId, browser, config);
+            }
+            if (record) {
+              await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              await record.page.waitForTimeout(3000);
+              const qrBuf = await loginTabRegistry.captureQR(record.page, config);
+              await botManager.sendLoginAlert(user.wechatUserid || userid, targetPlatform, targetUserId, qrBuf || undefined, targetFlowId);
+              await botManager.sendTextMessage([userid], `🔄 已刷新 ${targetPlatform} 登录页，新二维码已发送`);
+            } else {
+              await botManager.sendTextMessage([userid], `❌ 无法创建登录标签页`);
+            }
+          } catch (err: any) {
+            logger.error({ targetUserId, targetPlatform, err }, '强制刷新登录页失败');
+            await botManager.sendTextMessage([userid], `❌ 刷新登录页失败: ${err.message || '未知错误'}`);
+          }
+          return;
+        }
 
-            const { captureAndSendQR: captureQR } = await import('./monitorService');
-            await captureQR(pageF5, targetUserId, targetPlatform, userF5.wechatUserid || userid);
+        // 匹配"F5刷新"意图: 格式 "F5刷新 <userId> <platform> [flowId]"（来自登录告警 jump_list）
+        const f5RefreshSetup = content.match(/^F5刷新\s+(\d+)\s+(\S+)(?:\s+(\S+))?$/);
+        if (f5RefreshSetup) {
+          const targetUserId = parseInt(f5RefreshSetup[1], 10);
+          const targetPlatform = f5RefreshSetup[2];
+          const targetFlowId = f5RefreshSetup[3] || 'creator';
 
-            await botManager.sendTextMessage([userid], `♻️ 已F5刷新 ${targetPlatform} 页面，新二维码已发送`);
+          const { prisma } = await import('../lib/prisma');
+          const user = await prisma.user.findUnique({
+            where: { id: targetUserId },
+            select: { fingerprintWindowId: true, wechatUserid: true },
+          }).catch(() => null);
+
+          if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
+
+          const windowId = String(user.fingerprintWindowId);
+          const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
+          const { getBrowserManager } = await import('../lib/browserManager');
+          const config = getLoginFlowConfig(targetPlatform, targetFlowId);
+          if (!config) { await botManager.sendTextMessage([userid], '❌ 未找到登录配置'); return; }
+
+          const bm = getBrowserManager();
+          const browser = await bm.getBrowser(windowId);
+          if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
+
+          try {
+            let record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
+            if (!record) {
+              record = await loginTabRegistry.openLoginTab(windowId, targetUserId, targetFlowId, browser, config);
+            }
+            if (record) {
+              // F5 刷新：不重新导航，只刷新当前页面
+              await record.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+              await record.page.waitForTimeout(3000);
+              const qrBuf = await loginTabRegistry.captureQR(record.page, config);
+              await botManager.sendLoginAlert(user.wechatUserid || userid, targetPlatform, targetUserId, qrBuf || undefined, targetFlowId);
+              await botManager.sendTextMessage([userid], `♻️ 已F5刷新 ${targetPlatform} 页面，新二维码已发送`);
+            } else {
+              await botManager.sendTextMessage([userid], `❌ 无法创建登录标签页`);
+            }
           } catch (err: any) {
             logger.error({ targetUserId, targetPlatform, err }, 'F5刷新页面失败');
             await botManager.sendTextMessage([userid], `❌ F5刷新失败: ${err.message || '未知错误'}`);
-          } finally {
-            await bmF5.disconnectSession(windowIdF5, targetPlatform as any).catch(() => {});
           }
           return;
         }

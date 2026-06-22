@@ -101,3 +101,33 @@ export interface RiskControlDetection {
   type: 'captcha' | 'login_redirect' | 'security_verify' | 'unknown';
   evidence: string;
 }
+
+// ── 登录标签页注册表相关类型 ──
+
+/**
+ * 登录标签页内存注册表条目
+ */
+export interface LoginTabRecord {
+  page: any; // Page (避免循环引用的 any 类型)
+  targetId: string;
+  domain: string;
+  flowId: string;
+  openedAt: number;
+  userId: number;
+}
+
+/**
+ * 来自 selectors.json 的 loginFlows 配置条目
+ */
+export interface LoginFlowConfig {
+  domain: string;
+  label: string;
+  loginUrl: string;
+  closeOnLoginSuccess: boolean;
+  loggedOutIndicators: string[];
+  loggedInIndicators: string[];
+  qrSelectors: string[];
+}
+
+/** 登录检测结果 */
+export type LoginState = 'logged_in' | 'logged_out' | 'unknown';

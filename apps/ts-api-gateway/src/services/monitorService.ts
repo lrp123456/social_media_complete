@@ -355,9 +355,36 @@ const MAX_MONITOR_VIDEOS = 20;
 
 /**
  * 截图二维码并通过 sendLoginAlert 发送给企微用户
- * 优先截取二维码元素（带边距），找不到则截全页
+ * 优先使用 LoginTabRegistry 的登录流配置，fallback 到旧版逻辑
  */
 export async function captureAndSendQR(page: any, userId: number, platform: string, wechatUserid: string): Promise<void> {
+  try {
+    const { loginTabRegistry, loadLoginFlowConfig } = await import('./loginFlowHelpers');
+
+    const flowConfigs = loadLoginFlowConfig(platform);
+    if (flowConfigs.length === 0) {
+      await captureAndSendQRLegacy(page, userId, platform, wechatUserid);
+      return;
+    }
+
+    const config = flowConfigs[0]; // 使用第一个 flow 的 QR 选择器
+    const buf = await loginTabRegistry.captureQR(page, config);
+    if (!buf) {
+      const { botManager } = await import('../services/wechatBotService');
+      await botManager.sendLoginAlert(wechatUserid, platform, userId);
+      return;
+    }
+
+    const { botManager } = await import('../services/wechatBotService');
+    await botManager.sendLoginAlert(wechatUserid, platform, userId, buf);
+  } catch (err) {
+    const { botManager } = await import('../services/wechatBotService');
+    await botManager.sendLoginAlert(wechatUserid, platform, userId).catch(() => {});
+  }
+}
+
+/** 旧版 QR 截取逻辑作为 fallback */
+async function captureAndSendQRLegacy(page: any, userId: number, platform: string, wechatUserid: string): Promise<void> {
   try {
     // 平台特定的二维码选择器（优先级从高到低）
     const platformSelectors: Record<string, string[]> = {
@@ -602,6 +629,114 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
   }
 }
 
+// ============================================================
+// per-flowId Redis 状态管理（login_required / login_probe）
+// ============================================================
+
+interface LoginFlowState {
+  status: 'login_required' | 'login_probe';
+  cooldownLevel: number;
+  cooldownUntil: number;
+  lastProbeAt: number;
+}
+
+const FLOW_STATE_KEY_PREFIX = 'login_flow_state';
+
+function getFlowStateKey(userId: number, flowId: string): string {
+  return `${FLOW_STATE_KEY_PREFIX}:${userId}:${flowId}`;
+}
+
+export async function setFlowState(userId: number, flowId: string, state: LoginFlowState): Promise<void> {
+  const redis = getRedis();
+  await redis.set(getFlowStateKey(userId, flowId), JSON.stringify(state));
+}
+
+export async function getFlowState(userId: number, flowId: string): Promise<LoginFlowState | null> {
+  const redis = getRedis();
+  const raw = await redis.get(getFlowStateKey(userId, flowId));
+  return raw ? JSON.parse(raw) : null;
+}
+
+export async function delFlowState(userId: number, flowId: string): Promise<void> {
+  const redis = getRedis();
+  await redis.del(getFlowStateKey(userId, flowId));
+}
+
+// ============================================================
+// login probe 恢复（数据库驱动 + per-flowId 冷却）
+// ============================================================
+
+export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string): Promise<void> {
+  const { loginTabRegistry, getLoginFlowConfig, getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  const bm = getBrowserManager();
+
+  const flowIds = flowId ? [flowId] : getFlowIdsForPlatform(platform);
+  for (const fid of flowIds) {
+    const config = getLoginFlowConfig(platform, fid);
+    if (!config) continue;
+    const state = await getFlowState(userId, fid);
+    if (!state || state.cooldownUntil > Date.now()) continue;
+
+    setTimeout(async () => {
+      try {
+        const browser = await bm.getBrowser(windowId);
+        if (!browser) return;
+
+        const record = await loginTabRegistry.find(windowId, fid, browser, config.domain);
+        if (!record) {
+          await delFlowState(userId, fid);
+          return;
+        }
+
+        const result = await loginTabRegistry.checkLoginState(record.page, config);
+        if (result === 'logged_in') {
+          if (config.closeOnLoginSuccess) {
+            await loginTabRegistry.closeLoginTab(windowId, fid);
+          } else {
+            await loginTabRegistry.unregister(windowId, fid);
+          }
+          await delFlowState(userId, fid);
+
+          const allStates = await getAllFlowStates(userId, platform);
+          if (allStates.size === 0) {
+            const { prisma } = await import('../lib/prisma');
+            await prisma.user.update({
+              where: { id: userId },
+              data: { status: 'active', cooldownUntil: BigInt(0) },
+            });
+          }
+        } else {
+          const newLevel = Math.min((state.cooldownLevel || 0) + 1, 4);
+          const cooldownsMs = [30, 60, 120, 240, 240];
+          const cooldownMs = cooldownsMs[newLevel] * 60 * 1000;
+          await setFlowState(userId, fid, {
+            status: 'login_required',
+            cooldownLevel: newLevel,
+            cooldownUntil: Date.now() + cooldownMs,
+            lastProbeAt: Date.now(),
+          });
+
+          const next = setTimeout(() => {
+            triggerLoginProbe(userId, platform, windowId, fid).catch(() => {});
+          }, cooldownMs);
+          next.unref();
+        }
+      } catch { /* probe 失败不阻塞 */ }
+    }, 100);
+  }
+}
+
+async function getAllFlowStates(userId: number, platform: string): Promise<Map<string, LoginFlowState>> {
+  const { getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  const flowIds = getFlowIdsForPlatform(platform);
+  const result = new Map<string, LoginFlowState>();
+  for (const fid of flowIds) {
+    const state = await getFlowState(userId, fid);
+    if (state) result.set(fid, state);
+  }
+  return result;
+}
+
 // Crawler 按窗口实例化，避免 interceptor/listener 跨窗口串扰
 const crawlerCache = {
   douyin: new Map<string, DouyinCrawler>(),
@@ -786,8 +921,30 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId, platform: 'douyin', riskType }, '抖音风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    if (user?.wechatUserid) {
+      // 优先使用 LoginTabRegistry
+      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
+      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
+      const dyConfig = dyGetConfig('douyin', 'creator');
+      if (dyConfig && user.fingerprintWindowId) {
+        const dyWindowId = String(user.fingerprintWindowId);
+        const dyBm = dyGetBM();
+        const dyBrowser = await dyBm.getBrowser(dyWindowId);
+        if (dyBrowser) {
+          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
+          if (dyRecord) {
+            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
+            if (dyQrBuf) {
+              const { botManager: dyBot } = await import('./wechatBotService');
+              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
+            }
+          }
+        }
+      } else {
+        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+      }
+    }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -845,8 +1002,30 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId }, '抖音 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase3Result.riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    if (user?.wechatUserid) {
+      // 优先使用 LoginTabRegistry
+      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
+      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
+      const dyConfig = dyGetConfig('douyin', 'creator');
+      if (dyConfig && user.fingerprintWindowId) {
+        const dyWindowId = String(user.fingerprintWindowId);
+        const dyBm = dyGetBM();
+        const dyBrowser = await dyBm.getBrowser(dyWindowId);
+        if (dyBrowser) {
+          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
+          if (dyRecord) {
+            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
+            if (dyQrBuf) {
+              const { botManager: dyBot } = await import('./wechatBotService');
+              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
+            }
+          }
+        }
+      } else {
+        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+      }
+    }
     dy.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
