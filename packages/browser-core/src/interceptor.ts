@@ -30,7 +30,10 @@ export interface ValidationConfig {
 
 function extractHasMore(body: any): boolean | undefined {
   if (body === null || body === undefined) return undefined;
+  // 抖音：has_more 是 number（0=无更多，非0=有更多）
+  if (typeof body.has_more === 'number') return body.has_more !== 0;
   if (typeof body.has_more === 'boolean') return body.has_more;
+  if (body.data && typeof body.data.has_more === 'number') return body.data.has_more !== 0;
   if (body.data && typeof body.data.has_more === 'boolean') return body.data.has_more;
   if (body.pagination && typeof body.pagination.has_more === 'boolean') return body.pagination.has_more;
   if (body.cursor_info && typeof body.cursor_info.has_more === 'boolean') return body.cursor_info.has_more;
@@ -38,14 +41,12 @@ function extractHasMore(body: any): boolean | undefined {
     if (body.data.page === -1) return false;
     if (body.data.page > 0) return true;
   }
-  // 腾讯视频号: downContinueFlag (1=有更多, 0=已加载全部)
-  if (body.data && typeof body.data.downContinueFlag === 'number') {
-    return body.data.downContinueFlag === 1;
-  }
-  // 腾讯视频号: continueFlag (布尔值)
-  if (body.data && typeof body.data.continueFlag === 'boolean') {
-    return body.data.continueFlag;
-  }
+  // 快手：pcursor 存在则有更多
+  if (body.data && body.data.pcursor !== undefined && body.data.pcursor !== null && body.data.pcursor !== '') return true;
+  // 视频号：downContinueFlag (0=无更多, 非0=有更多)
+  if (body.data && typeof body.data.downContinueFlag === 'number') return body.data.downContinueFlag !== 0;
+  // 视频号：continueFlag (布尔值)
+  if (body.data && typeof body.data.continueFlag === 'boolean') return body.data.continueFlag;
   return undefined;
 }
 
@@ -94,7 +95,13 @@ function extractItems(body: any): any[] {
   if (Array.isArray(xhsNotes)) return xhsNotes;
   const xhsItems = body.data?.data?.items;
   if (Array.isArray(xhsItems)) return xhsItems;
-  // 腾讯视频号评论列表 API: data.comment
+  // 抖音评论管理页面
+  const douyinComments = body.comments;
+  if (Array.isArray(douyinComments)) return douyinComments;
+  // 小红书评论
+  const xhsComments = body.data?.comments;
+  if (Array.isArray(xhsComments)) return xhsComments;
+  // 视频号评论
   const tencentComments = body.data?.comment;
   if (Array.isArray(tencentComments)) return tencentComments;
   return [];
