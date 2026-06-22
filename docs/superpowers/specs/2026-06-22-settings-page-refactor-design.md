@@ -6,7 +6,7 @@
 
 ## 1. 背景与问题
 
-当前设置页 `apps/admin-dashboard/src/app/settings/page.tsx` 是一个 1967 行的单体组件，包含 8 个面板全部内联在一个文件中。此外还有一个独立的 `/settings/selectors` 路由（102 行）用于流程图编辑。
+当前设置页 `apps/admin-dashboard/src/app/settings/page.tsx` 是一个 1967 行的单体组件，包含 9 个面板全部内联在一个文件中。此外还有一个独立的 `/settings/selectors` 路由（102 行）用于流程图编辑。
 
 问题：
 - 单文件过大，难以维护和导航
@@ -37,8 +37,11 @@
 
 ### Tab 4: 社媒矩阵设置 (MatrixTab)
 - **选择器与流程规则** — FlowGraphView 组件从 `/settings/selectors` 迁入（合并为一个整体，选择器在流程中工作）
+- **动态选择器管理** — 带筛选的 CRUD 表格 + 模态框（从现有 panel-automation 内联提取，~320行）
+- **发布流程规则** — 按平台展示流程规则，支持 JSON 编辑和重置（从现有 panel-flow-rules 提取，~120行）
+- **浏览器养号** — `max_tab_reuse` / `enable_warmup` 配置（从现有 panel-automation 内联提取）
 - **爬取模式** — 各平台 deep/light，默认全选 deep（从现有 CrawlModePanel 提取）
-- **监控调度周期** — 全局默认 + 按平台覆盖（新建，外部化）
+- **监控调度周期** — 全局默认（含休眠时间）+ 按平台覆盖（新建，外部化）
 - **AI 回复评论配置** — 模型名 / 系统提示词 / temperature / maxTokens（新建，从 prompts.ts 外部化）
 
 ## 4. 文件架构
@@ -47,25 +50,37 @@
 
 ```
 apps/admin-dashboard/src/app/settings/
-├── page.tsx                      # ~80行，Tab bar + 条件渲染
+├── page.tsx                      # ~80行，Tab bar + CSS display 切换
 ├── tabs/
 │   ├── GeneralTab.tsx            # ~400行，4 个板块
 │   ├── CreationTab.tsx           # ~150行，FFmpeg/媒体渲染
 │   ├── LlmTab.tsx                # ~350行，LLM 凭证 + 参数工作组
-│   └── MatrixTab.tsx             # ~500行，FlowGraphView + 3 个面板
-└── components/
-    ├── ConfigSection.tsx         # 新建，板块容器组件（标题 + 内容区 + 折叠）
-    ├── FlowGraphView.tsx         # 从 selectors/page.tsx 迁入
-    ├── FlowNodeCard.tsx          # 从 selectors/ 迁入
-    ├── NodeDrawer.tsx            # 从 selectors/ 迁入
-    ├── FrameworkManager.tsx      # 从 selectors/ 迁入
-    ├── ApiPatternManager.tsx     # 从 selectors/ 迁入
-    ├── DataSourceManager.tsx     # 从 selectors/ 迁入
-    ├── SelectorEditor.tsx        # 从 selectors/ 迁入
-    ├── FieldMappingEditor.tsx    # 从 selectors/ 迁入
-    ├── CrawlModePanel.tsx        # 从 settings/page.tsx 提取
-    ├── MonitorSchedulePanel.tsx  # 新建
-    └── AiReplyConfigPanel.tsx    # 新建
+│   └── MatrixTab.tsx             # ~600行，FlowGraphView + 6 个面板
+├── components/
+│   ├── ConfigSection.tsx         # 新建，板块容器组件（标题 + 内容区 + 折叠）
+│   ├── FlowGraphView.tsx         # 从 selectors/page.tsx 迁入
+│   ├── FlowNodeCard.tsx          # 从 selectors/ 迁入（更新 import 路径）
+│   ├── NodeDrawer.tsx            # 从 selectors/ 迁入（更新 import 路径）
+│   ├── FrameworkManager.tsx      # 从 selectors/ 迁入（更新 import 路径）
+│   ├── ApiPatternManager.tsx     # 从 selectors/ 迁入（更新 import 路径）
+│   ├── DataSourceManager.tsx     # 从 selectors/ 迁入（更新 import 路径）
+│   ├── SelectorEditor.tsx        # 从 selectors/ 迁入（更新 import 路径）
+│   ├── FieldMappingEditor.tsx    # 从 selectors/ 迁入（更新 import 路径）
+│   ├── CrawlModePanel.tsx        # 从 settings/page.tsx 提取
+│   ├── MonitorSchedulePanel.tsx  # 新建
+│   ├── AiReplyConfigPanel.tsx    # 新建
+│   ├── FlowRulesPanel.tsx        # 从 settings/page.tsx panel-flow-rules 提取
+│   ├── BrowserWarmupPanel.tsx    # 从 settings/page.tsx panel-automation 提取
+│   └── DynamicSelectorPanel.tsx  # 从 settings/page.tsx panel-automation 提取（~320行 CRUD 表格）
+└── shared/                        # 从 page.tsx 提取的共享内联子组件
+    ├── StrategyBadge.tsx          # 6 个面板共用
+    ├── PanelSkeleton.tsx          # 8 个面板共用
+    ├── QueryError.tsx             # 7 个面板共用
+    ├── KeyValueEditor.tsx         # panel-network 使用
+    ├── ProviderCard.tsx           # panel-llm-creds 使用
+    ├── RbacPanel.tsx              # panel-security 使用
+    ├── NotificationChannelsPanel.tsx # panel-notification 使用
+    └── constants.ts               # INFRA_KEYS, GROUP_ORDER, FFMPEG_FIELDS, MONITOR_FIELDS, BROWSER_FIELDS 等
 ```
 
 ### 4.2 settings/page.tsx 结构
@@ -98,21 +113,21 @@ export default function SettingsPage() {
           icon="smartphone" label="社媒矩阵" />
       </div>
 
-      {/* 条件渲染 */}
-      {activeTab === 'general' && <GeneralTab />}
-      {activeTab === 'creation' && <CreationTab />}
-      {activeTab === 'llm' && <LlmTab />}
-      {activeTab === 'matrix' && <MatrixTab />}
+      {/* CSS display 切换 — 保持所有 Tab 挂载，避免卸载/重新挂载导致表单状态丢失 */}
+      <div style={{ display: activeTab === 'general' ? 'block' : 'none' }}><GeneralTab /></div>
+      <div style={{ display: activeTab === 'creation' ? 'block' : 'none' }}><CreationTab /></div>
+      <div style={{ display: activeTab === 'llm' ? 'block' : 'none' }}><LlmTab /></div>
+      <div style={{ display: activeTab === 'matrix' ? 'block' : 'none' }}><MatrixTab /></div>
     </div>
   );
 }
 ```
 
-Tab 切换使用 `useState`（与社媒矩阵页面一致），不引入 URL query param。刷新回到默认第一个 Tab（通用设置）。
+Tab 切换使用 `useState` + CSS `display`（而非条件渲染），保持所有 Tab 组件挂载。原因：当前单体组件中所有面板共享 `useRef` 初始化守卫（`infraInitRef`、`groupsInitRef` 等），条件渲染卸载会重置这些 ref，导致切换 Tab 时表单被重新初始化、用户未保存的编辑丢失。CSS 隐藏保持 hooks 和 ref 不变。
 
 ### 4.3 路由变更
 
-- `/settings/selectors` → 301 重定向到 `/settings`（在 `next.config.js` 的 `redirects()` 中配置）
+- `/settings/selectors` → 301 重定向到 `/settings`（在 `next.config.js` 中添加 `async redirects()` 函数，当前文件无此函数，需将 `module.exports` 改为支持 `redirects` 的结构）
 - 侧边栏（`Sidebar.tsx`）移除 `选择器配置` 条目，只保留 `系统设置`（`/settings`）
 
 ### 4.4 数据层不变
@@ -124,18 +139,42 @@ Tab 切换使用 `useState`（与社媒矩阵页面一致），不引入 URL que
 - MatrixTab: `useNavigationFlows`, `useFrameworks`, `useApiPatterns`, `useDataSources`, `useCrawlSettings`, `useAutomationConfig`
 
 新增 hooks（在 `useApi.ts` 中添加）：
-- `useAiReplyConfig()` — GET/PUT `/api/v1/config-ai-reply`
+- `useAiReplyConfig()` — GET `/api/v1/config-ai-reply`
+- `useUpdateAiReplyConfig()` — PUT `/api/v1/config-ai-reply`（mutation，成功后 invalidate 缓存）
 
 ## 5. 后端 API 变更
 
 ### 5.1 新增：AI 回复评论配置 API
 
-**文件**: `apps/ts-api-gateway/src/routes/config-ai-reply.ts`（新建）
+**配置存储**: `apps/ts-api-gateway/src/lib/aiReplyConfig.ts`（新建，独立模块避免循环依赖）
+
+```typescript
+// lib/aiReplyConfig.ts
+import { LLM_DEFAULTS, SIMPLE_CS_SYSTEM_PROMPT } from '../config/prompts';
+
+let aiReplyConfig = {
+  model: LLM_DEFAULTS.model,           // "group-stable-text"
+  systemPrompt: SIMPLE_CS_SYSTEM_PROMPT,
+  temperature: LLM_DEFAULTS.temperature, // 0.7
+  maxTokens: LLM_DEFAULTS.maxTokens,     // 300
+};
+
+export function getAiReplyConfig() { return { ...aiReplyConfig }; }
+export function setAiReplyConfig(cfg: Partial<typeof aiReplyConfig>) {
+  Object.assign(aiReplyConfig, cfg);
+}
+```
+
+注意：`timeoutMs` 和 `maxConcurrency` 保持硬编码在 `LLM_DEFAULTS` 中，不外部化——它们是运维参数而非用户可调参数。
+
+**路由文件**: `apps/ts-api-gateway/src/routes/config-ai-reply.ts`（新建）
 
 | 端点 | 方法 | 用途 |
 |------|------|------|
 | `/api/v1/config-ai-reply` | GET | 获取 AI 回复配置 |
 | `/api/v1/config-ai-reply` | PUT | 更新 AI 回复配置 |
+
+路由仅调用 `getAiReplyConfig()` / `setAiReplyConfig()`，不包含业务逻辑。
 
 **数据结构**:
 ```typescript
@@ -149,18 +188,31 @@ interface AiReplyConfig {
 
 **存储**: 内存变量（与 config-automation 一致），重启后回到 prompts.ts 硬编码默认值。
 
-**读取方**: `llmService.ts` 中 `CommentReplyGenerator` 改为读取外部配置，fallback 到 `prompts.ts` 的 `LLM_DEFAULTS`：
+**读取方**（两处修改）:
+
+1. `llmService.ts` 中 `CommentReplyGenerator.generateReply()` — 读取 `getAiReplyConfig()` 的 `model` 和 `systemPrompt`
+2. `llmService.ts` 中 `LLMClient.chatCompletion()` — 当前直接从 `LLM_DEFAULTS` 读取 `temperature` 和 `maxTokens`，改为读取 `getAiReplyConfig()`：
 
 ```typescript
 // llmService.ts 修改
-import { getAiReplyConfig } from '../routes/config-ai-reply';
+import { getAiReplyConfig } from '../lib/aiReplyConfig';
+
+class LLMClient {
+  async chatCompletion(messages, options?: { model?: string }) {
+    const cfg = getAiReplyConfig();
+    const model = options?.model || cfg.model;
+    const temperature = cfg.temperature;   // 原来是 LLM_DEFAULTS.temperature
+    const maxTokens = cfg.maxTokens;       // 原来是 LLM_DEFAULTS.maxTokens
+    // ...
+  }
+}
 
 class CommentReplyGenerator {
   private getConfig() {
     try {
-      return getAiReplyConfig(); // 优先读外部配置
+      return getAiReplyConfig();
     } catch {
-      return LLM_DEFAULTS; // fallback 到硬编码
+      return LLM_DEFAULTS;
     }
   }
 }
@@ -194,7 +246,18 @@ let AUTOMATION = {
 };
 ```
 
-**PUT 端点变更**: `PUT /api/v1/config-automation` 的 body 可带 `monitor.platformOverrides`，触发 `restartMonitorScheduler()`。
+**PUT 端点变更**: `PUT /api/v1/config-automation` 的 body 可带 `monitor.platformOverrides`。重启触发条件需扩展：当 `interval_idle_min`、`interval_idle_max` 或 `platformOverrides` 任一变化时，触发 `restartMonitorScheduler()`。
+
+```typescript
+// config-automation.ts 修改重启判断
+if (req.body.monitor && (
+  req.body.monitor.interval_idle_min ||
+  req.body.monitor.interval_idle_max ||
+  req.body.monitor.platformOverrides
+)) {
+  restartMonitorScheduler();
+}
+```
 
 ### 5.3 修改：monitorService.ts 调度器读取按平台配置
 
@@ -214,9 +277,11 @@ function getMonitorConfig(platform?: string) {
       idleMin: overrides?.interval_idle_min ?? config.monitor?.interval_idle_min ?? 900,
       idleMax: overrides?.interval_idle_max ?? config.monitor?.interval_idle_max ?? 1200,
       idleThreshold: overrides?.idle_threshold ?? config.monitor?.idle_threshold ?? 4,
+      sleepStartHour: config.monitor?.sleep_start_hour ?? 2,  // 全局，不按平台覆盖
+      sleepEndHour: config.monitor?.sleep_end_hour ?? 8,      // 全局，不按平台覆盖
     };
   } catch {
-    return { activeMin: 180, activeMax: 300, idleMin: 900, idleMax: 1200, idleThreshold: 4 };
+    return { activeMin: 180, activeMax: 300, idleMin: 900, idleMax: 1200, idleThreshold: 4, sleepStartHour: 2, sleepEndHour: 8 };
   }
 }
 ```
@@ -255,15 +320,16 @@ function MonitorSchedulePanel() {
   const { data: automation } = useAutomationConfig();
   const updateMutation = useUpdateAutomationConfig();
 
-  // 全局默认编辑（active min/max, idle min/max, idle_threshold）
+  // 全局默认编辑（active min/max, idle min/max, idle_threshold, sleep_start_hour, sleep_end_hour）
   // 按平台覆盖编辑（4 个平台，每个可设置独立覆盖或"使用全局"）
   // 保存时 PUT /api/v1/config-automation { monitor: { platformOverrides: {...} } }
 }
 ```
 
 UI 结构：
-- 顶部：全局默认参数编辑区（4 个数字输入框 + idle_threshold）
+- 顶部：全局默认参数编辑区（4 个数字输入框 + idle_threshold + 休眠时间范围选择器 `sleep_start_hour` / `sleep_end_hour`）
 - 下方：4 个平台行，每行显示当前生效值（覆盖值或"使用全局"），点击展开可编辑覆盖值
+- 休眠时间仅全局配置，不按平台覆盖
 
 ### 6.3 AiReplyConfigPanel.tsx
 
@@ -289,37 +355,42 @@ UI 结构：
 ### 7.1 从 settings/page.tsx 提取到各 Tab
 
 1. 先创建 `tabs/` 目录和 4 个 Tab 文件骨架
-2. 逐个面板提取：将 panel-infra 的 JSX + 相关状态/handlers 移入 GeneralTab
-3. 保留原有的 hooks 调用方式，不改变数据流
-4. 提取共享子组件（BentoCard、StatusPill 等）到 components/
+2. 提取共享内联子组件到 `shared/`（StrategyBadge、PanelSkeleton、QueryError、KeyValueEditor、ProviderCard、RbacPanel、NotificationChannelsPanel + 常量）
+3. 逐个面板提取：将 panel-infra 的 JSX + 相关状态/handlers 移入 GeneralTab
+4. 保留原有的 hooks 调用方式，不改变数据流
+5. 移除 IntersectionObserver（Tab 架构下不再需要滚动追踪）
 
 ### 7.2 从 selectors/page.tsx 迁入 FlowGraphView
 
 1. 将 FlowGraphView.tsx 及其子组件（FlowNodeCard、NodeDrawer、FrameworkManager、ApiPatternManager、DataSourceManager、SelectorEditor、FieldMappingEditor）移到 `settings/components/`
-2. MatrixTab 中直接 import 使用
-3. 删除 `settings/selectors/page.tsx`
-4. 在 `next.config.js` 添加重定向
+2. **更新 FlowGraphView.tsx 中的 5 个相对 import 路径**（`./FlowNodeCard` 等保持不变，但若有对 `../../hooks/useApi` 的引用需验证）
+3. MatrixTab 中直接 import 使用
+4. 删除 `settings/selectors/page.tsx`
+5. 在 `next.config.js` 添加 `async redirects()` 函数
 
 ### 7.3 迁移顺序
 
-1. 创建目录结构和 Tab 骨架
+1. 创建目录结构、Tab 骨架、shared/ 子组件提取
 2. 提取 GeneralTab（最大量但最机械）
 3. 提取 CreationTab（最简单）
 4. 提取 LlmTab
-5. 迁入 FlowGraphView + 提取 CrawlModePanel → MatrixTab 骨架
-6. 新建 MonitorSchedulePanel + AiReplyConfigPanel
-7. 后端：新建 config-ai-reply 路由 + 修改 config-automation + 修改 monitorService
-8. 路由重定向 + 侧边栏修改
-9. 删除旧文件
+5. 后端：新建 `lib/aiReplyConfig.ts` + `routes/config-ai-reply.ts` + 修改 `config-automation.ts`（platformOverrides）+ 修改 `monitorService.ts`（getMonitorConfig 按平台）+ 修改 `llmService.ts`（读取外部配置）
+6. 新增 hooks: `useAiReplyConfig` + `useUpdateAiReplyConfig`
+7. 迁入 FlowGraphView + 提取 CrawlModePanel + FlowRulesPanel + BrowserWarmupPanel + DynamicSelectorPanel → MatrixTab 骨架
+8. 新建 MonitorSchedulePanel + AiReplyConfigPanel（后端 API 已就绪）
+9. 路由重定向 + 侧边栏修改
+10. 删除旧文件
 
 ## 8. 范围边界
 
 ### 本子项目包含
-- 设置页 4-Tab 拆分
+- 设置页 4-Tab 拆分（9 个面板全部分配，含 panel-flow-rules、浏览器养号、动态选择器管理）
+- 共享内联子组件提取到 `shared/`（StrategyBadge、PanelSkeleton、QueryError 等 7 个）
 - FlowGraphView 从 /settings/selectors 迁入 MatrixTab（不改动 FlowGraphView 内部逻辑）
-- 新增 AI 回复配置外部化（config-ai-reply API + AiReplyConfigPanel）
-- 新增按平台监控调度周期（platformOverrides + MonitorSchedulePanel）
+- 新增 AI 回复配置外部化（lib/aiReplyConfig.ts + config-ai-reply API + AiReplyConfigPanel + llmService.ts 集成）
+- 新增按平台监控调度周期（platformOverrides + MonitorSchedulePanel + monitorService.ts 按平台读取）
 - 爬取模式 UI 从 settings 内联提取为独立组件
+- CSS display 切换保持 Tab 挂载（避免表单状态丢失）
 
 ### 本子项目不包含
 - 流程图分支补全（38+ 条件分支）— 子项目2
@@ -331,10 +402,17 @@ UI 结构：
 
 ## 9. 风险与缓解
 
-| 风险 | 缓解 |
-|------|------|
-| 提取过程中遗漏状态/handlers | 逐面板提取，每提取一个 Tab 后在浏览器中验证功能正常 |
-| FlowGraphView 迁入后 import 路径断裂 | 移动文件时使用 IDE 重构功能，批量更新 import |
-| config-ai-reply 内存存储重启丢失 | 设计如此，与 config-automation 一致；prompts.ts 作为 fallback 保证可用 |
-| platformOverrides 影响调度器行为 | 调度器 fallback 逻辑保证未配置平台使用全局默认 |
-| 旧 /settings/selectors 书签失效 | 301 重定向到 /settings |
+| 风险 | 严重性 | 缓解 |
+|------|--------|------|
+| 提取过程中遗漏状态/handlers | 高 | 逐面板提取，每提取一个 Tab 后在浏览器中验证功能正常 |
+| Tab 卸载/重新挂载导致表单状态丢失 | 高 | 使用 CSS `display: none` 切换而非条件渲染，保持所有 Tab 挂载 |
+| `LLMClient.chatCompletion` 绕过外部配置 | 高 | 修改 `chatCompletion()` 也读取 `getAiReplyConfig()`，不仅修改 `CommentReplyGenerator` |
+| FlowGraphView 迁入后 import 路径断裂 | 中 | 移动文件时更新 FlowGraphView.tsx 中的相对 import 路径 |
+| `config-ai-reply` 路由与 `llmService` 循环依赖 | 中 | 配置存储提取到独立 `lib/aiReplyConfig.ts`，路由和服务都导入它 |
+| `config-automation` 重启未覆盖 platformOverrides 变化 | 中 | 扩展重启判断条件，检查 `platformOverrides` 字段 |
+| 休眠时间配置在 MonitorSchedulePanel 中缺失 | 中 | 全局默认区包含 `sleep_start_hour` / `sleep_end_hour` 选择器 |
+| 共享内联子组件遗漏提取 | 中 | 7 个子组件 + 常量提取到 `shared/`，列明清单 |
+| config-ai-reply 内存存储重启丢失 | 低 | 设计如此，与 config-automation 一致；prompts.ts 作为 fallback 保证可用 |
+| platformOverrides 影响调度器行为 | 低 | 调度器 fallback 逻辑保证未配置平台使用全局默认 |
+| 旧 /settings/selectors 书签失效 | 低 | 301 重定向到 /settings |
+| `next.config.js` 无 `redirects()` 函数 | 低 | 将 `module.exports` 改为支持 `async redirects()` 的结构 |
