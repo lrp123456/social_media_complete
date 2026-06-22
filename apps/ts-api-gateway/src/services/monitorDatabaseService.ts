@@ -393,28 +393,27 @@ export async function getAllActiveUsers() {
     });
   }
 
-  // 恢复过期的 login_required 状态
-  const staleThreshold = new Date(Date.now() - LOGIN_REQUIRED_COOLDOWN_MS);
+  // ★ 过期 login_required/login_probe 用户触发 probe（数据库驱动恢复）
+  const staleThreshold = new Date(Date.now() - 30 * 60 * 1000);
   const staleLoginRequired = await prisma.user.findMany({
     where: {
-      status: 'login_required',
+      status: { in: ['login_required', 'login_probe'] },
       monitoringEnabled: true,
       updatedAt: { lt: staleThreshold },
     },
-    select: { id: true, platform: true },
+    select: { id: true, platform: true, fingerprintWindowId: true },
   });
   if (staleLoginRequired.length > 0) {
-    const ids = staleLoginRequired.map(u => u.id);
-    logger.info({ ids, platforms: staleLoginRequired.map(u => u.platform) }, '[MonitorDB] 自动恢复 login_required 状态');
-    await prisma.user.updateMany({
-      where: { id: { in: ids } },
-      data: { status: 'init' },
-    });
+    for (const user of staleLoginRequired) {
+      const { triggerLoginProbe } = await import('../services/monitorService');
+      triggerLoginProbe(user.id, user.platform, String(user.fingerprintWindowId)).catch(() => {});
+    }
   }
+  // 不再执行 prisma.user.updateMany 自动恢复为 init
 
   const users = await prisma.user.findMany({
     where: {
-      status: { notIn: ['blocked', 'login_required', 'risk_control'] },
+      status: { notIn: ['blocked', 'login_required', 'risk_control', 'login_probe'] },
       monitoringEnabled: true,
     },
   });
