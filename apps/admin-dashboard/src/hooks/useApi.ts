@@ -1643,6 +1643,26 @@ export type StepAction =
   | 'refresh_page' | 'wait_for_response' | 'check_quantity'
   | 'scroll_load' | 'page_turn' | 'close_menu' | 'done';
 
+export type FlowBranch = {
+  condition: string;
+  target: string;
+  description: string;
+};
+
+export type SubStepAction =
+  | 'resolve_selector' | 'resolve_fallback_selector'
+  | 'mouse_move' | 'mouse_click' | 'cdp_click' | 'cdp_click_node'
+  | 'wait_for_element' | 'check_element_exists'
+  | 'navigate' | 'refresh_page' | 'scroll' | 'wait_for_response'
+  | 'check_navigation' | 'check_url' | 'check_login' | 'check_risk';
+
+export type FlowSubStep = {
+  id: string;
+  action: SubStepAction;
+  description: string;
+  selector?: FlowSelectorConfig;
+};
+
 export type FlowNode = {
   id: string;
   action: StepAction;
@@ -1655,11 +1675,12 @@ export type FlowNode = {
     apiResponse?: string;
     timeout: number;
   };
-  branches?: Record<string, { goto: string }>;
+  branches?: FlowBranch[];
   next?: string;
   maxVideos?: number;
   scrollConfig?: { maxScrolls: number; scrollDelta: number };
   nextPageBtn?: { css?: string; xpath?: string; text?: string };
+  steps?: FlowSubStep[];
 };
 
 export type NavigationFlowEntry = {

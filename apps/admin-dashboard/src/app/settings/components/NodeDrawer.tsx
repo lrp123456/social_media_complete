@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { MaterialIcon } from '@/components/ui/MaterialIcon';
 import { SelectorEditor } from './SelectorEditor';
 import { useFrameworks, useApiPatterns, useUpsertNavigationFlow } from '@/hooks/useApi';
-import type { FlowNode, SelectorConfig, ScopedSelector, FrameworkEntry, StepAction } from '@/hooks/useApi';
+import type { FlowNode, FlowBranch, SelectorConfig, ScopedSelector, FrameworkEntry, StepAction } from '@/hooks/useApi';
 
 const NODE_TYPES: { value: StepAction; label: string }[] = [
   { value: 'check_url', label: 'URL检查' },
@@ -167,15 +167,36 @@ export function NodeDrawer({
         {/* 分支/后续 */}
         <div>
           <label className="text-xs text-gray-500 mb-1 block">后续步骤</label>
-          {form.branches ? (
-            Object.entries(form.branches).map(([cond, target]) => (
-              <div key={cond} className="flex gap-2 mb-1">
-                <span className="text-xs text-gray-400 pt-1">{cond} →</span>
-                <input value={target.goto} onChange={(e) => setForm({ ...form, branches: { ...form.branches!, [cond]: { goto: e.target.value } } })} className="flex-1 px-2 py-1 border rounded text-xs font-mono" />
+          {form.branches && form.branches.length > 0 ? (
+            form.branches.map((branch, i) => (
+              <div key={i} className="flex gap-2 mb-1 items-center">
+                <input value={branch.condition} onChange={(e) => {
+                  const updated = [...(form.branches || [])];
+                  updated[i] = { ...updated[i], condition: e.target.value };
+                  setForm({ ...form, branches: updated });
+                }} placeholder="条件" className="w-24 px-2 py-1 border rounded text-xs font-mono" />
+                <span className="text-xs text-gray-400">→</span>
+                <input value={branch.target} onChange={(e) => {
+                  const updated = [...(form.branches || [])];
+                  updated[i] = { ...updated[i], target: e.target.value };
+                  setForm({ ...form, branches: updated });
+                }} placeholder="目标 ID" className="flex-1 px-2 py-1 border rounded text-xs font-mono" />
+                <input value={branch.description} onChange={(e) => {
+                  const updated = [...(form.branches || [])];
+                  updated[i] = { ...updated[i], description: e.target.value };
+                  setForm({ ...form, branches: updated });
+                }} placeholder="描述" className="w-28 px-2 py-1 border rounded text-xs font-mono" />
+                <button onClick={() => {
+                  const updated = (form.branches || []).filter((_, j) => j !== i);
+                  setForm({ ...form, branches: updated.length > 0 ? updated : undefined });
+                }} className="text-red-400 hover:text-red-600 text-xs">×</button>
               </div>
             ))
           ) : (
-            <input value={form.next || ''} onChange={(e) => setForm({ ...form, next: e.target.value || undefined })} placeholder="下一步 ID (如 s05_enable_interceptor)" className="w-full px-2 py-1 border rounded text-xs font-mono" />
+            <div className="space-y-1">
+              <input value={form.next || ''} onChange={(e) => setForm({ ...form, next: e.target.value || undefined })} placeholder="下一步 ID (如 s05_enable_interceptor)" className="w-full px-2 py-1 border rounded text-xs font-mono" />
+              <button onClick={() => setForm({ ...form, branches: [{ condition: '', target: '', description: '' }] })} className="text-xs text-blue-600 hover:text-blue-800">+ 添加分支</button>
+            </div>
           )}
         </div>
       </div>

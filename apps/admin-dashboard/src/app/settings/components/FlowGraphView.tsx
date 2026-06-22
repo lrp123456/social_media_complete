@@ -93,15 +93,15 @@ export function FlowGraphView({
               </div>
 
               {/* 分支连线 */}
-              {node.branches && (
+              {node.branches && node.branches.length > 0 && (
                 <div className="ml-8 mt-1 space-y-1">
-                  {Object.entries(node.branches).map(([condition, target]) => (
-                    <div key={condition} className="flex items-center gap-2">
+                  {node.branches.map((branch) => (
+                    <div key={branch.condition} className="flex items-center gap-2">
                       <div className="w-4 h-0.5 bg-gray-300" />
                       <span className="text-xs text-gray-400 px-2 py-0.5 bg-gray-100 rounded">
-                        {condition}
+                        {branch.condition}
                       </span>
-                      <span className="text-xs text-blue-500 font-mono">→ {target.goto}</span>
+                      <span className="text-xs text-blue-500 font-mono">→ {branch.target}</span>
                     </div>
                   ))}
                 </div>
