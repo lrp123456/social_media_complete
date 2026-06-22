@@ -82,8 +82,8 @@ let instance: SelectorReader | null = null;
 // 失败回退默认并 log warning
 // ============================================================
 
-const VALID_PURPOSES = new Set(['publish', 'monitor']);
-const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes', 'apiPatterns', 'dataSources', 'navigationFlows', 'frameworks'];
+const VALID_PURPOSES = new Set(['publish', 'monitor', 'login']);
+const VALID_CATEGORIES = ['menus', 'buttons', 'regions', 'textboxes', 'apiPatterns', 'dataSources', 'navigationFlows', 'frameworks', 'loginFlows'];
 const VALID_TYPES = new Set(['css', 'role', 'text', 'placeholder', 'label']);
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
 
@@ -116,6 +116,8 @@ function validateConfig(raw: unknown): ValidationIssue[] {
     }
     const p = pVal as Record<string, unknown>;
     for (const cat of VALID_CATEGORIES) {
+      // loginFlows 有专用校验，跳过通用 selector schema
+      if (cat === 'loginFlows') continue;
       if (!p[cat] || typeof p[cat] !== 'object') {
         issues.push({ path: `$.platforms.${plat}.${cat}`, message: 'missing or not an object' });
         continue;
@@ -165,6 +167,39 @@ function validateConfig(raw: unknown): ValidationIssue[] {
         }
         if (e.scopeKey !== undefined && (typeof e.scopeKey !== 'string' || e.scopeKey.length === 0)) {
           issues.push({ path: `${ep}.scopeKey`, message: 'scopeKey must be a non-empty string (reference to a region name in same platform)' });
+        }
+      }
+    }
+    // v2.5+ loginFlows 校验
+    if (p.loginFlows !== undefined) {
+      if (typeof p.loginFlows !== 'object' || p.loginFlows === null) {
+        issues.push({ path: `$.platforms.${plat}.loginFlows`, message: 'must be an object' });
+      } else {
+        for (const [flowId, fVal] of Object.entries(p.loginFlows as Record<string, unknown>)) {
+          const fp = `$.platforms.${plat}.loginFlows.${flowId}`;
+          if (!fVal || typeof fVal !== 'object') {
+            issues.push({ path: fp, message: 'entry must be an object' });
+            continue;
+          }
+          const f = fVal as Record<string, unknown>;
+          // domain 必填
+          if (typeof f.domain !== 'string' || f.domain.length === 0) {
+            issues.push({ path: `${fp}.domain`, message: 'must be a non-empty string' });
+          }
+          // loginUrl 必填
+          if (typeof f.loginUrl !== 'string' || f.loginUrl.length === 0) {
+            issues.push({ path: `${fp}.loginUrl`, message: 'must be a non-empty string' });
+          }
+          // loggedOutIndicators 和 loggedInIndicators 至少有一个非空
+          const outArr = Array.isArray(f.loggedOutIndicators) ? f.loggedOutIndicators : [];
+          const inArr = Array.isArray(f.loggedInIndicators) ? f.loggedInIndicators : [];
+          if (outArr.length === 0 && inArr.length === 0) {
+            issues.push({ path: `${fp}`, message: 'at least one of loggedOutIndicators or loggedInIndicators must be non-empty' });
+          }
+          // closeOnLoginSuccess 可选，存在时必须是 boolean
+          if (f.closeOnLoginSuccess !== undefined && typeof f.closeOnLoginSuccess !== 'boolean') {
+            issues.push({ path: `${fp}.closeOnLoginSuccess`, message: 'must be boolean if present' });
+          }
         }
       }
     }
@@ -220,13 +255,15 @@ function hasInvalidPurposes(entry: Record<string, unknown>): boolean {
 function sanitizeConfig(raw: unknown): SelectorConfig {
   const cfg = raw as Record<string, unknown>;
   const platforms = cfg.platforms as Record<string, Record<string, Record<string, unknown>>>;
-  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown>; urlMonitors: Record<string, unknown>; apiPatterns: Record<string, unknown>; dataSources: Record<string, unknown>; navigationFlows: Record<string, unknown>; frameworks: Record<string, unknown> }> = {};
+  const sanitized: Record<string, { menus: Record<string, unknown>; buttons: Record<string, unknown>; regions: Record<string, unknown>; textboxes: Record<string, unknown>; flowRules: Record<string, unknown>; urlMonitors: Record<string, unknown>; apiPatterns: Record<string, unknown>; dataSources: Record<string, unknown>; navigationFlows: Record<string, unknown>; frameworks: Record<string, unknown>; loginFlows: Record<string, unknown> }> = {};
 
   let removedCount = 0;
   for (const [plat, pVal] of Object.entries(platforms || {})) {
     const p = pVal as Record<string, unknown>;
-    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {} };
+    const out: Record<string, Record<string, unknown>> = { menus: {}, buttons: {}, regions: {}, textboxes: {}, flowRules: {}, urlMonitors: {}, apiPatterns: {}, dataSources: {}, navigationFlows: {}, frameworks: {}, loginFlows: {} };
     for (const cat of VALID_CATEGORIES) {
+      // loginFlows 有专用校验，跳过通用 purposes 校验
+      if (cat === 'loginFlows') continue;
       const entries = (p[cat] || {}) as Record<string, unknown>;
       for (const [name, eVal] of Object.entries(entries)) {
         const e = eVal as Record<string, unknown>;
@@ -245,6 +282,8 @@ function sanitizeConfig(raw: unknown): SelectorConfig {
     out.dataSources = (p.dataSources || {}) as Record<string, unknown>;
     out.navigationFlows = (p.navigationFlows || {}) as Record<string, unknown>;
     out.frameworks = (p.frameworks || {}) as Record<string, unknown>;
+    // 透传 loginFlows（不做 purposes 校验）
+    out.loginFlows = (p.loginFlows || {}) as Record<string, unknown>;
     sanitized[plat] = out as any;
   }
 
