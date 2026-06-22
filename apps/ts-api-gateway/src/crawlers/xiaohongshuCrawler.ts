@@ -1039,7 +1039,7 @@ export class XiaohongshuCrawler {
 
             // per-flowId 冷却
             const { setFlowState } = await import('../services/monitorService');
-            await setFlowState(userId, mainsiteConfig.domain, {
+            await setFlowState(userId, 'mainsite', {
               status: 'login_required', cooldownLevel: 0,
               cooldownUntil: Date.now() + 30 * 60 * 1000, lastProbeAt: Date.now(),
             });
