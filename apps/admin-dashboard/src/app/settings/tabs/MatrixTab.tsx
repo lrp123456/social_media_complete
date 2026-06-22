@@ -8,8 +8,8 @@ import DynamicSelectorPanel from '../components/DynamicSelectorPanel';
 import FlowRulesPanel from '../components/FlowRulesPanel';
 import BrowserWarmupPanel from '../components/BrowserWarmupPanel';
 import CrawlModePanel from '../components/CrawlModePanel';
-// import MonitorSchedulePanel from '../components/MonitorSchedulePanel';  // 任务 8 取消注释
-// import AiReplyConfigPanel from '../components/AiReplyConfigPanel';      // 任务 8 取消注释
+import MonitorSchedulePanel from '../components/MonitorSchedulePanel';
+import AiReplyConfigPanel from '../components/AiReplyConfigPanel';
 
 const PLATFORMS = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'] as const;
 const PLATFORM_LABELS: Record<string, string> = {
@@ -71,8 +71,8 @@ export default function MatrixTab() {
       <FlowRulesPanel />
       <BrowserWarmupPanel />
       <CrawlModePanel />
-      {/* <MonitorSchedulePanel /> */}
-      {/* <AiReplyConfigPanel /> */}
+      <MonitorSchedulePanel />
+      <AiReplyConfigPanel />
     </div>
   );
 }
