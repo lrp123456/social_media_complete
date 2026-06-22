@@ -1,106 +1,93 @@
-'use client';
+// apps/admin-dashboard/src/app/settings/components/FlowNodeCard.tsx
+import { memo, useState } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
+import type { FlowNode, FlowSubStep } from '@/hooks/useApi';
 
-import { cn } from '@/lib/utils';
-import { MaterialIcon } from '@/components/ui/MaterialIcon';
-import type { MaterialIconName } from '@/components/ui/MaterialIcon';
-import type { FlowNode, LastRunStep } from '@/hooks/useApi';
-
-const ACTION_CONFIG: Record<string, { icon: MaterialIconName; color: string }> = {
-  check_url: { icon: 'link', color: 'border-blue-400 bg-blue-50' },
-  check_menu_state: { icon: 'folder_open' as MaterialIconName, color: 'border-purple-400 bg-purple-50' },
-  click_menu: { icon: 'mouse' as MaterialIconName, color: 'border-green-400 bg-green-50' },
-  click_tab: { icon: 'tab' as MaterialIconName, color: 'border-green-400 bg-green-50' },
-  click_button: { icon: 'smart_button' as MaterialIconName, color: 'border-green-400 bg-green-50' },
-  enable_interceptor: { icon: 'visibility', color: 'border-orange-400 bg-orange-50' },
-  disable_interceptor: { icon: 'visibility_off', color: 'border-orange-400 bg-orange-50' },
-  refresh_page: { icon: 'refresh', color: 'border-cyan-400 bg-cyan-50' },
-  wait_for_response: { icon: 'hourglass_empty' as MaterialIconName, color: 'border-cyan-400 bg-cyan-50' },
-  check_quantity: { icon: 'pin' as MaterialIconName, color: 'border-yellow-400 bg-yellow-50' },
-  scroll_load: { icon: 'arrow_downward' as MaterialIconName, color: 'border-gray-400 bg-gray-50' },
-  page_turn: { icon: 'arrow_forward', color: 'border-gray-400 bg-gray-50' },
-  close_menu: { icon: 'folder_delete' as MaterialIconName, color: 'border-red-400 bg-red-50' },
-  done: { icon: 'check_circle', color: 'border-green-500 bg-green-100' },
+const ACTION_COLORS: Record<string, string> = {
+  check_url: '#3b82f6',
+  click_menu: '#22c55e',
+  click_button: '#22c55e',
+  enable_interceptor: '#f59e0b',
+  scroll_load: '#8b5cf6',
+  check_quantity: '#06b6d4',
+  done: '#64748b',
+  navigate: '#ef4444',
+  refresh_page: '#6366f1',
+  wait_for_response: '#a855f7',
 };
 
-function getRunStatus(lastRun?: LastRunStep) {
-  if (!lastRun) return { dot: 'bg-gray-300', label: '未执行' };
-  if (lastRun.status === 'success') return { dot: 'bg-green-500', label: '成功' };
-  if (lastRun.status === 'fallback') return { dot: 'bg-yellow-500', label: '回退' };
-  if (lastRun.status === 'failed') return { dot: 'bg-red-500', label: '失败' };
-  return { dot: 'bg-gray-300', label: lastRun.status };
-}
-
-function formatDuration(ms?: number) {
-  if (!ms) return '';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-export function FlowNodeCard({
-  node,
-  lastRun,
-  selected,
-  onClick,
-}: {
+type FlowNodeCardData = {
   node: FlowNode;
-  lastRun?: LastRunStep;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const cfg = ACTION_CONFIG[node.action] || { icon: 'help', color: 'border-gray-300' };
-  const status = getRunStatus(lastRun);
+  expanded?: boolean;
+  onToggleExpand?: (id: string) => void;
+  lastRun?: { status: string; durationMs?: number };
+};
+
+function FlowNodeCard({ data, selected }: NodeProps & { data: FlowNodeCardData }) {
+  const { node, expanded, onToggleExpand, lastRun } = data;
+  const color = ACTION_COLORS[node.action] || '#64748b';
+  const hasSubSteps = node.steps && node.steps.length > 0;
+  const branchCount = node.branches?.length || 0;
 
   return (
     <div
-      onClick={onClick}
-      className={cn(
-        'border-l-4 rounded-lg p-3 cursor-pointer transition-all hover:shadow-md',
-        cfg.color,
-        selected && 'ring-2 ring-blue-500 shadow-md',
-      )}
+      style={{
+        background: '#1e293b',
+        border: `2px solid ${selected ? '#818cf8' : color}`,
+        borderRadius: 12,
+        padding: '10px 16px',
+        minWidth: 180,
+        maxWidth: 280,
+        cursor: 'pointer',
+      }}
+      onClick={() => hasSubSteps && onToggleExpand?.(node.id)}
     >
-      {/* 顶部：图标 + 类型 + 状态色点 */}
-      <div className="flex items-center gap-2">
-        <MaterialIcon icon={cfg.icon} className="text-lg" />
-        <span className="text-xs text-gray-500">{node.action}</span>
-        <span className={cn('ml-auto w-2.5 h-2.5 rounded-full', status.dot)} title={status.label} />
+      <Handle type="target" position={Position.Top} style={{ background: color }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        <span style={{ color, fontSize: 11, fontWeight: 600 }}>{node.action}</span>
+        {hasSubSteps && (
+          <span style={{ color: '#475569', fontSize: 10 }}>
+            {expanded ? '▼' : '▶'} {node.steps!.length} 步
+          </span>
+        )}
+        {branchCount > 0 && (
+          <span style={{ color: '#f59e0b', fontSize: 10 }}>⟳ {branchCount} 分支</span>
+        )}
+        {lastRun && (
+          <span
+            style={{
+              width: 8, height: 8, borderRadius: '50%',
+              background: lastRun.status === 'success' ? '#22c55e' : lastRun.status === 'failed' ? '#ef4444' : '#64748b',
+            }}
+          />
+        )}
       </div>
 
-      {/* 步骤ID */}
-      <div className="text-xs font-mono text-gray-400 mt-1">{node.id}</div>
+      <div style={{ color: '#e2e8f0', fontSize: 13 }}>{node.description}</div>
 
-      {/* 描述 */}
-      <div className="text-sm text-gray-700 mt-0.5">{node.description}</div>
-
-      {/* 选择器摘要 */}
-      {node.selector?.primary?.value && (
-        <div className="text-xs text-gray-400 mt-1 truncate font-mono">
-          {node.selector.primary.value.substring(0, 50)}
+      {node.selector && (
+        <div style={{ color: '#475569', fontSize: 11, marginTop: 4, fontFamily: 'monospace' }}>
+          {(node.selector as any).primary?.value?.substring(0, 40) || (node.selector as any).key || ''}
         </div>
       )}
 
-      {/* API Pattern 引用 */}
-      {node.apiPatternKey && (
-        <div className="text-xs text-orange-600 mt-1">
-          <MaterialIcon icon="api" className="text-xs inline" /> {node.apiPatternKey}
+      {/* 展开时显示子步骤列表 */}
+      {expanded && hasSubSteps && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #334155' }}>
+          {node.steps!.map((sub: FlowSubStep, i: number) => (
+            <div key={sub.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+              <span style={{ color: '#475569', fontSize: 10 }}>{i + 1}.</span>
+              <span style={{ color: '#94a3b8', fontSize: 11 }}>{sub.action}</span>
+              <span style={{ color: '#64748b', fontSize: 10 }}>{sub.description}</span>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* 执行状态 */}
-      {lastRun && (
-        <div className="text-xs text-gray-400 mt-1.5 flex items-center gap-3 flex-wrap">
-          <span>{formatDuration(lastRun.durationMs)}</span>
-          {lastRun.selectorTries && Array.isArray(lastRun.selectorTries) && (
-            <span className="flex gap-1">
-              {lastRun.selectorTries.map((t: any, i: number) => (
-                <span key={i} title={t.selector}>
-                  {t.result === 'found' ? '✓' : '✗'}{t.source?.replace('primary', 'P').replace('fallback', 'F') || i}
-                </span>
-              ))}
-            </span>
-          )}
-        </div>
-      )}
+      <Handle type="source" position={Position.Bottom} style={{ background: color }} />
     </div>
   );
 }
+
+export default memo(FlowNodeCard);

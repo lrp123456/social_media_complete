@@ -1,130 +1,163 @@
+// apps/admin-dashboard/src/app/settings/components/FlowGraphView.tsx
 'use client';
-
-import { useState } from 'react';
-import { MaterialIcon } from '@/components/ui/MaterialIcon';
-import { FlowNodeCard } from './FlowNodeCard';
+import { useState, useMemo, useCallback } from 'react';
+import {
+  ReactFlow, Background, Controls, MiniMap,
+  useNodesState, useEdgesState,
+  type Node, type Edge, type NodeTypes, type EdgeTypes,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { useNavigationFlows, useFlowLastRun } from '@/hooks/useApi';
+import { createFlowMachine, flowNodesToMachineConfig } from './flowStateMachine';
+import { applyDagreLayout } from './flowLayout';
+import FlowNodeCard from './FlowNodeCard';
+import FlowEdge from './FlowEdge';
 import { NodeDrawer } from './NodeDrawer';
 import FrameworkManager from './FrameworkManager';
 import { ApiPatternManager } from './ApiPatternManager';
 import DataSourceManager from './DataSourceManager';
-import { useNavigationFlows, useFlowLastRun } from '@/hooks/useApi';
-import type { FlowNode, LastRunStep } from '@/hooks/useApi';
+import type { FlowNode } from '@/hooks/useApi';
 
-export function FlowGraphView({
-  platform,
-  flowName,
-}: {
+const nodeTypes: NodeTypes = { flowNode: FlowNodeCard };
+const edgeTypes: EdgeTypes = { flowEdge: FlowEdge };
+
+interface FlowGraphViewProps {
   platform: string;
   flowName: string;
-}) {
-  const { data: flowData, isLoading } = useNavigationFlows(platform);
+}
+
+export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
+  const { data: flowsData, isLoading } = useNavigationFlows(platform);
   const { data: lastRunData } = useFlowLastRun(platform, flowName);
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
+  const [selectedNode, setSelectedNode] = useState<FlowNode | null>(null);
+  const [showFramework, setShowFramework] = useState(false);
+  const [showApiPattern, setShowApiPattern] = useState(false);
+  const [showDataSource, setShowDataSource] = useState(false);
 
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [showFrameworks, setShowFrameworks] = useState(false);
-  const [showApiPatterns, setShowApiPatterns] = useState(false);
-  const [showDataSources, setShowDataSources] = useState(false);
+  const flow = flowsData?.navigationFlows?.[flowName];
+  const steps = flow?.steps || [];
 
-  const flows = flowData?.navigationFlows || {};
-  const flow = flows[flowName];
-  const steps: FlowNode[] = flow?.steps || [];
-  const lastRunSteps: LastRunStep[] = lastRunData?.steps || [];
+  // 将 FlowNode[] 转换为 React Flow nodes/edges
+  const { nodes: rawNodes, edges: rawEdges } = useMemo(() => {
+    const nodes: Node[] = [];
+    const edges: Edge[] = [];
 
-  const selectedNode = steps.find((s) => s.id === selectedNodeId) || null;
+    for (const step of steps) {
+      nodes.push({
+        id: step.id,
+        type: 'flowNode',
+        position: { x: 0, y: 0 },
+        data: {
+          node: step,
+          expanded: expandedNodes.has(step.id),
+          onToggleExpand: (id: string) => {
+            setExpandedNodes((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            });
+          },
+          lastRun: lastRunData?.steps?.find((s: any) => s.label === step.id),
+        },
+      });
 
-  const getLastRun = (nodeId: string): LastRunStep | undefined => {
-    return lastRunSteps.find((s) => s.label === nodeId);
-  };
+      // 分支连线
+      if (step.branches) {
+        for (const branch of step.branches) {
+          edges.push({
+            id: `${step.id}-${branch.condition}-${branch.target}`,
+            source: step.id,
+            target: branch.target,
+            type: 'flowEdge',
+            data: {
+              label: branch.description,
+              labelStyle: branch.condition.includes('ERROR') || branch.condition.includes('FAIL') ? 'error' : 'default',
+            },
+            animated: true,
+          });
+        }
+      }
+
+      // 默认连线
+      if (step.next) {
+        edges.push({
+          id: `${step.id}-next-${step.next}`,
+          source: step.id,
+          target: step.next,
+          type: 'flowEdge',
+          style: { strokeDasharray: '5,5' },
+        });
+      }
+    }
+
+    return { nodes, edges };
+  }, [steps, expandedNodes, lastRunData]);
+
+  // dagre 自动布局
+  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(() => {
+    const layouted = applyDagreLayout(rawNodes, rawEdges);
+    return { nodes: layouted, edges: rawEdges };
+  }, [rawNodes, rawEdges]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
+
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    const step = steps.find((s: FlowNode) => s.id === node.id);
+    if (step) setSelectedNode(step);
+  }, [steps]);
 
   if (isLoading) {
-    return <div className="flex items-center justify-center h-64 text-gray-400">加载中...</div>;
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: '#94a3b8' }}>加载中...</div>;
   }
 
   if (!flow) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-        <MaterialIcon icon="account_tree" className="text-4xl mb-2" />
-        <div>暂无 "{flowName}" 流程配置</div>
-        <div className="text-sm mt-1">请先在 selectors.json 中定义 navigationFlows</div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: 256, color: '#94a3b8' }}>
+        <div style={{ fontSize: 24, marginBottom: 8 }}>📋</div>
+        <div>暂无 &quot;{flowName}&quot; 流程配置</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>请先在 selectors.json 中定义 navigationFlows</div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full">
-      {/* 左侧：流程图 */}
-      <div className="flex-1 overflow-auto p-6">
-        {/* 工具栏 */}
-        <div className="flex items-center gap-2 mb-4">
-          <span className="text-sm font-medium text-gray-700">{flow.label || flowName}</span>
-          <span className="text-xs text-gray-400">({steps.length} 步骤)</span>
-          <div className="ml-auto flex gap-2">
-            <button onClick={() => setShowFrameworks(true)} className="px-3 py-1 border rounded text-xs hover:bg-gray-50">
-              <MaterialIcon icon="select_all" className="text-xs inline" /> 框架管理
-            </button>
-            <button onClick={() => setShowApiPatterns(true)} className="px-3 py-1 border rounded text-xs hover:bg-gray-50">
-              <MaterialIcon icon="api" className="text-xs inline" /> API Pattern
-            </button>
-            <button onClick={() => setShowDataSources(true)} className="px-3 py-1 border rounded text-xs hover:bg-gray-50">
-              <MaterialIcon icon="storage" className="text-xs inline" /> DataSource
-            </button>
-          </div>
-        </div>
-
-        {/* 节点列表 + 连线 */}
-        <div className="space-y-0">
-          {steps.map((node, index) => (
-            <div key={node.id}>
-              {/* 连线 */}
-              {index > 0 && (
-                <div className="flex items-center justify-start ml-6 h-6">
-                  <div className="w-0.5 h-full bg-gray-300" />
-                </div>
-              )}
-
-              {/* 节点卡片 */}
-              <div className="max-w-md">
-                <FlowNodeCard
-                  node={node}
-                  lastRun={getLastRun(node.id)}
-                  selected={selectedNodeId === node.id}
-                  onClick={() => setSelectedNodeId(selectedNodeId === node.id ? null : node.id)}
-                />
-              </div>
-
-              {/* 分支连线 */}
-              {node.branches && node.branches.length > 0 && (
-                <div className="ml-8 mt-1 space-y-1">
-                  {node.branches.map((branch) => (
-                    <div key={branch.condition} className="flex items-center gap-2">
-                      <div className="w-4 h-0.5 bg-gray-300" />
-                      <span className="text-xs text-gray-400 px-2 py-0.5 bg-gray-100 rounded">
-                        {branch.condition}
-                      </span>
-                      <span className="text-xs text-blue-500 font-mono">→ {branch.target}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+    <div style={{ height: 600, border: '1px solid #334155', borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '8px 12px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', gap: 8 }}>
+        <button onClick={() => setShowFramework(true)} style={{ color: '#94a3b8', fontSize: 12 }}>框架管理</button>
+        <button onClick={() => setShowApiPattern(true)} style={{ color: '#94a3b8', fontSize: 12 }}>API Pattern</button>
+        <button onClick={() => setShowDataSource(true)} style={{ color: '#94a3b8', fontSize: 12 }}>DataSource</button>
       </div>
 
-      {/* 右侧：抽屉 */}
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onNodeClick={onNodeClick}
+        nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
+        fitView
+        proOptions={{ hideAttribution: true }}
+      >
+        <Background color="#334155" gap={16} />
+        <Controls />
+        <MiniMap nodeColor="#1e293b" maskColor="rgba(0,0,0,0.5)" />
+      </ReactFlow>
+
       {selectedNode && (
         <NodeDrawer
           node={selectedNode}
           platform={platform}
           flowName={flowName}
-          onClose={() => setSelectedNodeId(null)}
+          onClose={() => setSelectedNode(null)}
         />
       )}
-
-      {/* 弹窗 */}
-      {showFrameworks && <FrameworkManager platform={platform} onClose={() => setShowFrameworks(false)} />}
-      {showApiPatterns && <ApiPatternManager platform={platform} onClose={() => setShowApiPatterns(false)} />}
-      {showDataSources && <DataSourceManager platform={platform} onClose={() => setShowDataSources(false)} />}
+      {showFramework && <FrameworkManager platform={platform} onClose={() => setShowFramework(false)} />}
+      {showApiPattern && <ApiPatternManager platform={platform} onClose={() => setShowApiPattern(false)} />}
+      {showDataSource && <DataSourceManager platform={platform} onClose={() => setShowDataSource(false)} />}
     </div>
   );
 }
