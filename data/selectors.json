@@ -1142,12 +1142,28 @@
                 "key": "nav.to-creator"
               },
               "steps": [
-                { "id": "get_current_url", "action": "check_url", "description": "获取当前页面URL" },
-                { "id": "match_url", "action": "check_navigation", "description": "匹配创作者中心URL" }
+                {
+                  "id": "get_current_url",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url",
+                  "action": "check_navigation",
+                  "description": "匹配创作者中心URL"
+                }
               ],
               "branches": [
-                { "condition": "URL_OK", "target": "click_work_manage", "description": "已在创作者中心" },
-                { "condition": "URL_FAIL", "target": "navigate_home", "description": "需要导航到创作者中心" }
+                {
+                  "condition": "URL_OK",
+                  "target": "click_work_manage",
+                  "description": "已在创作者中心"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home",
+                  "description": "需要导航到创作者中心"
+                }
               ],
               "next": "click_work_manage"
             },
@@ -1156,13 +1172,33 @@
               "action": "navigate",
               "description": "导航到创作者中心",
               "steps": [
-                { "id": "resolve_url", "action": "resolve_selector", "description": "解析创作者中心URL" },
-                { "id": "goto_url", "action": "navigate", "description": "导航到目标URL" },
-                { "id": "wait_load", "action": "wait_for_response", "description": "等待页面加载完成" }
+                {
+                  "id": "resolve_url",
+                  "action": "resolve_selector",
+                  "description": "解析创作者中心URL"
+                },
+                {
+                  "id": "goto_url",
+                  "action": "navigate",
+                  "description": "导航到目标URL"
+                },
+                {
+                  "id": "wait_load",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
               ],
               "branches": [
-                { "condition": "NAV_OK", "target": "click_work_manage", "description": "导航成功" },
-                { "condition": "NAV_FAIL", "target": "error_handler", "description": "导航失败" }
+                {
+                  "condition": "NAV_OK",
+                  "target": "click_work_manage",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler",
+                  "description": "导航失败"
+                }
               ],
               "next": "click_work_manage"
             },
@@ -1174,15 +1210,43 @@
                 "key": "menus.menu_work_manage"
               },
               "steps": [
-                { "id": "resolve_selector_wm", "action": "resolve_selector", "description": "查找菜单元素" },
-                { "id": "mouse_move_wm", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_wm", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_wm", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_response_wm", "action": "check_navigation", "description": "验证页面响应" }
+                {
+                  "id": "resolve_selector_wm",
+                  "action": "resolve_selector",
+                  "description": "查找菜单元素"
+                },
+                {
+                  "id": "mouse_move_wm",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_wm",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_wm",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_wm",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "enable_interceptor", "description": "菜单已打开" },
-                { "condition": "ERROR", "target": "error_handler", "description": "点击失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "菜单已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler",
+                  "description": "点击失败"
+                }
               ],
               "next": "enable_interceptor"
             },
@@ -1192,13 +1256,33 @@
               "description": "启用视频列表API拦截",
               "apiPatternKey": "video_list.work_list",
               "steps": [
-                { "id": "resolve_api_pattern", "action": "resolve_selector", "description": "解析API拦截模式" },
-                { "id": "setup_interceptor", "action": "wait_for_response", "description": "设置网络请求拦截" },
-                { "id": "verify_interceptor", "action": "check_navigation", "description": "验证拦截器已启用" }
+                {
+                  "id": "resolve_api_pattern",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "scroll_load", "description": "拦截器已启用" },
-                { "condition": "ERROR", "target": "error_handler", "description": "拦截器启用失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler",
+                  "description": "拦截器启用失败"
+                }
               ],
               "next": "scroll_load"
             },
@@ -1206,16 +1290,43 @@
               "id": "scroll_load",
               "action": "scroll_load",
               "description": "滚动加载更多视频",
-              "scrollConfig": { "maxScrolls": 50, "scrollDelta": 800 },
+              "scrollConfig": {
+                "maxScrolls": 50,
+                "scrollDelta": 800
+              },
               "steps": [
-                { "id": "find_scroll_container", "action": "resolve_selector", "description": "查找滚动容器" },
-                { "id": "scroll_down", "action": "scroll", "description": "向下滚动" },
-                { "id": "wait_content_load", "action": "wait_for_response", "description": "等待内容加载" },
-                { "id": "check_has_more", "action": "check_navigation", "description": "检查是否还有更多内容" }
+                {
+                  "id": "find_scroll_container",
+                  "action": "resolve_selector",
+                  "description": "查找滚动容器"
+                },
+                {
+                  "id": "scroll_down",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_content_load",
+                  "action": "wait_for_response",
+                  "description": "等待内容加载"
+                },
+                {
+                  "id": "check_has_more",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多内容"
+                }
               ],
               "branches": [
-                { "condition": "HAS_MORE", "target": "scroll_load", "description": "还有更多内容，继续滚动" },
-                { "condition": "NO_MORE", "target": "check_quantity", "description": "已加载全部内容" }
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多内容，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "check_quantity",
+                  "description": "已加载全部内容"
+                }
               ],
               "next": "check_quantity"
             },
@@ -1224,12 +1335,28 @@
               "action": "check_quantity",
               "description": "对比数据库评论数",
               "steps": [
-                { "id": "get_video_count", "action": "check_navigation", "description": "获取当前视频数量" },
-                { "id": "compare_with_db", "action": "check_navigation", "description": "与数据库记录对比" }
+                {
+                  "id": "get_video_count",
+                  "action": "check_navigation",
+                  "description": "获取当前视频数量"
+                },
+                {
+                  "id": "compare_with_db",
+                  "action": "check_navigation",
+                  "description": "与数据库记录对比"
+                }
               ],
               "branches": [
-                { "condition": "NEW_VIDEOS", "target": "click_comment_manage", "description": "有新视频需要处理" },
-                { "condition": "NO_NEW", "target": "done", "description": "无新视频" }
+                {
+                  "condition": "NEW_VIDEOS",
+                  "target": "click_comment_manage",
+                  "description": "有新视频需要处理"
+                },
+                {
+                  "condition": "NO_NEW",
+                  "target": "done",
+                  "description": "无新视频"
+                }
               ],
               "next": "click_comment_manage"
             },
@@ -1241,15 +1368,43 @@
                 "key": "menus.menu_comment_manage_new"
               },
               "steps": [
-                { "id": "resolve_selector_cm", "action": "resolve_selector", "description": "查找评论管理菜单" },
-                { "id": "mouse_move_cm", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_cm", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_cm", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_response_cm", "action": "check_navigation", "description": "验证页面响应" }
+                {
+                  "id": "resolve_selector_cm",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "click_select_works", "description": "评论管理已打开" },
-                { "condition": "ERROR", "target": "error_handler", "description": "打开评论管理失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_select_works",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler",
+                  "description": "打开评论管理失败"
+                }
               ],
               "next": "click_select_works"
             },
@@ -1261,15 +1416,43 @@
                 "key": "buttons.btn_select_works"
               },
               "steps": [
-                { "id": "resolve_selector_sw", "action": "resolve_selector", "description": "查找选择作品按钮" },
-                { "id": "mouse_move_sw", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_sw", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_sw", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_drawer", "action": "check_navigation", "description": "验证抽屉已打开" }
+                {
+                  "id": "resolve_selector_sw",
+                  "action": "resolve_selector",
+                  "description": "查找选择作品按钮"
+                },
+                {
+                  "id": "mouse_move_sw",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_sw",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_sw",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_drawer",
+                  "action": "check_navigation",
+                  "description": "验证抽屉已打开"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "done", "description": "抽屉已打开" },
-                { "condition": "ERROR", "target": "error_handler", "description": "打开抽屉失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "抽屉已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler",
+                  "description": "打开抽屉失败"
+                }
               ],
               "next": "done"
             },
@@ -1278,13 +1461,33 @@
               "action": "refresh_page",
               "description": "错误处理 — 刷新页面重试",
               "steps": [
-                { "id": "log_error", "action": "check_navigation", "description": "记录错误日志" },
-                { "id": "refresh", "action": "refresh_page", "description": "刷新页面" },
-                { "id": "wait_reload", "action": "wait_for_response", "description": "等待页面重新加载" }
+                {
+                  "id": "log_error",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
               ],
               "branches": [
-                { "condition": "RETRY", "target": "check_url", "description": "重试流程" },
-                { "condition": "ABORT", "target": "done", "description": "放弃并结束" }
+                {
+                  "condition": "RETRY",
+                  "target": "check_url",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
               ],
               "next": "check_url"
             },
@@ -1293,14 +1496,44 @@
               "action": "check_login",
               "description": "检测登录态（引用 loginFlows.creator）",
               "steps": [
-                { "id": "get_login_config", "action": "resolve_selector", "description": "加载 loginFlows 配置" },
-                { "id": "check_logged_out", "action": "check_element_exists", "description": "检测未登录指示器", "selector": { "key": "loginFlows.creator.loggedOutIndicators" } },
-                { "id": "check_logged_in", "action": "check_element_exists", "description": "检测已登录指示器", "selector": { "key": "loginFlows.creator.loggedInIndicators" } }
+                {
+                  "id": "get_login_config",
+                  "action": "resolve_selector",
+                  "description": "加载 loginFlows 配置"
+                },
+                {
+                  "id": "check_logged_out",
+                  "action": "check_element_exists",
+                  "description": "检测未登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedOutIndicators"
+                  }
+                },
+                {
+                  "id": "check_logged_in",
+                  "action": "check_element_exists",
+                  "description": "检测已登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedInIndicators"
+                  }
+                }
               ],
               "branches": [
-                { "condition": "LOGIN_OK", "target": "click_work_manage", "description": "已登录，继续采集" },
-                { "condition": "LOGIN_REQUIRED", "target": "send_qr", "description": "未登录，发送QR码" },
-                { "condition": "LOGIN_UNKNOWN", "target": "click_work_manage", "description": "状态未知，尝试继续" }
+                {
+                  "condition": "LOGIN_OK",
+                  "target": "click_work_manage",
+                  "description": "已登录，继续采集"
+                },
+                {
+                  "condition": "LOGIN_REQUIRED",
+                  "target": "send_qr",
+                  "description": "未登录，发送QR码"
+                },
+                {
+                  "condition": "LOGIN_UNKNOWN",
+                  "target": "click_work_manage",
+                  "description": "状态未知，尝试继续"
+                }
               ],
               "next": "click_work_manage"
             },
@@ -1309,14 +1542,41 @@
               "action": "check_login",
               "description": "截取QR码并发送企微告警",
               "steps": [
-                { "id": "find_qr_element", "action": "resolve_selector", "description": "查找QR码元素", "selector": { "key": "loginFlows.creator.qrSelectors" } },
-                { "id": "capture_qr", "action": "cdp_click", "description": "截取QR码（带padding正方形裁剪）" },
-                { "id": "send_alert", "action": "check_navigation", "description": "发送企微告警" },
-                { "id": "mark_tab", "action": "check_navigation", "description": "标记标签页（localStorage）" },
-                { "id": "set_cooldown", "action": "check_navigation", "description": "设置 per-flowId 冷却状态" }
+                {
+                  "id": "find_qr_element",
+                  "action": "resolve_selector",
+                  "description": "查找QR码元素",
+                  "selector": {
+                    "key": "loginFlows.creator.qrSelectors"
+                  }
+                },
+                {
+                  "id": "capture_qr",
+                  "action": "cdp_click",
+                  "description": "截取QR码（带padding正方形裁剪）"
+                },
+                {
+                  "id": "send_alert",
+                  "action": "check_navigation",
+                  "description": "发送企微告警"
+                },
+                {
+                  "id": "mark_tab",
+                  "action": "check_navigation",
+                  "description": "标记标签页（localStorage）"
+                },
+                {
+                  "id": "set_cooldown",
+                  "action": "check_navigation",
+                  "description": "设置 per-flowId 冷却状态"
+                }
               ],
               "branches": [
-                { "condition": "QR_SENT", "target": "login_probe", "description": "QR已发送，进入probe循环" }
+                {
+                  "condition": "QR_SENT",
+                  "target": "login_probe",
+                  "description": "QR已发送，进入probe循环"
+                }
               ],
               "next": "login_probe"
             },
@@ -1325,13 +1585,33 @@
               "action": "check_login",
               "description": "登录态探测（定时检查是否已扫码）",
               "steps": [
-                { "id": "find_login_tab", "action": "resolve_selector", "description": "查找标记的登录标签页" },
-                { "id": "check_state", "action": "check_login", "description": "检测登录态" }
+                {
+                  "id": "find_login_tab",
+                  "action": "resolve_selector",
+                  "description": "查找标记的登录标签页"
+                },
+                {
+                  "id": "check_state",
+                  "action": "check_login",
+                  "description": "检测登录态"
+                }
               ],
               "branches": [
-                { "condition": "LOGIN_SUCCESS", "target": "login_recovery", "description": "登录成功，清理恢复" },
-                { "condition": "LOGIN_FAIL", "target": "login_cooldown", "description": "仍未登录，递增冷却" },
-                { "condition": "TAB_CLOSED", "target": "done", "description": "标签页已关闭，停止probe" }
+                {
+                  "condition": "LOGIN_SUCCESS",
+                  "target": "login_recovery",
+                  "description": "登录成功，清理恢复"
+                },
+                {
+                  "condition": "LOGIN_FAIL",
+                  "target": "login_cooldown",
+                  "description": "仍未登录，递增冷却"
+                },
+                {
+                  "condition": "TAB_CLOSED",
+                  "target": "done",
+                  "description": "标签页已关闭，停止probe"
+                }
               ],
               "next": "login_cooldown"
             },
@@ -1340,11 +1620,23 @@
               "action": "wait_for_response",
               "description": "冷却等待（30/60/120/240分钟递增）",
               "steps": [
-                { "id": "calc_cooldown", "action": "check_navigation", "description": "计算下次probe时间" },
-                { "id": "wait", "action": "wait_for_response", "description": "等待冷却时间" }
+                {
+                  "id": "calc_cooldown",
+                  "action": "check_navigation",
+                  "description": "计算下次probe时间"
+                },
+                {
+                  "id": "wait",
+                  "action": "wait_for_response",
+                  "description": "等待冷却时间"
+                }
               ],
               "branches": [
-                { "condition": "COOLDOWN_DONE", "target": "login_probe", "description": "冷却结束，重新probe" }
+                {
+                  "condition": "COOLDOWN_DONE",
+                  "target": "login_probe",
+                  "description": "冷却结束，重新probe"
+                }
               ],
               "next": "login_probe"
             },
@@ -1353,13 +1645,33 @@
               "action": "check_login",
               "description": "登录恢复 — 清理标记 + 恢复监控",
               "steps": [
-                { "id": "close_or_unmark", "action": "check_navigation", "description": "按配置关闭或保留标签页" },
-                { "id": "clear_redis", "action": "check_navigation", "description": "清除 per-flowId Redis 状态" },
-                { "id": "update_db", "action": "check_navigation", "description": "更新用户状态为 active" },
-                { "id": "resume_monitor", "action": "check_navigation", "description": "恢复监控调度" }
+                {
+                  "id": "close_or_unmark",
+                  "action": "check_navigation",
+                  "description": "按配置关闭或保留标签页"
+                },
+                {
+                  "id": "clear_redis",
+                  "action": "check_navigation",
+                  "description": "清除 per-flowId Redis 状态"
+                },
+                {
+                  "id": "update_db",
+                  "action": "check_navigation",
+                  "description": "更新用户状态为 active"
+                },
+                {
+                  "id": "resume_monitor",
+                  "action": "check_navigation",
+                  "description": "恢复监控调度"
+                }
               ],
               "branches": [
-                { "condition": "RECOVERY_DONE", "target": "done", "description": "恢复完成" }
+                {
+                  "condition": "RECOVERY_DONE",
+                  "target": "done",
+                  "description": "恢复完成"
+                }
               ],
               "next": "done"
             },
@@ -1381,12 +1693,28 @@
                 "key": "nav.to-creator"
               },
               "steps": [
-                { "id": "get_current_url_pub", "action": "check_url", "description": "获取当前页面URL" },
-                { "id": "match_url_pub", "action": "check_navigation", "description": "匹配发布页URL" }
+                {
+                  "id": "get_current_url_pub",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_pub",
+                  "action": "check_navigation",
+                  "description": "匹配发布页URL"
+                }
               ],
               "branches": [
-                { "condition": "URL_OK", "target": "click_publish_hd", "description": "已在发布页" },
-                { "condition": "URL_FAIL", "target": "navigate_home_pub", "description": "需要导航到发布页" }
+                {
+                  "condition": "URL_OK",
+                  "target": "click_publish_hd",
+                  "description": "已在发布页"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_pub",
+                  "description": "需要导航到发布页"
+                }
               ],
               "next": "click_publish_hd"
             },
@@ -1395,13 +1723,33 @@
               "action": "navigate",
               "description": "导航到发布页",
               "steps": [
-                { "id": "resolve_url_pub", "action": "resolve_selector", "description": "解析发布页URL" },
-                { "id": "goto_url_pub", "action": "navigate", "description": "导航到发布页" },
-                { "id": "wait_load_pub", "action": "wait_for_response", "description": "等待页面加载完成" }
+                {
+                  "id": "resolve_url_pub",
+                  "action": "resolve_selector",
+                  "description": "解析发布页URL"
+                },
+                {
+                  "id": "goto_url_pub",
+                  "action": "navigate",
+                  "description": "导航到发布页"
+                },
+                {
+                  "id": "wait_load_pub",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
               ],
               "branches": [
-                { "condition": "NAV_OK", "target": "click_publish_hd", "description": "导航成功" },
-                { "condition": "NAV_FAIL", "target": "error_handler_pub", "description": "导航失败" }
+                {
+                  "condition": "NAV_OK",
+                  "target": "click_publish_hd",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_pub",
+                  "description": "导航失败"
+                }
               ],
               "next": "click_publish_hd"
             },
@@ -1413,15 +1761,43 @@
                 "key": "menus.menu_publish_hd"
               },
               "steps": [
-                { "id": "resolve_selector_ph", "action": "resolve_selector", "description": "查找高清发布菜单" },
-                { "id": "mouse_move_ph", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_ph", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_ph", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_response_ph", "action": "check_navigation", "description": "验证页面响应" }
+                {
+                  "id": "resolve_selector_ph",
+                  "action": "resolve_selector",
+                  "description": "查找高清发布菜单"
+                },
+                {
+                  "id": "mouse_move_ph",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_ph",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_ph",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_ph",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "click_upload_video", "description": "高清发布页已打开" },
-                { "condition": "ERROR", "target": "error_handler_pub", "description": "打开高清发布页失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_upload_video",
+                  "description": "高清发布页已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub",
+                  "description": "打开高清发布页失败"
+                }
               ],
               "next": "click_upload_video"
             },
@@ -1433,15 +1809,43 @@
                 "key": "buttons.btn_upload_video"
               },
               "steps": [
-                { "id": "resolve_selector_uv", "action": "resolve_selector", "description": "查找上传视频按钮" },
-                { "id": "mouse_move_uv", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_uv", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_uv", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_upload", "action": "check_navigation", "description": "验证上传对话框已打开" }
+                {
+                  "id": "resolve_selector_uv",
+                  "action": "resolve_selector",
+                  "description": "查找上传视频按钮"
+                },
+                {
+                  "id": "mouse_move_uv",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_uv",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_uv",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_upload",
+                  "action": "check_navigation",
+                  "description": "验证上传对话框已打开"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "click_publish_submit", "description": "上传对话框已打开" },
-                { "condition": "ERROR", "target": "error_handler_pub", "description": "打开上传对话框失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_publish_submit",
+                  "description": "上传对话框已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub",
+                  "description": "打开上传对话框失败"
+                }
               ],
               "next": "click_publish_submit"
             },
@@ -1453,15 +1857,43 @@
                 "key": "buttons.btn_publish_submit"
               },
               "steps": [
-                { "id": "resolve_selector_ps", "action": "resolve_selector", "description": "查找发布按钮" },
-                { "id": "mouse_move_ps", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_ps", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_ps", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_publish", "action": "check_navigation", "description": "验证发布成功" }
+                {
+                  "id": "resolve_selector_ps",
+                  "action": "resolve_selector",
+                  "description": "查找发布按钮"
+                },
+                {
+                  "id": "mouse_move_ps",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_ps",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_ps",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish",
+                  "action": "check_navigation",
+                  "description": "验证发布成功"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "done", "description": "发布成功" },
-                { "condition": "ERROR", "target": "error_handler_pub", "description": "发布失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "发布成功"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub",
+                  "description": "发布失败"
+                }
               ],
               "next": "done"
             },
@@ -1470,13 +1902,33 @@
               "action": "refresh_page",
               "description": "错误处理 — 刷新页面重试",
               "steps": [
-                { "id": "log_error_pub", "action": "check_navigation", "description": "记录错误日志" },
-                { "id": "refresh_pub", "action": "refresh_page", "description": "刷新页面" },
-                { "id": "wait_reload_pub", "action": "wait_for_response", "description": "等待页面重新加载" }
+                {
+                  "id": "log_error_pub",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_pub",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_pub",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
               ],
               "branches": [
-                { "condition": "RETRY", "target": "check_url", "description": "重试流程" },
-                { "condition": "ABORT", "target": "done", "description": "放弃并结束" }
+                {
+                  "condition": "RETRY",
+                  "target": "check_url",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
               ],
               "next": "check_url"
             },
@@ -1498,15 +1950,43 @@
                 "key": "menus.menu_comment_manage_new"
               },
               "steps": [
-                { "id": "resolve_selector_cm_r", "action": "resolve_selector", "description": "查找评论管理菜单" },
-                { "id": "mouse_move_cm_r", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_cm_r", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_cm_r", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_response_cm_r", "action": "check_navigation", "description": "验证页面响应" }
+                {
+                  "id": "resolve_selector_cm_r",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_r",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_r",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_r",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_r",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "click_select_works", "description": "评论管理已打开" },
-                { "condition": "ERROR", "target": "error_handler_reply", "description": "打开评论管理失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_select_works",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply",
+                  "description": "打开评论管理失败"
+                }
               ],
               "next": "click_select_works"
             },
@@ -1518,15 +1998,43 @@
                 "key": "buttons.btn_select_works"
               },
               "steps": [
-                { "id": "resolve_selector_sw_r", "action": "resolve_selector", "description": "查找选择作品按钮" },
-                { "id": "mouse_move_sw_r", "action": "mouse_move", "description": "鼠标移至目标元素" },
-                { "id": "wait_visible_sw_r", "action": "wait_for_element", "description": "等待元素可见" },
-                { "id": "cdp_click_sw_r", "action": "cdp_click", "description": "执行点击" },
-                { "id": "verify_drawer_r", "action": "check_navigation", "description": "验证抽屉已打开" }
+                {
+                  "id": "resolve_selector_sw_r",
+                  "action": "resolve_selector",
+                  "description": "查找选择作品按钮"
+                },
+                {
+                  "id": "mouse_move_sw_r",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_sw_r",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_sw_r",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_drawer_r",
+                  "action": "check_navigation",
+                  "description": "验证抽屉已打开"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "enable_interceptor", "description": "抽屉已打开" },
-                { "condition": "ERROR", "target": "error_handler_reply", "description": "打开抽屉失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "抽屉已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply",
+                  "description": "打开抽屉失败"
+                }
               ],
               "next": "enable_interceptor"
             },
@@ -1536,13 +2044,33 @@
               "description": "启用评论API拦截",
               "apiPatternKey": "comment_list",
               "steps": [
-                { "id": "resolve_api_pattern_r", "action": "resolve_selector", "description": "解析API拦截模式" },
-                { "id": "setup_interceptor_r", "action": "wait_for_response", "description": "设置网络请求拦截" },
-                { "id": "verify_interceptor_r", "action": "check_navigation", "description": "验证拦截器已启用" }
+                {
+                  "id": "resolve_api_pattern_r",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_r",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_r",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "scroll_load", "description": "拦截器已启用" },
-                { "condition": "ERROR", "target": "error_handler_reply", "description": "拦截器启用失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply",
+                  "description": "拦截器启用失败"
+                }
               ],
               "next": "scroll_load"
             },
@@ -1550,16 +2078,43 @@
               "id": "scroll_load",
               "action": "scroll_load",
               "description": "滚动加载评论",
-              "scrollConfig": { "maxScrolls": 30, "scrollDelta": 400 },
+              "scrollConfig": {
+                "maxScrolls": 30,
+                "scrollDelta": 400
+              },
               "steps": [
-                { "id": "find_scroll_container_r", "action": "resolve_selector", "description": "查找评论滚动容器" },
-                { "id": "scroll_down_r", "action": "scroll", "description": "向下滚动" },
-                { "id": "wait_comments_load", "action": "wait_for_response", "description": "等待评论加载" },
-                { "id": "check_has_more_r", "action": "check_navigation", "description": "检查是否还有更多评论" }
+                {
+                  "id": "find_scroll_container_r",
+                  "action": "resolve_selector",
+                  "description": "查找评论滚动容器"
+                },
+                {
+                  "id": "scroll_down_r",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_comments_load",
+                  "action": "wait_for_response",
+                  "description": "等待评论加载"
+                },
+                {
+                  "id": "check_has_more_r",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多评论"
+                }
               ],
               "branches": [
-                { "condition": "HAS_MORE", "target": "scroll_load", "description": "还有更多评论，继续滚动" },
-                { "condition": "NO_MORE", "target": "match_video_drawer", "description": "已加载全部评论" }
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多评论，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "match_video_drawer",
+                  "description": "已加载全部评论"
+                }
               ],
               "next": "match_video_drawer"
             },
@@ -1568,14 +2123,38 @@
               "action": "check_navigation",
               "description": "抽屉视频匹配（描述匹配/未匹配/滚动更多）",
               "steps": [
-                { "id": "get_video_descriptions", "action": "check_navigation", "description": "获取抽屉中视频描述列表" },
-                { "id": "match_description", "action": "check_navigation", "description": "匹配目标视频描述" },
-                { "id": "click_matched_video", "action": "cdp_click", "description": "点击匹配的视频" }
+                {
+                  "id": "get_video_descriptions",
+                  "action": "check_navigation",
+                  "description": "获取抽屉中视频描述列表"
+                },
+                {
+                  "id": "match_description",
+                  "action": "check_navigation",
+                  "description": "匹配目标视频描述"
+                },
+                {
+                  "id": "click_matched_video",
+                  "action": "cdp_click",
+                  "description": "点击匹配的视频"
+                }
               ],
               "branches": [
-                { "condition": "MATCHED", "target": "generate_reply", "description": "找到匹配视频" },
-                { "condition": "NOT_MATCHED", "target": "scroll_more_videos", "description": "未找到匹配视频" },
-                { "condition": "DRAWER_EMPTY", "target": "done", "description": "抽屉无视频" }
+                {
+                  "condition": "MATCHED",
+                  "target": "generate_reply",
+                  "description": "找到匹配视频"
+                },
+                {
+                  "condition": "NOT_MATCHED",
+                  "target": "scroll_more_videos",
+                  "description": "未找到匹配视频"
+                },
+                {
+                  "condition": "DRAWER_EMPTY",
+                  "target": "done",
+                  "description": "抽屉无视频"
+                }
               ],
               "next": "generate_reply"
             },
@@ -1583,15 +2162,38 @@
               "id": "scroll_more_videos",
               "action": "scroll_load",
               "description": "滚动加载更多视频（抽屉内）",
-              "scrollConfig": { "maxScrolls": 10, "scrollDelta": 400 },
+              "scrollConfig": {
+                "maxScrolls": 10,
+                "scrollDelta": 400
+              },
               "steps": [
-                { "id": "scroll_drawer", "action": "scroll", "description": "在抽屉内向下滚动" },
-                { "id": "wait_videos_load", "action": "wait_for_response", "description": "等待视频加载" },
-                { "id": "check_more_videos", "action": "check_navigation", "description": "检查是否还有更多视频" }
+                {
+                  "id": "scroll_drawer",
+                  "action": "scroll",
+                  "description": "在抽屉内向下滚动"
+                },
+                {
+                  "id": "wait_videos_load",
+                  "action": "wait_for_response",
+                  "description": "等待视频加载"
+                },
+                {
+                  "id": "check_more_videos",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多视频"
+                }
               ],
               "branches": [
-                { "condition": "HAS_MORE", "target": "match_video_drawer", "description": "还有更多视频，重新匹配" },
-                { "condition": "NO_MORE", "target": "done", "description": "无更多视频，结束" }
+                {
+                  "condition": "HAS_MORE",
+                  "target": "match_video_drawer",
+                  "description": "还有更多视频，重新匹配"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "done",
+                  "description": "无更多视频，结束"
+                }
               ],
               "next": "match_video_drawer"
             },
@@ -1600,15 +2202,43 @@
               "action": "check_navigation",
               "description": "AI回复生成（成功/失败）",
               "steps": [
-                { "id": "get_comments", "action": "check_navigation", "description": "获取评论列表" },
-                { "id": "call_ai_api", "action": "check_navigation", "description": "调用AI生成回复" },
-                { "id": "parse_ai_response", "action": "check_navigation", "description": "解析AI回复内容" },
-                { "id": "fill_reply_input", "action": "cdp_click", "description": "填写回复内容" },
-                { "id": "submit_reply", "action": "cdp_click", "description": "提交回复" }
+                {
+                  "id": "get_comments",
+                  "action": "check_navigation",
+                  "description": "获取评论列表"
+                },
+                {
+                  "id": "call_ai_api",
+                  "action": "check_navigation",
+                  "description": "调用AI生成回复"
+                },
+                {
+                  "id": "parse_ai_response",
+                  "action": "check_navigation",
+                  "description": "解析AI回复内容"
+                },
+                {
+                  "id": "fill_reply_input",
+                  "action": "cdp_click",
+                  "description": "填写回复内容"
+                },
+                {
+                  "id": "submit_reply",
+                  "action": "cdp_click",
+                  "description": "提交回复"
+                }
               ],
               "branches": [
-                { "condition": "SUCCESS", "target": "done", "description": "回复成功" },
-                { "condition": "FAILED", "target": "error_handler_reply", "description": "回复失败" }
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "回复成功"
+                },
+                {
+                  "condition": "FAILED",
+                  "target": "error_handler_reply",
+                  "description": "回复失败"
+                }
               ],
               "next": "done"
             },
@@ -1617,13 +2247,33 @@
               "action": "refresh_page",
               "description": "错误处理 — 刷新页面重试",
               "steps": [
-                { "id": "log_error_r", "action": "check_navigation", "description": "记录错误日志" },
-                { "id": "refresh_r", "action": "refresh_page", "description": "刷新页面" },
-                { "id": "wait_reload_r", "action": "wait_for_response", "description": "等待页面重新加载" }
+                {
+                  "id": "log_error_r",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_r",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_r",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
               ],
               "branches": [
-                { "condition": "RETRY", "target": "click_comment_manage", "description": "重试流程" },
-                { "condition": "ABORT", "target": "done", "description": "放弃并结束" }
+                {
+                  "condition": "RETRY",
+                  "target": "click_comment_manage",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
               ],
               "next": "click_comment_manage"
             },
@@ -1663,9 +2313,21 @@
           "label": "创作者中心",
           "loginUrl": "https://creator.douyin.com/creator-micro/home",
           "closeOnLoginSuccess": false,
-          "loggedOutIndicators": [".login-container", "[class*=\"login\"]", "img[src*=\"qrcode\"]"],
-          "loggedInIndicators": ["nav[class*=\"nav\"]", "[class*=\"sidebar\"]", ".creator-container"],
-          "qrSelectors": ["img[aria-label=\"二维码\"]", "img[src*=\"qrcode\"]", "canvas"]
+          "loggedOutIndicators": [
+            ".login-container",
+            "[class*=\"login\"]",
+            "img[src*=\"qrcode\"]"
+          ],
+          "loggedInIndicators": [
+            "nav[class*=\"nav\"]",
+            "[class*=\"sidebar\"]",
+            ".creator-container"
+          ],
+          "qrSelectors": [
+            "img[aria-label=\"二维码\"]",
+            "img[src*=\"qrcode\"]",
+            "canvas"
+          ]
         }
       }
     },
@@ -2644,7 +3306,254 @@
             {
               "id": "check_url",
               "action": "check_url",
-              "description": "检查是否在创作者中心"
+              "description": "检查是否在创作者中心",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_ks",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_ks",
+                  "action": "check_navigation",
+                  "description": "匹配创作者中心URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "login_check",
+                  "description": "已在创作者中心"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_ks",
+                  "description": "需要导航到创作者中心"
+                }
+              ],
+              "next": "login_check"
+            },
+            {
+              "id": "navigate_home_ks",
+              "action": "navigate",
+              "description": "导航到创作者中心",
+              "steps": [
+                {
+                  "id": "resolve_url_ks",
+                  "action": "resolve_selector",
+                  "description": "解析创作者中心URL"
+                },
+                {
+                  "id": "goto_url_ks",
+                  "action": "navigate",
+                  "description": "导航到目标URL"
+                },
+                {
+                  "id": "wait_load_ks",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "login_check",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_ks",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "login_check"
+            },
+            {
+              "id": "login_check",
+              "action": "check_login",
+              "description": "检测快手创作者中心登录态（引用 loginFlows.creator）",
+              "steps": [
+                {
+                  "id": "get_login_config_ks",
+                  "action": "resolve_selector",
+                  "description": "加载 loginFlows.creator 配置"
+                },
+                {
+                  "id": "check_logged_out_ks",
+                  "action": "check_element_exists",
+                  "description": "检测未登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedOutIndicators"
+                  }
+                },
+                {
+                  "id": "check_logged_in_ks",
+                  "action": "check_element_exists",
+                  "description": "检测已登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedInIndicators"
+                  }
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_OK",
+                  "target": "click_work_manage",
+                  "description": "已登录"
+                },
+                {
+                  "condition": "LOGIN_REQUIRED",
+                  "target": "send_qr_ks",
+                  "description": "未登录，发送QR码"
+                },
+                {
+                  "condition": "LOGIN_UNKNOWN",
+                  "target": "click_work_manage",
+                  "description": "状态未知，尝试继续"
+                }
+              ],
+              "next": "click_work_manage"
+            },
+            {
+              "id": "send_qr_ks",
+              "action": "check_login",
+              "description": "截取QR码并发送企微告警（closeOnLoginSuccess: false）",
+              "steps": [
+                {
+                  "id": "find_qr_element_ks",
+                  "action": "resolve_selector",
+                  "description": "查找QR码元素",
+                  "selector": {
+                    "key": "loginFlows.creator.qrSelectors"
+                  }
+                },
+                {
+                  "id": "capture_qr_ks",
+                  "action": "cdp_click",
+                  "description": "截取QR码（带padding正方形裁剪）"
+                },
+                {
+                  "id": "send_alert_ks",
+                  "action": "check_navigation",
+                  "description": "发送企微告警"
+                },
+                {
+                  "id": "mark_tab_ks",
+                  "action": "check_navigation",
+                  "description": "标记标签页（localStorage）"
+                },
+                {
+                  "id": "set_cooldown_ks",
+                  "action": "check_navigation",
+                  "description": "设置 per-flowId 冷却状态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "QR_SENT",
+                  "target": "login_probe_ks",
+                  "description": "QR已发送，进入probe循环"
+                }
+              ],
+              "next": "login_probe_ks"
+            },
+            {
+              "id": "login_probe_ks",
+              "action": "check_login",
+              "description": "登录态探测（定时检查是否已扫码）",
+              "steps": [
+                {
+                  "id": "find_login_tab_ks",
+                  "action": "resolve_selector",
+                  "description": "查找标记的登录标签页"
+                },
+                {
+                  "id": "check_state_ks",
+                  "action": "check_login",
+                  "description": "检测登录态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_SUCCESS",
+                  "target": "login_recovery_ks",
+                  "description": "登录成功，清理恢复"
+                },
+                {
+                  "condition": "LOGIN_FAIL",
+                  "target": "login_cooldown_ks",
+                  "description": "仍未登录，递增冷却"
+                },
+                {
+                  "condition": "TAB_CLOSED",
+                  "target": "done",
+                  "description": "标签页已关闭，停止probe"
+                }
+              ],
+              "next": "login_cooldown_ks"
+            },
+            {
+              "id": "login_cooldown_ks",
+              "action": "wait_for_response",
+              "description": "冷却等待（30/60/120/240分钟递增）",
+              "steps": [
+                {
+                  "id": "calc_cooldown_ks",
+                  "action": "check_navigation",
+                  "description": "计算下次probe时间"
+                },
+                {
+                  "id": "wait_ks",
+                  "action": "wait_for_response",
+                  "description": "等待冷却时间"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "COOLDOWN_DONE",
+                  "target": "login_probe_ks",
+                  "description": "冷却结束，重新probe"
+                }
+              ],
+              "next": "login_probe_ks"
+            },
+            {
+              "id": "login_recovery_ks",
+              "action": "check_login",
+              "description": "登录恢复 — 清理标记 + 恢复监控（closeOnLoginSuccess: false）",
+              "steps": [
+                {
+                  "id": "close_or_unmark_ks",
+                  "action": "check_navigation",
+                  "description": "按配置关闭或保留标签页（closeOnLoginSuccess: false）"
+                },
+                {
+                  "id": "clear_redis_ks",
+                  "action": "check_navigation",
+                  "description": "清除 per-flowId Redis 状态"
+                },
+                {
+                  "id": "update_db_ks",
+                  "action": "check_navigation",
+                  "description": "更新用户状态为 active"
+                },
+                {
+                  "id": "resume_monitor_ks",
+                  "action": "check_navigation",
+                  "description": "恢复监控调度"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RECOVERY_DONE",
+                  "target": "done",
+                  "description": "恢复完成"
+                }
+              ],
+              "next": "done"
             },
             {
               "id": "click_work_manage",
@@ -2652,23 +3561,157 @@
               "description": "点击「内容管理」→「作品管理」",
               "selector": {
                 "key": "menus.menu_work_manage"
-              }
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_wm_ks",
+                  "action": "resolve_selector",
+                  "description": "查找菜单元素"
+                },
+                {
+                  "id": "mouse_move_wm_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_wm_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_wm_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_wm_ks",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "菜单已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_ks",
+                  "description": "点击失败"
+                }
+              ],
+              "next": "enable_interceptor"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
               "description": "启用视频列表API拦截",
-              "apiPatternKey": "video_list"
+              "apiPatternKey": "video_list.work_list",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_ks",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_ks",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_ks",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_ks",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载更多视频"
+              "description": "滚动加载更多视频",
+              "scrollConfig": {
+                "maxScrolls": 50,
+                "scrollDelta": 800
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_ks",
+                  "action": "resolve_selector",
+                  "description": "查找滚动容器"
+                },
+                {
+                  "id": "scroll_down_ks",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_content_load_ks",
+                  "action": "wait_for_response",
+                  "description": "等待内容加载"
+                },
+                {
+                  "id": "check_has_more_ks",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多内容"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多内容，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "check_quantity",
+                  "description": "已加载全部内容"
+                }
+              ],
+              "next": "check_quantity"
             },
             {
               "id": "check_quantity",
               "action": "check_quantity",
-              "description": "对比数据库评论数"
+              "description": "对比数据库评论数",
+              "steps": [
+                {
+                  "id": "get_video_count_ks",
+                  "action": "check_navigation",
+                  "description": "获取当前视频数量"
+                },
+                {
+                  "id": "compare_with_db_ks",
+                  "action": "check_navigation",
+                  "description": "与数据库记录对比"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NEW_VIDEOS",
+                  "target": "click_comment_manage",
+                  "description": "有新视频需要处理"
+                },
+                {
+                  "condition": "NO_NEW",
+                  "target": "done",
+                  "description": "无新视频"
+                }
+              ],
+              "next": "click_comment_manage"
             },
             {
               "id": "click_comment_manage",
@@ -2676,7 +3719,82 @@
               "description": "点击「互动管理」→「评论管理」",
               "selector": {
                 "key": "menus.menu_comment_manage"
-              }
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_cm_ks",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_ks",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_ks",
+                  "description": "打开评论管理失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_ks",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_ks",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_ks",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_ks",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url"
             },
             {
               "id": "done",
@@ -2689,14 +3807,251 @@
           "label": "视频发布流程",
           "steps": [
             {
-              "id": "click_work_manage",
-              "action": "click_menu",
-              "description": "点击「内容管理」→「作品管理」"
+              "id": "check_url_pub_ks",
+              "action": "check_url",
+              "description": "检查是否在发布页",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_pub_ks",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_pub_ks",
+                  "action": "check_navigation",
+                  "description": "匹配发布页URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "click_work_manage_pub_ks",
+                  "description": "已在发布页"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_pub_ks",
+                  "description": "需要导航到发布页"
+                }
+              ],
+              "next": "click_work_manage_pub_ks"
             },
             {
-              "id": "click_upload_video",
+              "id": "navigate_home_pub_ks",
+              "action": "navigate",
+              "description": "导航到发布页",
+              "steps": [
+                {
+                  "id": "resolve_url_pub_ks",
+                  "action": "resolve_selector",
+                  "description": "解析发布页URL"
+                },
+                {
+                  "id": "goto_url_pub_ks",
+                  "action": "navigate",
+                  "description": "导航到发布页"
+                },
+                {
+                  "id": "wait_load_pub_ks",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "click_work_manage_pub_ks",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_pub_ks",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "click_work_manage_pub_ks"
+            },
+            {
+              "id": "click_work_manage_pub_ks",
+              "action": "click_menu",
+              "description": "点击「内容管理」→「作品管理」",
+              "selector": {
+                "key": "menus.menu_work_manage"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_wmp_ks",
+                  "action": "resolve_selector",
+                  "description": "查找作品管理菜单"
+                },
+                {
+                  "id": "mouse_move_wmp_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_wmp_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_wmp_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_wmp_ks",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_upload_video_ks",
+                  "description": "作品管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_ks",
+                  "description": "打开作品管理失败"
+                }
+              ],
+              "next": "click_upload_video_ks"
+            },
+            {
+              "id": "click_upload_video_ks",
               "action": "click_button",
-              "description": "上传视频"
+              "description": "点击「上传视频」",
+              "selector": {
+                "key": "buttons.btn_上传视频"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_uv_ks",
+                  "action": "resolve_selector",
+                  "description": "查找上传视频按钮"
+                },
+                {
+                  "id": "mouse_move_uv_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_uv_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_uv_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_upload_ks",
+                  "action": "check_navigation",
+                  "description": "验证上传对话框已打开"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_publish_submit_ks",
+                  "description": "上传对话框已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_ks",
+                  "description": "打开上传对话框失败"
+                }
+              ],
+              "next": "click_publish_submit_ks"
+            },
+            {
+              "id": "click_publish_submit_ks",
+              "action": "click_button",
+              "description": "点击「发布」",
+              "selector": {
+                "key": "buttons.btn_publish_submit"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_ps_ks",
+                  "action": "resolve_selector",
+                  "description": "查找发布按钮"
+                },
+                {
+                  "id": "mouse_move_ps_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_ps_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_ps_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish_ks",
+                  "action": "check_navigation",
+                  "description": "验证发布成功"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "发布成功"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_ks",
+                  "description": "发布失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_pub_ks",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_pub_ks",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_pub_ks",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_pub_ks",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url_pub_ks",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url_pub_ks"
             },
             {
               "id": "done",
@@ -2714,17 +4069,207 @@
               "description": "点击「互动管理」→「评论管理」",
               "selector": {
                 "key": "menus.menu_comment_manage"
-              }
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_cm_r_ks",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_r_ks",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_r_ks",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_r_ks",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_r_ks",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_ks",
+                  "description": "打开评论管理失败"
+                }
+              ],
+              "next": "enable_interceptor"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
-              "description": "启用评论API拦截"
+              "description": "启用评论API拦截",
+              "apiPatternKey": "comment_list",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_r_ks",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_r_ks",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_r_ks",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_ks",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载评论"
+              "description": "滚动加载评论",
+              "scrollConfig": {
+                "maxScrolls": 30,
+                "scrollDelta": 400
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_r_ks",
+                  "action": "resolve_selector",
+                  "description": "查找评论滚动容器"
+                },
+                {
+                  "id": "scroll_down_r_ks",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_comments_load_ks",
+                  "action": "wait_for_response",
+                  "description": "等待评论加载"
+                },
+                {
+                  "id": "check_has_more_r_ks",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多评论"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多评论，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "generate_reply_ks",
+                  "description": "已加载全部评论"
+                }
+              ],
+              "next": "generate_reply_ks"
+            },
+            {
+              "id": "generate_reply_ks",
+              "action": "check_navigation",
+              "description": "AI回复生成（成功/失败）",
+              "steps": [
+                {
+                  "id": "get_comments_ks",
+                  "action": "check_navigation",
+                  "description": "获取评论列表"
+                },
+                {
+                  "id": "call_ai_api_ks",
+                  "action": "check_navigation",
+                  "description": "调用AI生成回复"
+                },
+                {
+                  "id": "parse_ai_response_ks",
+                  "action": "check_navigation",
+                  "description": "解析AI回复内容"
+                },
+                {
+                  "id": "fill_reply_input_ks",
+                  "action": "cdp_click",
+                  "description": "填写回复内容"
+                },
+                {
+                  "id": "submit_reply_ks",
+                  "action": "cdp_click",
+                  "description": "提交回复"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "回复成功"
+                },
+                {
+                  "condition": "FAILED",
+                  "target": "error_handler_reply_ks",
+                  "description": "回复失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_reply_ks",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_r_ks",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_r_ks",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_r_ks",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "click_comment_manage",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "click_comment_manage"
             },
             {
               "id": "done",
@@ -2757,9 +4302,22 @@
           "label": "创作者中心",
           "loginUrl": "https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api",
           "closeOnLoginSuccess": false,
-          "loggedOutIndicators": [".login-qrcode", ".qrcode-img", "[class*=\"login\"]"],
-          "loggedInIndicators": [".el-menu", ".sidebar", "[class*=\"sidebar\"]", "[class*=\"menu\"]"],
-          "qrSelectors": ["img[alt=\"qrcode\"]", "img[src*=\"data:image/\"]", "canvas"]
+          "loggedOutIndicators": [
+            ".login-qrcode",
+            ".qrcode-img",
+            "[class*=\"login\"]"
+          ],
+          "loggedInIndicators": [
+            ".el-menu",
+            ".sidebar",
+            "[class*=\"sidebar\"]",
+            "[class*=\"menu\"]"
+          ],
+          "qrSelectors": [
+            "img[alt=\"qrcode\"]",
+            "img[src*=\"data:image/\"]",
+            "canvas"
+          ]
         }
       }
     },
@@ -3255,15 +4813,23 @@
           "description": "小红书主站登录二维码"
         },
         "region_note_card_by_id": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".note-card[data-impression*=\"{noteId}\"]",
-          "fallbacks": [".note-card[data-impression*=\"{noteId}\"] .note-card__cover"],
+          "fallbacks": [
+            ".note-card[data-impression*=\"{noteId}\"] .note-card__cover"
+          ],
           "description": "笔记管理页面笔记卡片，通过 data-impression 属性中的 noteId 子串匹配"
         },
         "region_note_card_cover": {
-          "purposes": ["monitor"],
+          "purposes": [
+            "monitor"
+          ],
           "primary": ".note-card__cover .note-card__media",
-          "fallbacks": [".note-card__cover"],
+          "fallbacks": [
+            ".note-card__cover"
+          ],
           "description": "笔记卡片缩略图可点击区域"
         }
       },
@@ -3351,22 +4917,399 @@
             {
               "id": "check_url",
               "action": "check_url",
-              "description": "检查是否在创作者中心"
+              "description": "检查是否在创作者中心",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_xhs",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_xhs",
+                  "action": "check_navigation",
+                  "description": "匹配创作者中心URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "login_check_mainsite",
+                  "description": "已在创作者中心"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_xhs",
+                  "description": "需要导航到创作者中心"
+                }
+              ],
+              "next": "login_check_mainsite"
+            },
+            {
+              "id": "navigate_home_xhs",
+              "action": "navigate",
+              "description": "导航到创作者中心",
+              "steps": [
+                {
+                  "id": "resolve_url_xhs",
+                  "action": "resolve_selector",
+                  "description": "解析创作者中心URL"
+                },
+                {
+                  "id": "goto_url_xhs",
+                  "action": "navigate",
+                  "description": "导航到目标URL"
+                },
+                {
+                  "id": "wait_load_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "login_check_mainsite",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_xhs",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "login_check_mainsite"
+            },
+            {
+              "id": "login_check_mainsite",
+              "action": "check_login",
+              "description": "检测小红书主站登录态（引用 loginFlows.mainsite）",
+              "steps": [
+                {
+                  "id": "get_mainsite_config",
+                  "action": "resolve_selector",
+                  "description": "加载 loginFlows.mainsite 配置"
+                },
+                {
+                  "id": "check_logged_out_mainsite",
+                  "action": "check_element_exists",
+                  "description": "检测 #login-btn / .login-modal",
+                  "selector": {
+                    "key": "loginFlows.mainsite.loggedOutIndicators"
+                  }
+                },
+                {
+                  "id": "check_logged_in_mainsite",
+                  "action": "check_element_exists",
+                  "description": "检测 .user-avatar",
+                  "selector": {
+                    "key": "loginFlows.mainsite.loggedInIndicators"
+                  }
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_OK",
+                  "target": "enable_interceptor",
+                  "description": "主站已登录"
+                },
+                {
+                  "condition": "LOGIN_REQUIRED",
+                  "target": "send_qr_mainsite",
+                  "description": "主站未登录"
+                },
+                {
+                  "condition": "LOGIN_UNKNOWN",
+                  "target": "enable_interceptor",
+                  "description": "状态未知，尝试继续"
+                }
+              ],
+              "next": "enable_interceptor"
+            },
+            {
+              "id": "send_qr_mainsite",
+              "action": "check_login",
+              "description": "截取主站QR码并发送企微告警（closeOnLoginSuccess: true）",
+              "steps": [
+                {
+                  "id": "find_qr_mainsite",
+                  "action": "resolve_selector",
+                  "description": "查找主站QR码元素",
+                  "selector": {
+                    "key": "loginFlows.mainsite.qrSelectors"
+                  }
+                },
+                {
+                  "id": "capture_qr_mainsite",
+                  "action": "cdp_click",
+                  "description": "截取QR码（带padding正方形裁剪）"
+                },
+                {
+                  "id": "send_alert_mainsite",
+                  "action": "check_navigation",
+                  "description": "发送企微告警"
+                },
+                {
+                  "id": "mark_tab_mainsite",
+                  "action": "check_navigation",
+                  "description": "标记标签页（localStorage）"
+                },
+                {
+                  "id": "set_cooldown_mainsite",
+                  "action": "check_navigation",
+                  "description": "设置 per-flowId 冷却状态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "QR_SENT",
+                  "target": "login_probe_mainsite",
+                  "description": "QR已发送，进入probe循环"
+                }
+              ],
+              "next": "login_probe_mainsite"
+            },
+            {
+              "id": "login_probe_mainsite",
+              "action": "check_login",
+              "description": "登录态探测（定时检查是否已扫码）",
+              "steps": [
+                {
+                  "id": "find_login_tab_mainsite",
+                  "action": "resolve_selector",
+                  "description": "查找标记的登录标签页"
+                },
+                {
+                  "id": "check_state_mainsite",
+                  "action": "check_login",
+                  "description": "检测登录态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_SUCCESS",
+                  "target": "login_recovery_mainsite",
+                  "description": "登录成功，清理恢复"
+                },
+                {
+                  "condition": "LOGIN_FAIL",
+                  "target": "login_cooldown_mainsite",
+                  "description": "仍未登录，递增冷却"
+                },
+                {
+                  "condition": "TAB_CLOSED",
+                  "target": "done",
+                  "description": "标签页已关闭，停止probe"
+                }
+              ],
+              "next": "login_cooldown_mainsite"
+            },
+            {
+              "id": "login_cooldown_mainsite",
+              "action": "wait_for_response",
+              "description": "冷却等待（30/60/120/240分钟递增）",
+              "steps": [
+                {
+                  "id": "calc_cooldown_mainsite",
+                  "action": "check_navigation",
+                  "description": "计算下次probe时间"
+                },
+                {
+                  "id": "wait_mainsite",
+                  "action": "wait_for_response",
+                  "description": "等待冷却时间"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "COOLDOWN_DONE",
+                  "target": "login_probe_mainsite",
+                  "description": "冷却结束，重新probe"
+                }
+              ],
+              "next": "login_probe_mainsite"
+            },
+            {
+              "id": "login_recovery_mainsite",
+              "action": "check_login",
+              "description": "登录恢复 — 清理标记 + 恢复监控（closeOnLoginSuccess: true）",
+              "steps": [
+                {
+                  "id": "close_or_unmark_mainsite",
+                  "action": "check_navigation",
+                  "description": "按配置关闭或保留标签页（closeOnLoginSuccess: true）"
+                },
+                {
+                  "id": "clear_redis_mainsite",
+                  "action": "check_navigation",
+                  "description": "清除 per-flowId Redis 状态"
+                },
+                {
+                  "id": "update_db_mainsite",
+                  "action": "check_navigation",
+                  "description": "更新用户状态为 active"
+                },
+                {
+                  "id": "resume_monitor_mainsite",
+                  "action": "check_navigation",
+                  "description": "恢复监控调度"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RECOVERY_DONE",
+                  "target": "done",
+                  "description": "恢复完成"
+                }
+              ],
+              "next": "done"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
-              "description": "启用笔记列表API拦截"
+              "description": "启用笔记列表API拦截",
+              "apiPatternKey": "note_list",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_xhs",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_xhs",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_xhs",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_xhs",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载更多笔记"
+              "description": "滚动加载更多笔记",
+              "scrollConfig": {
+                "maxScrolls": 50,
+                "scrollDelta": 800
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找滚动容器"
+                },
+                {
+                  "id": "scroll_down_xhs",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_content_load_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待内容加载"
+                },
+                {
+                  "id": "check_has_more_xhs",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多内容"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多内容，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "check_quantity",
+                  "description": "已加载全部内容"
+                }
+              ],
+              "next": "check_quantity"
             },
             {
               "id": "check_quantity",
               "action": "check_quantity",
-              "description": "对比数据库评论数"
+              "description": "对比数据库评论数",
+              "steps": [
+                {
+                  "id": "get_video_count_xhs",
+                  "action": "check_navigation",
+                  "description": "获取当前笔记数量"
+                },
+                {
+                  "id": "compare_with_db_xhs",
+                  "action": "check_navigation",
+                  "description": "与数据库记录对比"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NEW_VIDEOS",
+                  "target": "done",
+                  "description": "有新笔记需要处理"
+                },
+                {
+                  "condition": "NO_NEW",
+                  "target": "done",
+                  "description": "无新笔记"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_xhs",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_xhs",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_xhs",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url"
             },
             {
               "id": "done",
@@ -3379,9 +5322,251 @@
           "label": "视频发布流程",
           "steps": [
             {
-              "id": "click_publish",
+              "id": "check_url_pub_xhs",
+              "action": "check_url",
+              "description": "检查是否在发布页",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_pub_xhs",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_pub_xhs",
+                  "action": "check_navigation",
+                  "description": "匹配发布页URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "click_publish_xhs",
+                  "description": "已在发布页"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_pub_xhs",
+                  "description": "需要导航到发布页"
+                }
+              ],
+              "next": "click_publish_xhs"
+            },
+            {
+              "id": "navigate_home_pub_xhs",
+              "action": "navigate",
+              "description": "导航到发布页",
+              "steps": [
+                {
+                  "id": "resolve_url_pub_xhs",
+                  "action": "resolve_selector",
+                  "description": "解析发布页URL"
+                },
+                {
+                  "id": "goto_url_pub_xhs",
+                  "action": "navigate",
+                  "description": "导航到发布页"
+                },
+                {
+                  "id": "wait_load_pub_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "click_publish_xhs",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_pub_xhs",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "click_publish_xhs"
+            },
+            {
+              "id": "click_publish_xhs",
               "action": "click_menu",
-              "description": "点击「发布笔记」"
+              "description": "点击「发布笔记」",
+              "selector": {
+                "key": "menus.menu_publish"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_pub_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找发布笔记按钮"
+                },
+                {
+                  "id": "mouse_move_pub_xhs",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_pub_xhs",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_pub_xhs",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish_page_xhs",
+                  "action": "check_navigation",
+                  "description": "验证发布页已打开"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_upload_video_xhs",
+                  "description": "发布页已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_xhs",
+                  "description": "打开发布页失败"
+                }
+              ],
+              "next": "click_upload_video_xhs"
+            },
+            {
+              "id": "click_upload_video_xhs",
+              "action": "click_button",
+              "description": "点击「上传视频」",
+              "selector": {
+                "key": "buttons.btn_upload_video"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_uv_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找上传视频按钮"
+                },
+                {
+                  "id": "mouse_move_uv_xhs",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_uv_xhs",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_uv_xhs",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_upload_xhs",
+                  "action": "check_navigation",
+                  "description": "验证上传对话框已打开"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_publish_submit_xhs",
+                  "description": "上传对话框已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_xhs",
+                  "description": "打开上传对话框失败"
+                }
+              ],
+              "next": "click_publish_submit_xhs"
+            },
+            {
+              "id": "click_publish_submit_xhs",
+              "action": "click_button",
+              "description": "点击「发布」",
+              "selector": {
+                "key": "buttons.btn_publish_submit"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_ps_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找发布按钮"
+                },
+                {
+                  "id": "mouse_move_ps_xhs",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_ps_xhs",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_ps_xhs",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish_xhs",
+                  "action": "check_navigation",
+                  "description": "验证发布成功"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "发布成功"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_xhs",
+                  "description": "发布失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_pub_xhs",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_pub_xhs",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_pub_xhs",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_pub_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url_pub_xhs",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url_pub_xhs"
             },
             {
               "id": "done",
@@ -3396,17 +5581,210 @@
             {
               "id": "click_comment_manage",
               "action": "click_menu",
-              "description": "点击「评论管理」"
+              "description": "点击「评论管理」",
+              "selector": {
+                "key": "menus.menu_note_manage"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_cm_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_xhs",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_xhs",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_xhs",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_xhs",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_xhs",
+                  "description": "打开评论管理失败"
+                }
+              ],
+              "next": "enable_interceptor"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
-              "description": "启用评论API拦截"
+              "description": "启用评论API拦截",
+              "apiPatternKey": "comment_page",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_r_xhs",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_r_xhs",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_r_xhs",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_xhs",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载评论"
+              "description": "滚动加载评论",
+              "scrollConfig": {
+                "maxScrolls": 30,
+                "scrollDelta": 400
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_r_xhs",
+                  "action": "resolve_selector",
+                  "description": "查找评论滚动容器"
+                },
+                {
+                  "id": "scroll_down_r_xhs",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_comments_load_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待评论加载"
+                },
+                {
+                  "id": "check_has_more_r_xhs",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多评论"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多评论，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "generate_reply_xhs",
+                  "description": "已加载全部评论"
+                }
+              ],
+              "next": "generate_reply_xhs"
+            },
+            {
+              "id": "generate_reply_xhs",
+              "action": "check_navigation",
+              "description": "AI回复生成（成功/失败）",
+              "steps": [
+                {
+                  "id": "get_comments_xhs",
+                  "action": "check_navigation",
+                  "description": "获取评论列表"
+                },
+                {
+                  "id": "call_ai_api_xhs",
+                  "action": "check_navigation",
+                  "description": "调用AI生成回复"
+                },
+                {
+                  "id": "parse_ai_response_xhs",
+                  "action": "check_navigation",
+                  "description": "解析AI回复内容"
+                },
+                {
+                  "id": "fill_reply_input_xhs",
+                  "action": "cdp_click",
+                  "description": "填写回复内容"
+                },
+                {
+                  "id": "submit_reply_xhs",
+                  "action": "cdp_click",
+                  "description": "提交回复"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "回复成功"
+                },
+                {
+                  "condition": "FAILED",
+                  "target": "error_handler_reply_xhs",
+                  "description": "回复失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_reply_xhs",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_r_xhs",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_r_xhs",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_r_xhs",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "click_comment_manage",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "click_comment_manage"
             },
             {
               "id": "done",
@@ -3439,18 +5817,42 @@
           "label": "主站",
           "loginUrl": "https://www.xiaohongshu.com/explore",
           "closeOnLoginSuccess": true,
-          "loggedOutIndicators": ["#login-btn", ".login-modal", "[class*=\"login-modal\"]"],
-          "loggedInIndicators": [".user-avatar", ".sidebar-menu", "[class*=\"user-avatar\"]"],
-          "qrSelectors": [".login-container .qrcode-img", ".qrcode-img", "img[alt*=\"二维码\"]"]
+          "loggedOutIndicators": [
+            "#login-btn",
+            ".login-modal",
+            "[class*=\"login-modal\"]"
+          ],
+          "loggedInIndicators": [
+            ".user-avatar",
+            ".sidebar-menu",
+            "[class*=\"user-avatar\"]"
+          ],
+          "qrSelectors": [
+            ".login-container .qrcode-img",
+            ".qrcode-img",
+            "img[alt*=\"二维码\"]"
+          ]
         },
         "creator": {
           "domain": "creator.xiaohongshu.com",
           "label": "创作者中心",
           "loginUrl": "https://creator.xiaohongshu.com/creator/home",
           "closeOnLoginSuccess": false,
-          "loggedOutIndicators": [".login-container", ".login-btn-container", "button.beer-login-btn", "button[class*=\"beer-login-btn\"]"],
-          "loggedInIndicators": [".creator-container", "[class*=\"creator-container\"]"],
-          "qrSelectors": [".qrcode-img", "img[alt*=\"二维码\"]", "img[src*=\"qr\"]"]
+          "loggedOutIndicators": [
+            ".login-container",
+            ".login-btn-container",
+            "button.beer-login-btn",
+            "button[class*=\"beer-login-btn\"]"
+          ],
+          "loggedInIndicators": [
+            ".creator-container",
+            "[class*=\"creator-container\"]"
+          ],
+          "qrSelectors": [
+            ".qrcode-img",
+            "img[alt*=\"二维码\"]",
+            "img[src*=\"qr\"]"
+          ]
         }
       }
     },
@@ -3796,32 +6198,525 @@
             {
               "id": "check_url",
               "action": "check_url",
-              "description": "检查是否在视频号助手"
+              "description": "检查是否在视频号助手",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_tx",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_tx",
+                  "action": "check_navigation",
+                  "description": "匹配视频号助手URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "login_check",
+                  "description": "已在视频号助手"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_tx",
+                  "description": "需要导航到视频号助手"
+                }
+              ],
+              "next": "login_check"
+            },
+            {
+              "id": "navigate_home_tx",
+              "action": "navigate",
+              "description": "导航到视频号助手",
+              "steps": [
+                {
+                  "id": "resolve_url_tx",
+                  "action": "resolve_selector",
+                  "description": "解析视频号助手URL"
+                },
+                {
+                  "id": "goto_url_tx",
+                  "action": "navigate",
+                  "description": "导航到目标URL"
+                },
+                {
+                  "id": "wait_load_tx",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "login_check",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_tx",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "login_check"
+            },
+            {
+              "id": "login_check",
+              "action": "check_login",
+              "description": "检测视频号登录态（引用 loginFlows.creator）",
+              "steps": [
+                {
+                  "id": "get_login_config_tx",
+                  "action": "resolve_selector",
+                  "description": "加载 loginFlows.creator 配置"
+                },
+                {
+                  "id": "check_logged_out_tx",
+                  "action": "check_element_exists",
+                  "description": "检测未登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedOutIndicators"
+                  }
+                },
+                {
+                  "id": "check_logged_in_tx",
+                  "action": "check_element_exists",
+                  "description": "检测已登录指示器",
+                  "selector": {
+                    "key": "loginFlows.creator.loggedInIndicators"
+                  }
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_OK",
+                  "target": "click_work_manage",
+                  "description": "已登录"
+                },
+                {
+                  "condition": "LOGIN_EXPIRED",
+                  "target": "send_qr_tx",
+                  "description": "登录失效（session_expired/login_redirect）"
+                },
+                {
+                  "condition": "RISK_CONTROL",
+                  "target": "risk_cooldown_tx",
+                  "description": "临时风控（自动恢复）"
+                },
+                {
+                  "condition": "LOGIN_UNKNOWN",
+                  "target": "click_work_manage",
+                  "description": "状态未知，尝试继续"
+                }
+              ],
+              "next": "click_work_manage"
+            },
+            {
+              "id": "send_qr_tx",
+              "action": "check_login",
+              "description": "截取QR码并发送企微告警（closeOnLoginSuccess: false）",
+              "steps": [
+                {
+                  "id": "find_qr_element_tx",
+                  "action": "resolve_selector",
+                  "description": "查找QR码元素",
+                  "selector": {
+                    "key": "loginFlows.creator.qrSelectors"
+                  }
+                },
+                {
+                  "id": "capture_qr_tx",
+                  "action": "cdp_click",
+                  "description": "截取QR码（带padding正方形裁剪）"
+                },
+                {
+                  "id": "send_alert_tx",
+                  "action": "check_navigation",
+                  "description": "发送企微告警"
+                },
+                {
+                  "id": "mark_tab_tx",
+                  "action": "check_navigation",
+                  "description": "标记标签页（localStorage）"
+                },
+                {
+                  "id": "set_cooldown_tx",
+                  "action": "check_navigation",
+                  "description": "设置 per-flowId 冷却状态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "QR_SENT",
+                  "target": "login_probe_tx",
+                  "description": "QR已发送，进入probe循环"
+                }
+              ],
+              "next": "login_probe_tx"
+            },
+            {
+              "id": "login_probe_tx",
+              "action": "check_login",
+              "description": "登录态探测（定时检查是否已扫码）",
+              "steps": [
+                {
+                  "id": "find_login_tab_tx",
+                  "action": "resolve_selector",
+                  "description": "查找标记的登录标签页"
+                },
+                {
+                  "id": "check_state_tx",
+                  "action": "check_login",
+                  "description": "检测登录态"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "LOGIN_SUCCESS",
+                  "target": "login_recovery_tx",
+                  "description": "登录成功，清理恢复"
+                },
+                {
+                  "condition": "LOGIN_FAIL",
+                  "target": "login_cooldown_tx",
+                  "description": "仍未登录，递增冷却"
+                },
+                {
+                  "condition": "TAB_CLOSED",
+                  "target": "done",
+                  "description": "标签页已关闭，停止probe"
+                }
+              ],
+              "next": "login_cooldown_tx"
+            },
+            {
+              "id": "login_cooldown_tx",
+              "action": "wait_for_response",
+              "description": "冷却等待（30/60/120/240分钟递增）",
+              "steps": [
+                {
+                  "id": "calc_cooldown_tx",
+                  "action": "check_navigation",
+                  "description": "计算下次probe时间"
+                },
+                {
+                  "id": "wait_tx",
+                  "action": "wait_for_response",
+                  "description": "等待冷却时间"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "COOLDOWN_DONE",
+                  "target": "login_probe_tx",
+                  "description": "冷却结束，重新probe"
+                }
+              ],
+              "next": "login_probe_tx"
+            },
+            {
+              "id": "login_recovery_tx",
+              "action": "check_login",
+              "description": "登录恢复 — 清理标记 + 恢复监控（closeOnLoginSuccess: false）",
+              "steps": [
+                {
+                  "id": "close_or_unmark_tx",
+                  "action": "check_navigation",
+                  "description": "按配置关闭或保留标签页（closeOnLoginSuccess: false）"
+                },
+                {
+                  "id": "clear_redis_tx",
+                  "action": "check_navigation",
+                  "description": "清除 per-flowId Redis 状态"
+                },
+                {
+                  "id": "update_db_tx",
+                  "action": "check_navigation",
+                  "description": "更新用户状态为 active"
+                },
+                {
+                  "id": "resume_monitor_tx",
+                  "action": "check_navigation",
+                  "description": "恢复监控调度"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RECOVERY_DONE",
+                  "target": "done",
+                  "description": "恢复完成"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "risk_cooldown_tx",
+              "action": "wait_for_response",
+              "description": "临时风控冷却（短时间自动恢复）",
+              "steps": [
+                {
+                  "id": "log_risk_tx",
+                  "action": "check_navigation",
+                  "description": "记录风控日志"
+                },
+                {
+                  "id": "wait_risk_tx",
+                  "action": "wait_for_response",
+                  "description": "等待风控冷却（5分钟）"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "COOLDOWN_DONE",
+                  "target": "login_check",
+                  "description": "冷却结束，重新检测登录态"
+                }
+              ],
+              "next": "login_check"
             },
             {
               "id": "click_work_manage",
               "action": "click_menu",
-              "description": "点击「内容管理」→「作品管理」"
+              "description": "点击「内容管理」→「视频」",
+              "selector": {
+                "key": "menus.menu_content_video"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_wm_tx",
+                  "action": "resolve_selector",
+                  "description": "查找内容管理菜单"
+                },
+                {
+                  "id": "mouse_move_wm_tx",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_wm_tx",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_wm_tx",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_wm_tx",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "菜单已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_tx",
+                  "description": "点击失败"
+                }
+              ],
+              "next": "enable_interceptor"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
-              "description": "启用视频列表API拦截"
+              "description": "启用视频列表API拦截",
+              "apiPatternKey": "post_list",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_tx",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_tx",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_tx",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_tx",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载更多视频"
+              "description": "滚动加载更多视频",
+              "scrollConfig": {
+                "maxScrolls": 50,
+                "scrollDelta": 800
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_tx",
+                  "action": "resolve_selector",
+                  "description": "查找滚动容器"
+                },
+                {
+                  "id": "scroll_down_tx",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_content_load_tx",
+                  "action": "wait_for_response",
+                  "description": "等待内容加载"
+                },
+                {
+                  "id": "check_has_more_tx",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多内容"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多内容，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "check_quantity",
+                  "description": "已加载全部内容"
+                }
+              ],
+              "next": "check_quantity"
             },
             {
               "id": "check_quantity",
               "action": "check_quantity",
-              "description": "对比数据库评论数"
+              "description": "对比数据库评论数",
+              "steps": [
+                {
+                  "id": "get_video_count_tx",
+                  "action": "check_navigation",
+                  "description": "获取当前视频数量"
+                },
+                {
+                  "id": "compare_with_db_tx",
+                  "action": "check_navigation",
+                  "description": "与数据库记录对比"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NEW_VIDEOS",
+                  "target": "click_comment_manage",
+                  "description": "有新视频需要处理"
+                },
+                {
+                  "condition": "NO_NEW",
+                  "target": "done",
+                  "description": "无新视频"
+                }
+              ],
+              "next": "click_comment_manage"
             },
             {
               "id": "click_comment_manage",
               "action": "click_menu",
-              "description": "点击「互动管理」→「评论管理」"
+              "description": "点击「互动管理」→「评论」",
+              "selector": {
+                "key": "menus.menu_interact_comment"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_cm_tx",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_tx",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_tx",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_tx",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_tx",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_tx",
+                  "description": "打开评论管理失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_tx",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_tx",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_tx",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_tx",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url"
             },
             {
               "id": "done",
@@ -3834,9 +6729,203 @@
           "label": "视频发布流程",
           "steps": [
             {
-              "id": "click_publish_video",
-              "action": "click_menu",
-              "description": "点击「发布视频」"
+              "id": "check_url_pub_tx",
+              "action": "check_url",
+              "description": "检查是否在发布页",
+              "selector": {
+                "key": "nav.to-creator"
+              },
+              "steps": [
+                {
+                  "id": "get_current_url_pub_tx",
+                  "action": "check_url",
+                  "description": "获取当前页面URL"
+                },
+                {
+                  "id": "match_url_pub_tx",
+                  "action": "check_navigation",
+                  "description": "匹配发布页URL"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "URL_OK",
+                  "target": "click_publish_video_tx",
+                  "description": "已在发布页"
+                },
+                {
+                  "condition": "URL_FAIL",
+                  "target": "navigate_home_pub_tx",
+                  "description": "需要导航到发布页"
+                }
+              ],
+              "next": "click_publish_video_tx"
+            },
+            {
+              "id": "navigate_home_pub_tx",
+              "action": "navigate",
+              "description": "导航到发布页",
+              "steps": [
+                {
+                  "id": "resolve_url_pub_tx",
+                  "action": "resolve_selector",
+                  "description": "解析发布页URL"
+                },
+                {
+                  "id": "goto_url_pub_tx",
+                  "action": "navigate",
+                  "description": "导航到发布页"
+                },
+                {
+                  "id": "wait_load_pub_tx",
+                  "action": "wait_for_response",
+                  "description": "等待页面加载完成"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "NAV_OK",
+                  "target": "click_publish_video_tx",
+                  "description": "导航成功"
+                },
+                {
+                  "condition": "NAV_FAIL",
+                  "target": "error_handler_pub_tx",
+                  "description": "导航失败"
+                }
+              ],
+              "next": "click_publish_video_tx"
+            },
+            {
+              "id": "click_publish_video_tx",
+              "action": "click_button",
+              "description": "点击「发表视频」",
+              "selector": {
+                "key": "buttons.btn_publish_video"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_pv_tx",
+                  "action": "resolve_selector",
+                  "description": "查找发表视频按钮"
+                },
+                {
+                  "id": "mouse_move_pv_tx",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_pv_tx",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_pv_tx",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish_form_tx",
+                  "action": "check_navigation",
+                  "description": "验证发布表单已打开"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "click_publish_submit_tx",
+                  "description": "发布表单已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_tx",
+                  "description": "打开发布表单失败"
+                }
+              ],
+              "next": "click_publish_submit_tx"
+            },
+            {
+              "id": "click_publish_submit_tx",
+              "action": "click_button",
+              "description": "点击「发表」",
+              "selector": {
+                "key": "buttons.btn_publish_submit"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_ps_tx",
+                  "action": "resolve_selector",
+                  "description": "查找发表按钮"
+                },
+                {
+                  "id": "mouse_move_ps_tx",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_ps_tx",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_ps_tx",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_publish_tx",
+                  "action": "check_navigation",
+                  "description": "验证发布成功"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "发布成功"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_pub_tx",
+                  "description": "发布失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_pub_tx",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_pub_tx",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_pub_tx",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_pub_tx",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "check_url_pub_tx",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "check_url_pub_tx"
             },
             {
               "id": "done",
@@ -3851,17 +6940,210 @@
             {
               "id": "click_comment_manage",
               "action": "click_menu",
-              "description": "点击「互动管理」→「评论管理」"
+              "description": "点击「互动管理」→「评论」",
+              "selector": {
+                "key": "menus.menu_interact_comment"
+              },
+              "steps": [
+                {
+                  "id": "resolve_selector_cm_tx_r",
+                  "action": "resolve_selector",
+                  "description": "查找评论管理菜单"
+                },
+                {
+                  "id": "mouse_move_cm_tx_r",
+                  "action": "mouse_move",
+                  "description": "鼠标移至目标元素"
+                },
+                {
+                  "id": "wait_visible_cm_tx_r",
+                  "action": "wait_for_element",
+                  "description": "等待元素可见"
+                },
+                {
+                  "id": "cdp_click_cm_tx_r",
+                  "action": "cdp_click",
+                  "description": "执行点击"
+                },
+                {
+                  "id": "verify_response_cm_tx_r",
+                  "action": "check_navigation",
+                  "description": "验证页面响应"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "enable_interceptor",
+                  "description": "评论管理已打开"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_tx",
+                  "description": "打开评论管理失败"
+                }
+              ],
+              "next": "enable_interceptor"
             },
             {
               "id": "enable_interceptor",
               "action": "enable_interceptor",
-              "description": "启用评论API拦截"
+              "description": "启用评论API拦截",
+              "apiPatternKey": "comment_list",
+              "steps": [
+                {
+                  "id": "resolve_api_pattern_r_tx",
+                  "action": "resolve_selector",
+                  "description": "解析API拦截模式"
+                },
+                {
+                  "id": "setup_interceptor_r_tx",
+                  "action": "wait_for_response",
+                  "description": "设置网络请求拦截"
+                },
+                {
+                  "id": "verify_interceptor_r_tx",
+                  "action": "check_navigation",
+                  "description": "验证拦截器已启用"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "scroll_load",
+                  "description": "拦截器已启用"
+                },
+                {
+                  "condition": "ERROR",
+                  "target": "error_handler_reply_tx",
+                  "description": "拦截器启用失败"
+                }
+              ],
+              "next": "scroll_load"
             },
             {
               "id": "scroll_load",
               "action": "scroll_load",
-              "description": "滚动加载评论"
+              "description": "滚动加载评论",
+              "scrollConfig": {
+                "maxScrolls": 30,
+                "scrollDelta": 400
+              },
+              "steps": [
+                {
+                  "id": "find_scroll_container_r_tx",
+                  "action": "resolve_selector",
+                  "description": "查找评论滚动容器"
+                },
+                {
+                  "id": "scroll_down_r_tx",
+                  "action": "scroll",
+                  "description": "向下滚动"
+                },
+                {
+                  "id": "wait_comments_load_tx",
+                  "action": "wait_for_response",
+                  "description": "等待评论加载"
+                },
+                {
+                  "id": "check_has_more_r_tx",
+                  "action": "check_navigation",
+                  "description": "检查是否还有更多评论"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "HAS_MORE",
+                  "target": "scroll_load",
+                  "description": "还有更多评论，继续滚动"
+                },
+                {
+                  "condition": "NO_MORE",
+                  "target": "generate_reply_tx",
+                  "description": "已加载全部评论"
+                }
+              ],
+              "next": "generate_reply_tx"
+            },
+            {
+              "id": "generate_reply_tx",
+              "action": "check_navigation",
+              "description": "AI回复生成（成功/失败）",
+              "steps": [
+                {
+                  "id": "get_comments_tx",
+                  "action": "check_navigation",
+                  "description": "获取评论列表"
+                },
+                {
+                  "id": "call_ai_api_tx",
+                  "action": "check_navigation",
+                  "description": "调用AI生成回复"
+                },
+                {
+                  "id": "parse_ai_response_tx",
+                  "action": "check_navigation",
+                  "description": "解析AI回复内容"
+                },
+                {
+                  "id": "fill_reply_input_tx",
+                  "action": "cdp_click",
+                  "description": "填写回复内容"
+                },
+                {
+                  "id": "submit_reply_tx",
+                  "action": "cdp_click",
+                  "description": "提交回复"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "SUCCESS",
+                  "target": "done",
+                  "description": "回复成功"
+                },
+                {
+                  "condition": "FAILED",
+                  "target": "error_handler_reply_tx",
+                  "description": "回复失败"
+                }
+              ],
+              "next": "done"
+            },
+            {
+              "id": "error_handler_reply_tx",
+              "action": "refresh_page",
+              "description": "错误处理 — 刷新页面重试",
+              "steps": [
+                {
+                  "id": "log_error_r_tx",
+                  "action": "check_navigation",
+                  "description": "记录错误日志"
+                },
+                {
+                  "id": "refresh_r_tx",
+                  "action": "refresh_page",
+                  "description": "刷新页面"
+                },
+                {
+                  "id": "wait_reload_r_tx",
+                  "action": "wait_for_response",
+                  "description": "等待页面重新加载"
+                }
+              ],
+              "branches": [
+                {
+                  "condition": "RETRY",
+                  "target": "click_comment_manage",
+                  "description": "重试流程"
+                },
+                {
+                  "condition": "ABORT",
+                  "target": "done",
+                  "description": "放弃并结束"
+                }
+              ],
+              "next": "click_comment_manage"
             },
             {
               "id": "done",
@@ -3894,9 +7176,21 @@
           "label": "视频号",
           "loginUrl": "https://channels.weixin.qq.com/login.html?from=assistant",
           "closeOnLoginSuccess": false,
-          "loggedOutIndicators": [".login-container", "[class*=\"login\"]", ".qrcode-container"],
-          "loggedInIndicators": [".main-content", ".platform-container", "nav[class*=\"nav\"]"],
-          "qrSelectors": [".qrcode-img", "img[src*=\"qr\"]", "canvas"]
+          "loggedOutIndicators": [
+            ".login-container",
+            "[class*=\"login\"]",
+            ".qrcode-container"
+          ],
+          "loggedInIndicators": [
+            ".main-content",
+            ".platform-container",
+            "nav[class*=\"nav\"]"
+          ],
+          "qrSelectors": [
+            ".qrcode-img",
+            "img[src*=\"qr\"]",
+            "canvas"
+          ]
         }
       }
     }
