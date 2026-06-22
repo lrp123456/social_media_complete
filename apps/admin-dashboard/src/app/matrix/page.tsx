@@ -800,6 +800,7 @@ function MonitorTab() {
   const [selectedAccountId, setSelectedAccountId] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'detail'>('list');
   const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [commentTab, setCommentTab] = useState<'comments' | 'notifications'>('comments');
   const [monitorTaskIds, setMonitorTaskIds] = useState<string[]>([]);
   const [showQueue, setShowQueue] = useState(false);
   const [platformFilter, setPlatformFilter] = useState<string>('all');
@@ -1577,71 +1578,123 @@ function MonitorTab() {
                       </div>
                       {selectedVideoId === video.id && (
                         <div className="ml-2 border-l-2 border-primary/20 pl-3 pb-1">
+                          {/* Tab 切换 */}
+                          <div className="flex gap-1 mb-2 pt-2">
+                            <button
+                              onClick={() => setCommentTab('comments')}
+                              className={cn(
+                                'px-3 py-1 rounded text-label-sm font-medium transition-colors',
+                                commentTab === 'comments'
+                                  ? 'bg-primary text-white'
+                                  : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                              )}
+                            >
+                              评论详情
+                            </button>
+                            <button
+                              onClick={() => setCommentTab('notifications')}
+                              className={cn(
+                                'px-3 py-1 rounded text-label-sm font-medium transition-colors',
+                                commentTab === 'notifications'
+                                  ? 'bg-amber-500 text-white'
+                                  : 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                              )}
+                            >
+                              更新通知
+                            </button>
+                          </div>
+
+                          {/* 内容区域 */}
                           {videoCommentsData ? (
-                            videoCommentsData.length === 0 ? (
-                              <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
-                            ) : (
-                              <div className="flex flex-col gap-2 pt-2">
-                                {videoCommentsData.map((root: any) => (
-                                  <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
-                                    <div className="flex items-start gap-1.5">
-                                      <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
-                                      {root.isNew && (
-                                        <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
-                                      )}
-                                      {root.isAuthor && (
-                                        <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
-                                          <MaterialIcon icon="person" size="xs" />
-                                          作者
-                                        </span>
-                                      )}
-                                    </div>
-                                    <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
-                                    <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
-                                    <AiReplyCard
-                                      commentId={typeof root.id === 'number' ? root.id : parseInt(root.id)}
-                                      suggestionStatus={root.suggestionStatus || 'none'}
-                                      suggestedReply={root.suggestedReply}
-                                      suggestionModel={root.suggestionModel}
-                                      suggestionLatencyMs={root.suggestionLatencyMs}
-                                      replyStatus={root.replyStatus || 'none'}
-                                      isNew={root.isNew}
-                                    />
-                                    {root.replies?.length > 0 && (
-                                      <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
-                                        {root.replies.map((sub: any) => (
-                                          <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
-                                            <div className="flex items-start gap-1.5">
-                                              <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
-                                              {sub.isNew && (
-                                                <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
-                                              )}
-                                              {sub.isAuthor && (
-                                                <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
-                                                  <MaterialIcon icon="person" size="xs" />
-                                                  作者
-                                                </span>
-                                              )}
-                                              {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
-                                            </div>
-                                            <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
-                                            <AiReplyCard
-                                              commentId={typeof sub.id === 'number' ? sub.id : parseInt(sub.id)}
-                                              suggestionStatus={sub.suggestionStatus || 'none'}
-                                              suggestedReply={sub.suggestedReply}
-                                              suggestionModel={sub.suggestionModel}
-                                              suggestionLatencyMs={sub.suggestionLatencyMs}
-                                              replyStatus={sub.replyStatus || 'none'}
-                                              isNew={sub.isNew}
-                                              isSub
-                                            />
+                            commentTab === 'comments' ? (
+                              (() => {
+                                const realComments = videoCommentsData.filter((c: any) => !c.isLightMode);
+                                return realComments.length === 0 ? (
+                                  <p className="text-body-sm text-on-surface-variant py-2">暂无评论</p>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    {realComments.map((root: any) => (
+                                      <div key={root.cid} className={`bg-surface-variant/50 rounded-lg p-2.5 ${root.isNew ? 'border-l-4 border-orange-400 bg-orange-50' : 'border-l-2 border-amber-500/40'}`}>
+                                        <div className="flex items-start gap-1.5">
+                                          <span className="text-label-xs font-medium text-on-surface">{root.userNickname || '匿名'}</span>
+                                          {root.isNew && (
+                                            <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                          )}
+                                          {root.isAuthor && (
+                                            <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                              <MaterialIcon icon="person" size="xs" />
+                                              作者
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-body-sm text-on-surface mt-0.5 leading-relaxed">{root.text}</p>
+                                        <span className="text-[10px] text-on-surface-variant/60">{formatRelativeTime(root.createTime)}</span>
+                                        <AiReplyCard
+                                          commentId={typeof root.id === 'number' ? root.id : parseInt(root.id)}
+                                          suggestionStatus={root.suggestionStatus || 'none'}
+                                          suggestedReply={root.suggestedReply}
+                                          suggestionModel={root.suggestionModel}
+                                          suggestionLatencyMs={root.suggestionLatencyMs}
+                                          replyStatus={root.replyStatus || 'none'}
+                                          isNew={root.isNew}
+                                        />
+                                        {root.replies?.length > 0 && (
+                                          <div className="ml-3 mt-1.5 border-l border-outline-variant pl-2.5 flex flex-col gap-1.5">
+                                            {root.replies.map((sub: any) => (
+                                              <div key={sub.cid} className={`py-0.5 ${sub.isNew ? 'border-l-4 border-orange-400 bg-orange-50 pl-1.5 rounded' : ''}`}>
+                                                <div className="flex items-start gap-1.5">
+                                                  <span className="text-label-xs font-medium text-on-surface">{sub.userNickname || '匿名'}</span>
+                                                  {sub.isNew && (
+                                                    <span className="ml-2 px-1.5 py-0.5 text-xs font-medium rounded bg-orange-100 text-orange-700">新</span>
+                                                  )}
+                                                  {sub.isAuthor && (
+                                                    <span className="ml-1 px-1.5 py-0.5 text-xs font-medium rounded bg-primary/10 text-primary flex items-center gap-0.5">
+                                                      <MaterialIcon icon="person" size="xs" />
+                                                      作者
+                                                    </span>
+                                                  )}
+                                                  {sub.replyToName && <span className="text-[10px] text-primary/70">@ {sub.replyToName}</span>}
+                                                </div>
+                                                <p className="text-body-sm text-on-surface-variant/80 mt-0.5">{sub.text}</p>
+                                                <AiReplyCard
+                                                  commentId={typeof sub.id === 'number' ? sub.id : parseInt(sub.id)}
+                                                  suggestionStatus={sub.suggestionStatus || 'none'}
+                                                  suggestedReply={sub.suggestedReply}
+                                                  suggestionModel={sub.suggestionModel}
+                                                  suggestionLatencyMs={sub.suggestionLatencyMs}
+                                                  replyStatus={sub.replyStatus || 'none'}
+                                                  isNew={sub.isNew}
+                                                  isSub
+                                                />
+                                              </div>
+                                            ))}
                                           </div>
-                                        ))}
+                                        )}
                                       </div>
-                                    )}
+                                    ))}
                                   </div>
-                                ))}
-                              </div>
+                                );
+                              })()
+                            ) : (
+                              (() => {
+                                const notifications = videoCommentsData.filter((c: any) => c.isLightMode);
+                                return notifications.length > 0 ? (
+                                  <div className="flex flex-col gap-2">
+                                    {notifications.map((n: any) => (
+                                      <div key={n.cid} className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                                        <div className="flex items-center gap-2">
+                                          <MaterialIcon icon="notifications" size="sm" className="text-amber-500" />
+                                          <span className="text-label-sm text-amber-700 font-medium">增量通知</span>
+                                          <span className="text-[10px] text-amber-500">{formatRelativeTime(n.createTime)}</span>
+                                        </div>
+                                        <p className="text-body-sm text-amber-900 mt-1">{n.text}</p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <p className="text-body-sm text-on-surface-variant py-2">暂无更新通知</p>
+                                );
+                              })()
                             )
                           ) : (
                             <p className="text-body-sm text-on-surface-variant py-2">加载中...</p>
