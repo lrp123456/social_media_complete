@@ -11,7 +11,7 @@ import {
   useDeleteSelector,
 } from '@/hooks/useApi';
 import type { SelectorEntry, SelectorEffectivenessStats } from '@/hooks/useApi';
-import { FlowGraphView } from './FlowGraphView';
+import { FlowGraphView } from '../components/FlowGraphView';
 
 // ─── 常量 ───
 
