@@ -864,39 +864,60 @@ export class XiaohongshuCrawler {
   async expandSubCommentsForRoots(newPage: Page, rootComments: any[]): Promise<void> {
     logger.info({ totalRoots: rootComments.length }, '[XHS-Phase3] Expanding sub-comments');
 
+    const interceptor = this.commentInterceptor as RequestInterceptor;
+    const subPattern = '/api/sns/web/v2/comment/sub/page';
+
     for (const root of rootComments) {
-      const subCount = root.sub_comment_count || root.subCommentCount || 0;
-      if (subCount <= 0) continue;
+      // 只处理 sub_comment_has_more=true 的根评论（预加载子评论已由 buildCommentTree 直接提取）
+      const hasMoreSub = root.sub_comment_has_more === true;
+      if (!hasMoreSub) continue;
 
       const rootCid = root.id;
       if (!rootCid) continue;
 
-      logger.info({ rootCid, subCount }, '[XHS-Phase3] Expanding sub-comments for root');
+      logger.info({ rootCid, subCount: root.sub_comment_count }, '[XHS-Phase3] Expanding sub-comments for root');
 
       try {
+        // 定位根评论容器
         const rootContainer = newPage.locator(`[id="comment-${rootCid}"]`).first();
-        if (await rootContainer.isVisible().catch(() => false)) {
-          const expandBtn = rootContainer.getByText('展开').first();
-          if (await expandBtn.isVisible().catch(() => false)) {
-            await expandBtn.click();
-            await HumanActions.wait(newPage, 1500, 2500);
+        if (!(await rootContainer.isVisible().catch(() => false))) {
+          logger.warn({ rootCid }, '[XHS-Phase3] Root comment container not visible, skipping');
+          continue;
+        }
+
+        // 滚动到可见
+        await rootContainer.scrollIntoViewIfNeeded();
+        await HumanActions.wait(newPage, 500, 1000);
+
+        // 通过 .parent-comment:has() 精确定位根评论的父容器，在其中查找 .show-more
+        const parentComment = newPage.locator(`.parent-comment:has([id="comment-${rootCid}"])`).first();
+
+        // 点击展开，最多 10 次分页
+        for (let i = 0; i < 10; i++) {
+          const showMoreBtn = parentComment.locator('.show-more').first();
+          if (!(await showMoreBtn.isVisible().catch(() => false))) {
+            break; // 没有更多展开按钮，子评论已全部加载
           }
 
-          for (let i = 0; i < 10; i++) {
-            const moreBtn = rootContainer.getByText('展开更多回复').first();
-            if (await moreBtn.isVisible().catch(() => false)) {
-              await moreBtn.click();
-              await HumanActions.wait(newPage, 1000, 2000);
-            } else {
-              break;
-            }
+          const prevSubRespCount = interceptor.getResponseCount(subPattern);
+          await showMoreBtn.click();
+          logger.info({ rootCid, iteration: i }, '[XHS-Phase3] Clicked .show-more');
+
+          // 等待 /comment/sub/page 响应到达
+          const gotNew = await interceptor.waitForNewResponse(subPattern, prevSubRespCount, 10000);
+          if (!gotNew) {
+            logger.warn({ rootCid, iteration: i }, '[XHS-Phase3] No sub/page response after click, stopping');
+            break;
           }
-        } else {
-          logger.warn({ rootCid }, '[XHS-Phase3] Root container not found, trying page-wide search');
-          const expandBtn = newPage.getByText('展开').first();
-          if (await expandBtn.isVisible().catch(() => false)) {
-            await expandBtn.click();
-            await HumanActions.wait(newPage, 1500, 2500);
+
+          await HumanActions.wait(newPage, 1000, 2000);
+
+          // 检查最新响应的 has_more
+          const subResponses = interceptor.getResponses(subPattern);
+          const lastSubResp = subResponses[subResponses.length - 1];
+          const lastHasMore = lastSubResp?.hasMore;
+          if (!lastHasMore) {
+            break; // 没有更多子评论了
           }
         }
       } catch (err: any) {
