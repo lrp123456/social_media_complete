@@ -1275,23 +1275,16 @@ export class XiaohongshuCrawler {
       await HumanActions.wait(page, 500, 1000);
 
       // Phase 5: 输入内容并发送
+      // XHS 输入框在 .engage-bar .input-box 内（不在 .bottom-container）
       let inputFocused = false;
-      const inputEl = page.locator('.bottom-container [contenteditable="true"]').first();
+      const inputEl = page.locator('#content-textarea[contenteditable="true"]').first();
       if (await inputEl.isVisible().catch(() => false)) {
         await inputEl.click();
         await HumanActions.wait(page, 200, 500);
-        await HumanActions.safeCDPType(page, replyText);
+        // 使用 Playwright 原生输入（触发 React 合成事件），不用 CDP
+        await inputEl.pressSequentially(replyText, { delay: 50 });
         await HumanActions.wait(page, 500, 1200);
         inputFocused = true;
-      } else {
-        const fallbackInput = page.locator('[contenteditable="true"]').first();
-        if (await fallbackInput.isVisible().catch(() => false)) {
-          await fallbackInput.click();
-          await HumanActions.wait(page, 200, 500);
-          await HumanActions.safeCDPType(page, replyText);
-          await HumanActions.wait(page, 500, 1200);
-          inputFocused = true;
-        }
       }
 
       if (!inputFocused) {
@@ -1299,13 +1292,20 @@ export class XiaohongshuCrawler {
         return false;
       }
 
-      // 发送：优先找"发送"按钮，回退 Enter 键
+      // 发送：等待按钮启用后点击
       const sendBtn = page.getByText('发送', { exact: true }).first();
-      if (await sendBtn.isVisible().catch(() => false)) {
-        await sendBtn.click();
+      try {
+        await sendBtn.waitFor({ state: 'attached', timeout: 5000 });
+        // 等待按钮从 disabled 变为 enabled（React 输入后启用）
+        await page.waitForFunction(() => {
+          const btn = document.querySelector('button.btn.submit') as HTMLButtonElement | null;
+          return btn && !btn.disabled;
+        }, { timeout: 10000 });
+        await sendBtn.click({ timeout: 5000 });
         await HumanActions.wait(page, 1000, 2000);
         logger.info({ cid: target.cid, text: replyText }, '[XHS-Reply] Reply sent');
-      } else {
+      } catch {
+        // fallback: 用 Enter 键发送
         await page.keyboard.press('Enter');
         await HumanActions.wait(page, 1000, 2000);
         logger.info({ cid: target.cid }, '[XHS-Reply] Reply sent via Enter key');
