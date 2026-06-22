@@ -815,23 +815,32 @@ export class XiaohongshuCrawler {
 
     await interceptor.waitForResponse(pattern, 15000).catch(() => {});
 
-    let allItems: any[] = [];
     let scrollAttempts = 0;
-    const maxScrollAttempts = 30;
+    const maxScrollAttempts = 15;
+    let prevItemCount = 0;
+    let noNewItemsStreak = 0;
+    const maxNoNewItems = 3;
 
     while (scrollAttempts < maxScrollAttempts) {
       const items = interceptor.getCollectedItems(pattern);
-      if (items.length > allItems.length) {
-        allItems = items;
-        logger.info({ totalItems: allItems.length, attempt: scrollAttempts }, '[XHS-Phase3] Root comments batch loaded');
+      if (items.length > prevItemCount) {
+        prevItemCount = items.length;
+        noNewItemsStreak = 0;
+        logger.info({ totalItems: items.length, attempt: scrollAttempts }, '[XHS-Phase3] Root comments batch loaded');
+      } else {
+        noNewItemsStreak++;
       }
 
       const responses = interceptor.getResponses(pattern);
       const lastResp = responses[responses.length - 1];
-      const hasMore = lastResp?.body?.data?.has_more !== false;
+      const hasMore = lastResp?.hasMore;
 
-      if (!hasMore && allItems.length > 0) {
-        logger.info({ totalItems: allItems.length }, '[XHS-Phase3] All root comments loaded');
+      if ((!hasMore && items.length > 0) || noNewItemsStreak >= maxNoNewItems) {
+        if (!hasMore && items.length > 0) {
+          logger.info({ totalItems: items.length }, '[XHS-Phase3] All root comments loaded');
+        } else {
+          logger.info({ noNewItemsStreak, totalItems: items.length }, '[XHS-Phase3] No new items streak limit reached');
+        }
         break;
       }
 
@@ -849,7 +858,7 @@ export class XiaohongshuCrawler {
       scrollAttempts++;
     }
 
-    return allItems;
+    return interceptor.getCollectedItems(pattern);
   }
 
   async expandSubCommentsForRoots(newPage: Page, rootComments: any[]): Promise<void> {
