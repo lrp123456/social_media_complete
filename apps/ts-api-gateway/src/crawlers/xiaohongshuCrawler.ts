@@ -819,7 +819,6 @@ export class XiaohongshuCrawler {
     const maxScrollAttempts = 15;
     let prevItemCount = 0;
     let noNewItemsStreak = 0;
-    const maxNoNewItems = 3;
 
     while (scrollAttempts < maxScrollAttempts) {
       const items = interceptor.getCollectedItems(pattern);
@@ -835,13 +834,27 @@ export class XiaohongshuCrawler {
       const lastResp = responses[responses.length - 1];
       const hasMore = lastResp?.hasMore;
 
+      // Fix 7: hasMore=true 时增加耐心度（图片重的笔记需要更多滚动触发懒加载）
+      const maxNoNewItems = hasMore ? 5 : 3;
+
       if ((!hasMore && items.length > 0) || noNewItemsStreak >= maxNoNewItems) {
         if (!hasMore && items.length > 0) {
           logger.info({ totalItems: items.length }, '[XHS-Phase3] All root comments loaded');
         } else {
-          logger.info({ noNewItemsStreak, totalItems: items.length }, '[XHS-Phase3] No new items streak limit reached');
+          logger.info({ noNewItemsStreak, totalItems: items.length, hasMore }, '[XHS-Phase3] No new items streak limit reached');
         }
         break;
+      }
+
+      // Fix 7: 连续 3 次无新数据但 hasMore=true 时，尝试更激进的 CDP 滚动
+      if (noNewItemsStreak >= 3 && hasMore) {
+        logger.info({ attempt: scrollAttempts, noNewItemsStreak }, '[XHS-Phase3] Trying aggressive CDP scroll fallback (hasMore=true)');
+        try {
+          await HumanActions.cdpSmartScroll(newPage, ['.comments-container', '.list-container'], 600, 'down');
+        } catch {
+          await HumanActions.humanScroll(newPage, 600, { minPause: 300, maxPause: 800 });
+        }
+        await HumanActions.wait(newPage, 2000, 3000);
       }
 
       const scrollerDef = getSelector('region.comment-scroller', XHS_PLATFORM);
@@ -858,7 +871,20 @@ export class XiaohongshuCrawler {
       scrollAttempts++;
     }
 
-    return interceptor.getCollectedItems(pattern);
+    // 返回原始评论对象（保留 sub_comment_count, sub_comment_has_more, sub_comments 等字段）
+    const responses = interceptor.getResponses(pattern);
+    const rawComments: any[] = [];
+    const seen = new Set<string>();
+    for (const resp of responses) {
+      const items = resp?.body?.data?.comments || [];
+      for (const item of items) {
+        if (item.id && !seen.has(item.id)) {
+          seen.add(item.id);
+          rawComments.push(item);
+        }
+      }
+    }
+    return rawComments;
   }
 
   async expandSubCommentsForRoots(newPage: Page, rootComments: any[]): Promise<void> {
