@@ -1061,6 +1061,29 @@
           "selectorType": "css",
           "description": "SMS验证码输入框"
         }
+      },
+      "loginFlows": {
+        "creator": {
+          "domain": "creator.douyin.com",
+          "label": "创作者中心",
+          "loginUrl": "https://creator.douyin.com/creator-micro/home",
+          "closeOnLoginSuccess": false,
+          "loggedOutIndicators": [
+            ".login-container",
+            "[class*=\"login\"]",
+            "img[src*=\"qrcode\"]"
+          ],
+          "loggedInIndicators": [
+            "nav[class*=\"nav\"]",
+            "[class*=\"sidebar\"]",
+            ".creator-container"
+          ],
+          "qrSelectors": [
+            "img[aria-label=\"二维码\"]",
+            "img[src*=\"qrcode\"]",
+            "canvas"
+          ]
+        }
       }
     },
     "kuaishou": {
@@ -1968,6 +1991,30 @@
           "selectorType": "role",
           "description": "快手标题输入框"
         }
+      },
+      "loginFlows": {
+        "creator": {
+          "domain": "cp.kuaishou.com",
+          "label": "创作者中心",
+          "loginUrl": "https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api",
+          "closeOnLoginSuccess": false,
+          "loggedOutIndicators": [
+            ".login-qrcode",
+            ".qrcode-img",
+            "[class*=\"login\"]"
+          ],
+          "loggedInIndicators": [
+            ".el-menu",
+            ".sidebar",
+            "[class*=\"sidebar\"]",
+            "[class*=\"menu\"]"
+          ],
+          "qrSelectors": [
+            "img[alt=\"qrcode\"]",
+            "img[src*=\"data:image/\"]",
+            "canvas"
+          ]
+        }
       }
     },
     "xiaohongshu": {
@@ -2671,6 +2718,50 @@
           ],
           "selectorType": "css"
         }
+      },
+      "loginFlows": {
+        "mainsite": {
+          "domain": "www.xiaohongshu.com",
+          "label": "主站",
+          "loginUrl": "https://www.xiaohongshu.com/explore",
+          "closeOnLoginSuccess": true,
+          "loggedOutIndicators": [
+            "#login-btn",
+            ".login-modal",
+            "[class*=\"login-modal\"]"
+          ],
+          "loggedInIndicators": [
+            ".user-avatar",
+            ".sidebar-menu",
+            "[class*=\"user-avatar\"]"
+          ],
+          "qrSelectors": [
+            ".login-container .qrcode-img",
+            ".qrcode-img",
+            "img[alt*=\"二维码\"]"
+          ]
+        },
+        "creator": {
+          "domain": "creator.xiaohongshu.com",
+          "label": "创作者中心",
+          "loginUrl": "https://creator.xiaohongshu.com/creator/home",
+          "closeOnLoginSuccess": false,
+          "loggedOutIndicators": [
+            ".login-container",
+            ".login-btn-container",
+            "button.beer-login-btn",
+            "button[class*=\"beer-login-btn\"]"
+          ],
+          "loggedInIndicators": [
+            ".creator-container",
+            "[class*=\"creator-container\"]"
+          ],
+          "qrSelectors": [
+            ".qrcode-img",
+            "img[alt*=\"二维码\"]",
+            "img[src*=\"qr\"]"
+          ]
+        }
       }
     },
     "tencent": {
@@ -3031,6 +3122,29 @@
             "cursorParamName": "lastBuff"
           },
           "flowPhase": "monitor:collect"
+        }
+      },
+      "loginFlows": {
+        "creator": {
+          "domain": "channels.weixin.qq.com",
+          "label": "视频号",
+          "loginUrl": "https://channels.weixin.qq.com/login.html?from=assistant",
+          "closeOnLoginSuccess": false,
+          "loggedOutIndicators": [
+            ".login-container",
+            "[class*=\"login\"]",
+            ".qrcode-container"
+          ],
+          "loggedInIndicators": [
+            ".main-content",
+            ".platform-container",
+            "nav[class*=\"nav\"]"
+          ],
+          "qrSelectors": [
+            ".qrcode-img",
+            "img[src*=\"qr\"]",
+            "canvas"
+          ]
         }
       }
     }
