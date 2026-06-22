@@ -150,6 +150,7 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
       {selectedNode && (
         <NodeDrawer
           node={selectedNode}
+          steps={steps}
           platform={platform}
           flowName={flowName}
           onClose={() => setSelectedNode(null)}
