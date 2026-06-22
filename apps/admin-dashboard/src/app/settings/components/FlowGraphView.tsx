@@ -1,9 +1,6 @@
-// apps/admin-dashboard/src/app/settings/components/FlowGraphView.tsx
-'use client';
 import { useState, useMemo, useCallback } from 'react';
 import {
   ReactFlow, Background, Controls, MiniMap,
-  useNodesState, useEdgesState,
   type Node, type Edge, type NodeTypes, type EdgeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -39,12 +36,12 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
   const steps = flow?.steps || [];
 
   // 将 FlowNode[] 转换为 React Flow nodes/edges
-  const { nodes: rawNodes, edges: rawEdges } = useMemo(() => {
-    const nodes: Node[] = [];
-    const edges: Edge[] = [];
+  const { nodes, edges } = useMemo(() => {
+    const rawNodes: Node[] = [];
+    const rawEdges: Edge[] = [];
 
     for (const step of steps) {
-      nodes.push({
+      rawNodes.push({
         id: step.id,
         type: 'flowNode',
         position: { x: 0, y: 0 },
@@ -66,7 +63,7 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
       // 分支连线
       if (step.branches) {
         for (const branch of step.branches) {
-          edges.push({
+          rawEdges.push({
             id: `${step.id}-${branch.condition}-${branch.target}`,
             source: step.id,
             target: branch.target,
@@ -82,7 +79,7 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
 
       // 默认连线
       if (step.next) {
-        edges.push({
+        rawEdges.push({
           id: `${step.id}-next-${step.next}`,
           source: step.id,
           target: step.next,
@@ -92,17 +89,10 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
       }
     }
 
-    return { nodes, edges };
-  }, [steps, expandedNodes, lastRunData]);
-
-  // dagre 自动布局
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(() => {
+    // dagre 自动布局
     const layouted = applyDagreLayout(rawNodes, rawEdges);
     return { nodes: layouted, edges: rawEdges };
-  }, [rawNodes, rawEdges]);
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
+  }, [steps, expandedNodes, lastRunData]);
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const step = steps.find((s: FlowNode) => s.id === node.id);
@@ -134,8 +124,6 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
