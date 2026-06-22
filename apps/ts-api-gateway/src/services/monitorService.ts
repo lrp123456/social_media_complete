@@ -921,8 +921,30 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId, platform: 'douyin', riskType }, '抖音风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    if (user?.wechatUserid) {
+      // 优先使用 LoginTabRegistry
+      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
+      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
+      const dyConfig = dyGetConfig('douyin', 'creator');
+      if (dyConfig && user.fingerprintWindowId) {
+        const dyWindowId = String(user.fingerprintWindowId);
+        const dyBm = dyGetBM();
+        const dyBrowser = await dyBm.getBrowser(dyWindowId);
+        if (dyBrowser) {
+          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
+          if (dyRecord) {
+            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
+            if (dyQrBuf) {
+              const { botManager: dyBot } = await import('./wechatBotService');
+              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
+            }
+          }
+        }
+      } else {
+        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+      }
+    }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -980,8 +1002,30 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId }, '抖音 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase3Result.riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    if (user?.wechatUserid) {
+      // 优先使用 LoginTabRegistry
+      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
+      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
+      const dyConfig = dyGetConfig('douyin', 'creator');
+      if (dyConfig && user.fingerprintWindowId) {
+        const dyWindowId = String(user.fingerprintWindowId);
+        const dyBm = dyGetBM();
+        const dyBrowser = await dyBm.getBrowser(dyWindowId);
+        if (dyBrowser) {
+          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
+          if (dyRecord) {
+            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
+            if (dyQrBuf) {
+              const { botManager: dyBot } = await import('./wechatBotService');
+              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
+            }
+          }
+        }
+      } else {
+        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
+      }
+    }
     dy.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
