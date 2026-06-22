@@ -933,8 +933,8 @@ export class XiaohongshuCrawler {
           is_author: item.show_tags?.includes('is_author') || false,
         });
 
-        if (item.comments && Array.isArray(item.comments)) {
-          for (const sub of item.comments) {
+        if (item.sub_comments && Array.isArray(item.sub_comments)) {
+          for (const sub of item.sub_comments) {
             comments.push({
               cid: sub.id,
               text: sub.content,
@@ -957,7 +957,14 @@ export class XiaohongshuCrawler {
     // 解析子评论 /comment/sub/page
     const subResponses = interceptor.getResponses('/api/sns/web/v2/comment/sub/page');
     for (const resp of subResponses) {
-      const items = resp?.body?.data?.comments || resp?.body?.data?.items || [];
+      // 从请求 URL 提取 root_comment_id（响应体中无此字段）
+      let rootCommentId: string | undefined;
+      try {
+        const url = new URL(resp.url);
+        rootCommentId = url.searchParams.get('root_comment_id') || undefined;
+      } catch {}
+
+      const items = resp?.body?.data?.comments || [];
       for (const sub of items) {
         comments.push({
           cid: sub.id,
@@ -966,9 +973,9 @@ export class XiaohongshuCrawler {
           user_uid: sub.user_info?.user_id || '',
           digg_count: parseInt(sub.like_count || '0', 10),
           create_time: Math.floor((sub.create_time || 0) / 1000),
-          reply_id: sub.target_comment?.id || sub.root_id || '0',
-          rootId: sub.root_id || undefined,
-          parentId: sub.target_comment?.id || sub.parent_id || undefined,
+          reply_id: sub.target_comment?.id || rootCommentId || '0',
+          rootId: rootCommentId,
+          parentId: sub.target_comment?.id || undefined,
           level: 2,
           replyToName: sub.target_comment?.user_info?.nickname || '',
           is_author: sub.show_tags?.includes('is_author') || false,
