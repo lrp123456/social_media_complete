@@ -1231,6 +1231,25 @@ export class XiaohongshuCrawler {
       if (!(await commentEl.isVisible().catch(() => false))) {
         commentEl = page.locator(`[id*="${cid}"]`).first();
       }
+
+      // 如果是子评论且未找到，先展开所有 .show-more 按钮加载子评论
+      if (!(await commentEl.isVisible().catch(() => false)) && target.level === 2) {
+        logger.info({ cid, level: target.level }, '[XHS-Reply] Sub-comment not in DOM, expanding all .show-more buttons');
+        for (let i = 0; i < 20; i++) {
+          const showMore = page.locator('.show-more').first();
+          if (!(await showMore.isVisible().catch(() => false))) break;
+          await showMore.scrollIntoViewIfNeeded().catch(() => {});
+          await showMore.click().catch(() => {});
+          await HumanActions.wait(page, 1500, 2500);
+          logger.info({ iteration: i }, '[XHS-Reply] Expanded .show-more');
+        }
+        // 展开后重试 CID 查找
+        commentEl = page.locator(`[id*="${cid}"]`).first();
+        if (!(await commentEl.isVisible().catch(() => false))) {
+          commentEl = page.locator(`[data-cid="${cid}"]`).first();
+        }
+      }
+
       if (!(await commentEl.isVisible().catch(() => false))) {
         logger.warn({ cid }, '[XHS-Reply] Comment element not found by cid, trying text+username matching');
         const allComments = page.locator('[class*="comment-item"]');
