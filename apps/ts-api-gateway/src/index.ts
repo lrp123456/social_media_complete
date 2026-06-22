@@ -33,6 +33,7 @@ import materialsRouter from './routes/materials';
 import operatorsRouter from './routes/operators';
 import wecomBotRouter from './routes/wecom-bot';
 import llmReplyRouter from './routes/llmReply';
+import configAiReplyRouter from './routes/config-ai-reply';
 
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
@@ -103,6 +104,7 @@ app.use('/api/v1/llm/prompts', promptsRouter);                // 板块三: 提�
 app.use('/api/v1/config-infra', configInfraRouter);           // 板块一: 基础设施变量
 app.use('/api/v1/config-media', configMediaRouter);           // 板块四: 智能创作与媒体渲染
 app.use('/api/v1/config-automation', configAutomationRouter); // 板块五: 自动化矩阵核心
+app.use('/api/v1/config-ai-reply', configAiReplyRouter);      // 板块五: AI 回复配置
 app.use('/api/v1/config-network', configNetworkRouter);       // 板块六: 网络路由与物理代理
 app.use('/api/v1/security', securityRouter);                 // 板块八: 权限安全密钥
 app.use('/api/v1/matrix', matrixRouter);                     // 社媒矩阵: 发布+账号+监控+评论

@@ -5,6 +5,7 @@ import axios, { type AxiosInstance } from 'axios';
 import { loadConfig } from '@social-media/shared-config';
 import { createLogger } from '../lib/logger';
 import { SIMPLE_CS_SYSTEM_PROMPT, LLM_DEFAULTS } from '../config/prompts';
+import { getAiReplyConfig } from '../lib/aiReplyConfig';
 
 const logger = createLogger('llm-service');
 
@@ -71,14 +72,15 @@ class LLMClient {
     messages: ChatMessage[],
     options?: { model?: string; temperature?: number; maxTokens?: number },
   ): Promise<{ content: string; model: string; latencyMs: number }> {
-    const model = options?.model || LLM_DEFAULTS.model;
+    const aiConfig = getAiReplyConfig();
+    const model = options?.model || aiConfig.model;
     const startTime = Date.now();
 
     const response = await this.client.post('/v1/chat/completions', {
       model,
       messages,
-      temperature: options?.temperature ?? LLM_DEFAULTS.temperature,
-      max_tokens: options?.maxTokens ?? LLM_DEFAULTS.maxTokens,
+      temperature: options?.temperature ?? aiConfig.temperature,
+      max_tokens: options?.maxTokens ?? aiConfig.maxTokens,
       stream: false,
     });
 
@@ -167,6 +169,19 @@ class CommentReplyGenerator {
 
   constructor(private client: LLMClient) {
     this.semaphore = new Semaphore(LLM_DEFAULTS.maxConcurrency);
+  }
+
+  /**
+   * 获取当前 AI 回复配置（供前端展示）
+   */
+  getConfig() {
+    const cfg = getAiReplyConfig();
+    return {
+      model: cfg.model || LLM_DEFAULTS.model,
+      systemPrompt: cfg.systemPrompt || SIMPLE_CS_SYSTEM_PROMPT,
+      temperature: cfg.temperature ?? LLM_DEFAULTS.temperature,
+      maxTokens: cfg.maxTokens ?? LLM_DEFAULTS.maxTokens,
+    };
   }
 
   /**

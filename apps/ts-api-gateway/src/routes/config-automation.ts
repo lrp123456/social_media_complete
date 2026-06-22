@@ -27,6 +27,11 @@ let AUTOMATION = {
     interval_active_min: 180, interval_active_max: 300,     // 高频周期: 180-300秒 (3-5分钟)
     interval_idle_min: 900, interval_idle_max: 1200,        // 空闲周期: 900-1200秒 (15-20分钟)
     idle_threshold: 4, sleep_start_hour: 2, sleep_end_hour: 8,
+    platformOverrides: {} as Record<string, Partial<{
+      interval_active_min: number; interval_active_max: number;
+      interval_idle_min: number; interval_idle_max: number;
+      idle_threshold: number;
+    }>>,
   },
   browser: { max_tab_reuse: 20, enable_warmup: true },
 };
@@ -53,7 +58,11 @@ router.put('/', (req: Request, res: Response) => {
   if (req.body.browser) Object.assign(AUTOMATION.browser, req.body.browser);
 
   // 如果监控间隔配置发生变化，重启调度器
-  if (req.body.monitor && (req.body.monitor.interval_idle_min || req.body.monitor.interval_idle_max)) {
+  if (req.body.monitor && (
+    req.body.monitor.interval_idle_min ||
+    req.body.monitor.interval_idle_max ||
+    req.body.monitor.platformOverrides
+  )) {
     import('../services/monitorService').then(({ restartMonitorScheduler }) => {
       restartMonitorScheduler();
     }).catch(() => {});

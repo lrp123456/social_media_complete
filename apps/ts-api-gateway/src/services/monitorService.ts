@@ -1248,9 +1248,16 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   xhs.unregisterListener();
 
   if (phase1Result.riskControlDetected) {
-    logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType: phase1Result.riskControlInfo?.type }, '小红书风控触发');
-    await db.logRiskScene(task.userId, 'xiaohongshu', phase1Result.riskControlInfo?.type || 'unknown', phase1Result.riskControlInfo?.evidence || '');
+    const riskType = phase1Result.riskControlInfo?.type || 'unknown';
+    logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType }, '小红书风控触发');
+    await db.logRiskScene(task.userId, 'xiaohongshu', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.setUserCooldown(task.userId, Date.now() + 30 * 60 * 1000);
+    // 登录失效时发送 QR 码到企微（与快手、视频号逻辑一致）
+    if (['login_redirect', 'session_expired', 'url_redirect'].includes(riskType)) {
+      await db.updateUserStatus(task.userId, 'login_required');
+      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
+      if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'xiaohongshu', user.wechatUserid);
+    }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -1556,7 +1563,7 @@ function getOrCreateSchedulerState(windowId: string, platform: string): Schedule
   if (!st) {
     st = {
       timer: null,
-      intervalMs: getRandomIntervalForMode('active'),
+      intervalMs: getRandomIntervalForMode('active', platform),
       nextRunAt: 0,
       lastRunAt: 0,
       mode: 'active',
@@ -1570,29 +1577,33 @@ function getOrCreateSchedulerState(windowId: string, platform: string): Schedule
 }
 
 /** 从 AUTOMATION 配置读取参数（所有值单位：秒） */
-function getMonitorConfig() {
+function getMonitorConfig(platform?: string) {
   try {
     const { getAutomationConfig } = require('../routes/config-automation');
     const config = getAutomationConfig();
+    const overrides = platform ? config.monitor?.platformOverrides?.[platform] : undefined;
     return {
-      activeMin: config.monitor?.interval_active_min ?? 180,
-      activeMax: config.monitor?.interval_active_max ?? 300,
-      idleMin: config.monitor?.interval_idle_min ?? 900,
-      idleMax: config.monitor?.interval_idle_max ?? 1200,
-      idleThreshold: config.monitor?.idle_threshold ?? 4,
+      activeMin: overrides?.interval_active_min ?? config.monitor?.interval_active_min ?? 180,
+      activeMax: overrides?.interval_active_max ?? config.monitor?.interval_active_max ?? 300,
+      idleMin: overrides?.interval_idle_min ?? config.monitor?.interval_idle_min ?? 900,
+      idleMax: overrides?.interval_idle_max ?? config.monitor?.interval_idle_max ?? 1200,
+      idleThreshold: overrides?.idle_threshold ?? config.monitor?.idle_threshold ?? 4,
+      sleepStartHour: config.monitor?.sleep_start_hour ?? 2,
+      sleepEndHour: config.monitor?.sleep_end_hour ?? 8,
     };
   } catch {
     return {
       activeMin: 180, activeMax: 300,
       idleMin: 900, idleMax: 1200,
       idleThreshold: 4,
+      sleepStartHour: 2, sleepEndHour: 8,
     };
   }
 }
 
 /** 根据模式计算随机间隔（秒→毫秒） */
-function getRandomIntervalForMode(mode: 'active' | 'idle'): number {
-  const cfg = getMonitorConfig();
+function getRandomIntervalForMode(mode: 'active' | 'idle', platform?: string): number {
+  const cfg = getMonitorConfig(platform);
   const min = mode === 'active' ? cfg.activeMin : cfg.idleMin;
   const max = mode === 'active' ? cfg.activeMax : cfg.idleMax;
   const seconds = Math.floor(Math.random() * (max - min + 1)) + min;
@@ -1791,7 +1802,7 @@ function scheduleNext(windowId: string, platform: string, forceInterval?: number
   }
 
   st.lastRunAt = Date.now();
-  const nextInterval = forceInterval ?? getRandomIntervalForMode(st.mode);
+  const nextInterval = forceInterval ?? getRandomIntervalForMode(st.mode, platform);
   st.intervalMs = nextInterval;
   st.nextRunAt = Date.now() + nextInterval;
   st.timer = setTimeout(() => runOneSchedule(windowId, platform), nextInterval);
