@@ -286,7 +286,7 @@ export class XiaohongshuCrawler {
     return url.includes('creator.xiaohongshu.com') && (url.includes('/note') || url.includes('/publish') || url.includes('/content'));
   }
 
-  private async navigateToNoteManage(page: Page): Promise<void> {
+  async navigateToNoteManage(page: Page): Promise<void> {
     logger.info({ currentMenuSection: this.currentMenuSection, url: page.url() }, '[XHS-nav-note] Starting navigation to note management');
 
     await HumanActions.thinkingPause(page, 800, 2000);

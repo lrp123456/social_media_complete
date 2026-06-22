@@ -2122,6 +2122,11 @@ export async function executeReplyAction(
         await xhs.navigateToCreatorHome(page);
       }
 
+      // 确保在笔记管理页（笔记卡片选择器只在此页生效）
+      if (!page.url().includes('note-manager')) {
+        await xhs.navigateToNoteManage(page);
+      }
+
       if (executionId) await updatePhase(executionId, 2, '导航', 20, '已定位到笔记管理');
 
       // 通过点击缩略图进入笔记详情页
