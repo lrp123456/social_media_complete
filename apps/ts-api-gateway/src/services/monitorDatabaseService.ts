@@ -288,7 +288,7 @@ export async function upsertLightModeComment(
   videoId: string,
   info: { text: string; create_time: number },
 ): Promise<void> {
-  const cid = `light_${videoId}_${info.create_time}`;
+  const cid = `light_${videoId}`;
   await prisma.comment.upsert({
     where: { cid },
     update: { text: info.text },
