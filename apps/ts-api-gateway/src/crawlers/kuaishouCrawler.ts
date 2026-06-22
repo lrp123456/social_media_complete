@@ -224,13 +224,35 @@ export class KuaishouCrawler {
     }
 
     const { botManager } = await import('../services/wechatBotService');
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
     if (!user?.wechatUserid) {
       logger.error({ userId }, '[Login] No WeChat Work user ID found');
       return false;
     }
 
-    await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+    // 优先使用 LoginTabRegistry
+    const ksWindowId = user.fingerprintWindowId ? String(user.fingerprintWindowId) : '';
+    const { loginTabRegistry: ksRegistry, getLoginFlowConfig: ksGetConfig } = await import('../services/loginFlowHelpers');
+    const { getBrowserManager: ksGetBM } = await import('../lib/browserManager');
+    const ksConfig = ksGetConfig('kuaishou', 'creator');
+    let ksLoginTabUsed = false;
+    if (ksConfig && ksWindowId) {
+      const ksBm = ksGetBM();
+      const ksBrowser = await ksBm.getBrowser(ksWindowId);
+      if (ksBrowser) {
+        const ksRecord = await ksRegistry.openLoginTab(ksWindowId, userId, 'creator', ksBrowser, ksConfig);
+        if (ksRecord) {
+          const ksQrBuf = await ksRegistry.captureQR(ksRecord.page, ksConfig);
+          if (ksQrBuf) {
+            await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf);
+            ksLoginTabUsed = true;
+          }
+        }
+      }
+    }
+    if (!ksLoginTabUsed) {
+      await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+    }
     onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: '已发送二维码到企业微信，请扫码登录' });
 
     const maxWait = 300_000;
@@ -261,7 +283,21 @@ export class KuaishouCrawler {
           await refreshBtn.first.click().catch(() => {});
           await HumanActions.wait(page, 1000, 2000);
         }
-        await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+        if (ksLoginTabUsed && ksConfig && ksWindowId) {
+          const ksBm2 = ksGetBM();
+          const ksBrowser2 = await ksBm2.getBrowser(ksWindowId);
+          if (ksBrowser2) {
+            const ksRecord2 = await ksRegistry.find(ksWindowId, 'creator', ksBrowser2, ksConfig.domain);
+            if (ksRecord2) {
+              const ksQrBuf2 = await ksRegistry.captureQR(ksRecord2.page, ksConfig);
+              if (ksQrBuf2) {
+                await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf2);
+              }
+            }
+          }
+        } else {
+          await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
+        }
         onProgress?.({ phase: '登录', step: '二维码已刷新', percent: 8, detail: `二维码已过期，已重新发送（${qrRefreshCount}/${maxQrRefreshes}）` });
       }
     }
