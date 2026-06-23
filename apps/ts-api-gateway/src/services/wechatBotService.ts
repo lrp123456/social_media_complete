@@ -52,6 +52,13 @@ class WeChatBotManager {
     videoIds: string[];
     timestamp: number;
   }>();
+  private pendingAIGenerations = new Map<string, {
+    commentCid: string;
+    platform: string;
+    userid: string;
+    startTime: number;
+    timeout: NodeJS.Timeout;
+  }>();
   private pendingVerifyCodes = new Map<string, {
     userId: number;
     platform: string;
@@ -177,6 +184,12 @@ class WeChatBotManager {
       logger.warn(`链接请求 ${code} 已取消（机器人断开）`);
     }
     this.pendingLinks.clear();
+
+    for (const [commentCid, pending] of this.pendingAIGenerations) {
+      clearTimeout(pending.timeout);
+      logger.warn(`AI 生成任务 ${commentCid} 已取消（机器人断开）`);
+    }
+    this.pendingAIGenerations.clear();
 
     this.status.connected = false;
     this.status.botId = '';
@@ -339,6 +352,42 @@ class WeChatBotManager {
     const existing = this.pendingReplies.get(commentCid);
     if (existing) clearTimeout(existing.timeout);
     this.pendingReplies.delete(commentCid);
+  }
+
+  /** 检查是否正在生成 AI 回复 */
+  isGeneratingAI(commentCid: string): boolean {
+    return this.pendingAIGenerations.has(commentCid);
+  }
+
+  /** 设置 AI 生成状态 */
+  setPendingAIGeneration(commentCid: string, context: { platform: string; userid: string }, timeoutMs = 300_000): void {
+    const existing = this.pendingAIGenerations.get(commentCid);
+    if (existing) {
+      clearTimeout(existing.timeout);
+    }
+
+    const timeout = setTimeout(() => {
+      this.pendingAIGenerations.delete(commentCid);
+      logger.info({ commentCid }, 'AI 生成超时，已清除');
+    }, timeoutMs);
+
+    this.pendingAIGenerations.set(commentCid, {
+      commentCid,
+      platform: context.platform,
+      userid: context.userid,
+      startTime: Date.now(),
+      timeout,
+    });
+    logger.info({ commentCid, ...context }, '已设置 AI 生成状态');
+  }
+
+  /** 清除 AI 生成状态 */
+  clearPendingAIGeneration(commentCid: string): void {
+    const existing = this.pendingAIGenerations.get(commentCid);
+    if (existing) {
+      clearTimeout(existing.timeout);
+    }
+    this.pendingAIGenerations.delete(commentCid);
   }
 
   setPendingVerify(userid: string, userId: number, platform: string, windowId: string, timeoutMs = 300_000): void {
