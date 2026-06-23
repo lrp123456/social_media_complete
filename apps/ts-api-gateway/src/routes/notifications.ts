@@ -5,6 +5,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { getSection, saveSection } from '../lib/settingsStore';
 
 const router = Router();
 const logger = createLogger('routes:notifications');
@@ -44,7 +45,7 @@ let channels: NotificationChannel[] = [
     name: '企业微信通知',
     type: 'wechat_work',
     enabled: true,
-    config: { webhookUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx' },
+    config: { webhookUrl: process.env.WECOM_WEBHOOK_URL || 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx' },
     testStatus: 'ok',
   },
   {
@@ -221,15 +222,14 @@ interface WecomConfig {
   account_chat_mapping: Record<string, string>;
 }
 
-const wecomState: WecomConfig = {
-  bot_id: 'ww123456789',
-  bot_secret: 'secret_xxxxxx',
-  global_chat_id: 'chat_ops_central',
-  account_chat_mapping: {
-    WIN_A892: 'chat_sales_team',
-    WIN_B104: 'chat_design_group',
-  },
+const wecomDefaults: WecomConfig = {
+  bot_id: process.env.WECOM_BOT_ID || '',
+  bot_secret: process.env.WECOM_BOT_SECRET || '',
+  global_chat_id: '',
+  account_chat_mapping: {},
 };
+
+const wecomState: WecomConfig = getSection('wecom', wecomDefaults);
 
 const wecomRouter = (() => {
   const r = Router();
@@ -240,11 +240,11 @@ const wecomRouter = (() => {
       success: true,
       data: {
         bot_id: wecomState.bot_id,
-        bot_secret: wecomState.bot_secret.slice(0, 6) + '...',
+        bot_secret: wecomState.bot_secret ? wecomState.bot_secret.slice(0, 6) + '...' : '',
         global_chat_id: wecomState.global_chat_id,
         account_chat_mapping: wecomState.account_chat_mapping,
       },
-      meta: { carrier: 'PostgreSQL config_entries', strategy: 'hot' },
+      meta: { carrier: 'data/settings-overrides.json', strategy: 'hot' },
     });
   });
 
@@ -257,9 +257,15 @@ const wecomRouter = (() => {
     if (account_chat_mapping && typeof account_chat_mapping === 'object') {
       wecomState.account_chat_mapping = account_chat_mapping;
     }
+    saveSection('wecom', {
+      bot_id: wecomState.bot_id,
+      bot_secret: wecomState.bot_secret,
+      global_chat_id: wecomState.global_chat_id,
+      account_chat_mapping: wecomState.account_chat_mapping,
+    });
     res.json({
       success: true,
-      data: { ...wecomState, bot_secret: wecomState.bot_secret.slice(0, 6) + '...' },
+      data: { ...wecomState, bot_secret: wecomState.bot_secret ? wecomState.bot_secret.slice(0, 6) + '...' : '' },
       message: '企业微信通知路由已热重载',
     });
   });

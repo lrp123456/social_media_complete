@@ -38,7 +38,7 @@ const INFRA: Record<string, string | number> = {
   REDIS_HOST: process.env.REDIS_HOST || '127.0.0.1',
   REDIS_PORT: parseInt(process.env.REDIS_PORT || '6379'),
   REDIS_PASSWORD: process.env.REDIS_PASSWORD || '',
-  LITELLM_MASTER_KEY: process.env.LITELLM_MASTER_KEY || '',
+  LITELLM_MASTER_KEY: process.env.LITELLM_MASTER_KEY || process.env.LITELLM_API_KEY || '',
   LITELLM_BASE_URL: process.env.LITELLM_BASE_URL || 'http://127.0.0.1:4000/v1',
   WEB_PORT: parseInt(process.env.WEB_PORT || '3000'),
   DATA_DIR: process.env.DATA_DIR || './data',
@@ -46,11 +46,17 @@ const INFRA: Record<string, string | number> = {
   // 指纹浏览器 API 地址
   ROXY_BROWSER_URL: process.env.ROXY_BROWSER_URL || 'http://localhost:54345',
   BIT_BROWSER_URL: process.env.BIT_BROWSER_URL || 'http://localhost:54346',
+  ROXY_BROWSER_KEY: process.env.ROXY_BROWSER_KEY || '',
 };
 
 /** GET /api/v1/config-infra */
 router.get('/', (_req: Request, res: Response) => {
-  res.json({ success: true, data: INFRA, meta: { carrier: 'data/infra-overrides.json → Docker env', strategy: 'restart' } });
+  // 敏感字段脱敏
+  const masked = {
+    ...INFRA,
+    ROXY_BROWSER_KEY: INFRA.ROXY_BROWSER_KEY ? String(INFRA.ROXY_BROWSER_KEY).slice(0, 6) + '...' : '',
+  };
+  res.json({ success: true, data: masked, meta: { carrier: 'data/infra-overrides.json → Docker env', strategy: 'restart' } });
 });
 
 /** PUT /api/v1/config-infra */
