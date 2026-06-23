@@ -87,7 +87,15 @@ function truncateUtf8(text: string, maxBytes: number): string {
 }
 
 /** 格式化评论树（⭐ 标记新增，📷 标记图片评论） */
-function formatCommentTree(group: CommentNotificationData['commentGroups'][number]): string {
+function formatCommentTree(group: CommentNotificationData['commentGroups'][number], isSimpleMode: boolean): string {
+  if (isSimpleMode) {
+    // 简单模式：仅根评论，无子回复
+    const rootTime = formatRelativeTime(group.rootComment.createTime);
+    const rootTimeStr = rootTime ? ` (${rootTime})` : '';
+    const rootImg = group.rootComment.imageUrls?.length ? ' 📷' : '';
+    return `${group.rootComment.userNickname}: ${group.rootComment.text}${rootImg}${rootTimeStr}`;
+  }
+
   const newMarker = (cid: string): string => group.newCids.has(cid) ? '⭐ ' : '  ';
   const lines: string[] = [];
 
@@ -173,12 +181,14 @@ export async function sendMonitorNotification(
     }
 
     const pinfo = getPlatformInfo(platform);
+    const crawlConfig = await getCrawlConfig(platform);
+    const isSimpleMode = crawlConfig.mode === 'simple';
 
     for (const group of data.commentGroups) {
       const newCount = group.newCids.size;
 
       // 格式化评论树
-      const commentTree = formatCommentTree(group);
+      const commentTree = formatCommentTree(group, isSimpleMode);
       const truncated = truncateUtf8(commentTree, 3500);
 
       // 视频描述截断
@@ -186,18 +196,23 @@ export async function sendMonitorNotification(
       const videoShort = group.description.slice(0, 25);
 
       // 评论摘要行（展示新评论简要信息）
-      const newCommentNames = group.subReplies
-        .filter(s => group.newCids.has(s.cid))
-        .map(s => s.userNickname)
-        .slice(0, 3);
-      const rootIsNew = group.newCids.has(group.rootComment.cid);
-      const summaryParts: string[] = [];
-      if (rootIsNew) summaryParts.push(group.rootComment.userNickname);
-      summaryParts.push(...newCommentNames.slice(0, rootIsNew ? 2 : 3));
-      const peopleStr = summaryParts.join('、');
-      const subTitleText = peopleStr
-        ? `${peopleStr} 等发表了新评论（⭐=新增）`
-        : `评论树中有 ${newCount} 条新增评论（⭐标记）`;
+      let subTitleText: string;
+      if (isSimpleMode) {
+        subTitleText = `${group.rootComment.userNickname} 发表了新评论`;
+      } else {
+        const newCommentNames = group.subReplies
+          .filter(s => group.newCids.has(s.cid))
+          .map(s => s.userNickname)
+          .slice(0, 3);
+        const rootIsNew = group.newCids.has(group.rootComment.cid);
+        const summaryParts: string[] = [];
+        if (rootIsNew) summaryParts.push(group.rootComment.userNickname);
+        summaryParts.push(...newCommentNames.slice(0, rootIsNew ? 2 : 3));
+        const peopleStr = summaryParts.join('、');
+        subTitleText = peopleStr
+          ? `${peopleStr} 等发表了新评论（⭐=新增）`
+          : `评论树中有 ${newCount} 条新增评论（⭐标记）`;
+      }
 
       const card = {
         card_type: 'text_notice' as const,
@@ -208,7 +223,7 @@ export async function sendMonitorNotification(
         },
         main_title: {
           title: `「${videoTitle}」`,
-          desc: `${pinfo.label} · ${newCount} 条新评论`,
+          desc: `${pinfo.label} · ${newCount} 条新评论${isSimpleMode ? '（简单模式）' : ''}`,
         },
         emphasis_content: {
           title: String(newCount),
@@ -223,7 +238,7 @@ export async function sendMonitorNotification(
         ],
         quote_area: {
           type: 0,
-          title: '💬 评论树（⭐=新增）',
+          title: isSimpleMode ? '💬 新评论' : '💬 评论树（⭐=新增）',
           quote_text: truncated,
         },
         jump_list: [
