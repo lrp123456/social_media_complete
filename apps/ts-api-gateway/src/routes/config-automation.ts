@@ -706,4 +706,27 @@ router.get('/selectors/effectiveness', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * 从数据库读取平台采集配置
+ */
+export async function getCrawlConfig(platform: string): Promise<{
+  mode: 'simple' | 'deep';
+  maxRootComments: number;
+  enabled: boolean;
+}> {
+  const { prisma } = await import('../lib/prisma');
+  
+  const setting = await (prisma.crawlSetting.findUnique({
+    where: { platform },
+  }) as any).catch(() => null);
+
+  const config = setting?.config || {};
+  
+  return {
+    mode: (setting?.mode as 'simple' | 'deep') || 'simple',
+    maxRootComments: config.max_root_comments || 30,
+    enabled: setting?.enabled ?? true,
+  };
+}
+
 export default router;
