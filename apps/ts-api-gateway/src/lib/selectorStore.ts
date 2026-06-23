@@ -73,6 +73,7 @@ const FALLBACK_CONFIG: SelectorConfig = {
 const DATA_DIR = resolve(process.cwd(), 'data');
 const SELECTOR_FILE = resolve(DATA_DIR, 'selectors.json');
 const SCHEMA_FILE = resolve(DATA_DIR, 'selectors.schema.json');
+const BUNDLED_SELECTOR_FILE = '/app/bundled-selectors.json';
 
 let instance: SelectorReader | null = null;
 
@@ -377,6 +378,46 @@ function loadFromDisk(): SelectorConfig {
 
       logger.info({ platform, name, pattern: patterns[0] }, 'Auto-migrated urlMonitor to apiPattern');
     }
+  }
+
+  // --- Deep-merge bundled selectors into runtime config ---
+  try {
+    const bundledRaw = readFileSync(BUNDLED_SELECTOR_FILE, 'utf-8');
+    const bundledConfig: SelectorConfig = JSON.parse(bundledRaw);
+    let addedCount = 0;
+    let skippedCount = 0;
+
+    for (const [platform, platformData] of Object.entries(bundledConfig)) {
+      if (typeof platformData !== 'object' || platformData === null) continue;
+      if (!(config as any)[platform]) (config as any)[platform] = {};
+
+      for (const [category, categoryData] of Object.entries(platformData as Record<string, any>)) {
+        if (typeof categoryData !== 'object' || categoryData === null) continue;
+        if (!(config as any)[platform][category]) (config as any)[platform][category] = {};
+
+        for (const [key, value] of Object.entries(categoryData)) {
+          if ((config as any)[platform][category][key]) {
+            skippedCount++;
+          } else {
+            (config as any)[platform][category][key] = value;
+            addedCount++;
+          }
+        }
+      }
+    }
+
+    if (addedCount > 0) {
+      logger.info({ addedCount, skippedCount }, 'Selector sync: merged bundled selectors into runtime');
+      try {
+        writeFileSync(SELECTOR_FILE, JSON.stringify(config, null, 2), 'utf-8');
+      } catch (writeErr) {
+        logger.warn({ error: writeErr }, 'Selector sync: failed to save merged config');
+      }
+    } else {
+      logger.debug({ skippedCount }, 'Selector sync: no new selectors to add');
+    }
+  } catch (bundledErr) {
+    logger.debug({ error: (bundledErr as Error).message }, 'Selector sync: bundled file not found, skipping merge');
   }
 
   return config;

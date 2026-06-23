@@ -10,6 +10,7 @@ WORKDIR /app
 COPY prisma/ prisma/
 COPY packages/ packages/
 COPY apps/ts-api-gateway/ apps/ts-api-gateway/
+COPY apps/ts-api-gateway/data/selectors.json /app/bundled-selectors.json
 
 # 安装 workspace 包的依赖
 # 使用 --omit=dev 跳过 devDependencies（prisma CLI、typescript），避免 dev 树中
