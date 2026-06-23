@@ -40,9 +40,22 @@ loadFromDisk():
   6. 记录日志：新增 N 个选择器，跳过 M 个用户自定义
 ```
 
-**bundled 路径定位：** `selectorStore.ts` 中新增 `BUNDLED_SELECTOR_FILE` 常量，指向 `path.resolve(__dirname, '../data/selectors.json')`（Docker 镜像中被打包的文件）。
+**bundled 路径定位（关键）：** Docker volume 挂载在 `/app/apps/ts-api-gateway/data`，会覆盖镜像中同路径的文件。因此需要在 Dockerfile 中将打包的 `selectors.json` 复制到一个**不被 volume 覆盖**的路径：
+
+```dockerfile
+# Dockerfile — 在 COPY 之后新增
+COPY apps/ts-api-gateway/data/selectors.json /app/bundled-selectors.json
+```
+
+`selectorStore.ts` 中新增常量：
+```typescript
+const BUNDLED_SELECTOR_FILE = '/app/bundled-selectors.json';
+```
+
+在非 Docker 环境（本地开发），该文件可能不存在，此时跳过 merge，直接使用 runtime 文件或 FALLBACK_CONFIG。
 
 **影响范围：**
+- `apps/ts-api-gateway/Dockerfile` — 新增 `COPY` 指令
 - `apps/ts-api-gateway/src/lib/selectorStore.ts` — `loadFromDisk()` 函数
 - 所有平台的选择器在运行时可通过前端 `/api/v1/config-automation/selectors` API 查看和管理
 
@@ -68,17 +81,23 @@ update: { commentCount: v.comment_count ?? undefined, ... }
 
 `update` 路径中，如果 API 未返回 `comment_count`（`undefined`），Prisma 会跳过该字段不更新。如果 API 返回了新值，则更新。
 
-#### 2.2 各 crawler Phase 3 改动
+#### 2.2 Phase 3 commentCount 调用处理
 
-| 文件 | 行号 | 移除的调用 |
-|------|------|-----------|
-| `xiaohongshuCrawler.ts` | ~1152 | `db.updateVideoCommentCount(userId, exportId, comments.length)` |
-| `tencentCrawler.ts` | ~1475 | `db.updateVideoCommentCount(userId, exportId, dbCommentsArray.length)` |
-| `douyinCrawler.ts` | ~2000, ~2283 | `db.updateCommentCount(item.awemeId, item.newCount)` |
-| `kuaishouCrawler.ts` | ~1794 | `db.updateCommentCount(item.awemeId, item.newCount)` |
-| `monitorService.ts` | ~1100, ~1264 (simple mode) | `db.updateCommentCount(q.awemeId, q.newCount)` |
+**策略：保留所有 Phase 3 中的 `updateCommentCount` / `updateVideoCommentCount` 调用，不做移除。**
 
-**注意：** `updateCommentCount` 和 `updateVideoCommentCount` 函数本身保留（可能有其他调用方），仅移除 Phase 3 中的调用。
+理由：Phase 1 的 `reconcileVideosForUser` 改动已经确保 `commentCount` 在 Phase 1 就存入 API 真实值。Phase 3 中这些调用要么写入相同的 API 值（douyin/kuaishou 用 `item.newCount`），要么写入采集数（XHS/tencent）——但由于 Phase 1 已经先写入了 API 值，Phase 3 的写入如果用不同的值会覆盖正确值。
+
+因此，需要将 XHS 和腾讯 Phase 3 中的 commentCount 写入值也改为 API 值（与 Phase 1 一致），而非移除调用：
+
+| 文件 | 行号 | 当前写入值 | 改为 |
+|------|------|-----------|------|
+| `xiaohongshuCrawler.ts` | ~1152 | `comments.length`（采集数） | `item.newCount`（API 值，从 commentsQueue 传入） |
+| `tencentCrawler.ts` | ~1475 | `dbCommentsArray.length`（采集数） | `item.newCount`（API 值，从 commentsQueue 传入） |
+| `douyinCrawler.ts` | ~2000, ~2283 | `item.newCount`（已是 API 值） | 不变 |
+| `kuaishouCrawler.ts` | ~1794 | `item.newCount`（已是 API 值） | 不变 |
+| `monitorService.ts` | 所有 simple/light 模式调用 | `q.newCount` / `u.newCount`（已是 API 值） | 不变 |
+
+这样所有 Phase 3 调用统一写入 API 值，与 Phase 1 一致。即使 Phase 3 先于 Phase 1 写入（理论上不会），值也是相同的。
 
 #### 2.3 腾讯 commentCount 来源
 
@@ -106,20 +125,27 @@ clickThumbnailAndWaitNewTab(page, noteId, timeout):
   3. 等待卡片元素（waitForSelector 10s）
      - 如果失败 → 用 page.evaluate 遍历所有 .note-card，
        检查 data-impression 属性是否包含 noteId（JS 字符串匹配，不受 HTML 转义影响）
-  4. 在卡片内查找 cover 元素，找到则点击 cover，否则点击卡片
-  5. Promise.all 监听新标签页（waitForEvent('page')）
-  6. 如果新标签页未在 timeout 内打开：
-     - 降级：page.context().newPage() 直接导航到
-       https://www.xiaohongshu.com/explore/{noteId}
-     - 记录 warn 日志
-  7. 新标签页 waitForLoadState('domcontentloaded')
-  8. 返回 Page（成功）或 null（完全失败）
+   4. 在卡片内查找 cover 元素，找到则点击 cover，否则点击卡片
+   5. **顺序式**监听新标签页（非 Promise.all）：
+      - 先注册 `page.context().waitForEvent('page', { timeout })` 
+      - 然后执行点击
+      - 如果 `waitForEvent` 在 timeout 内 resolve → 返回新标签页
+      - 如果 `waitForEvent` reject（超时）→ 进入步骤 6 降级
+      - 注意：避免 Promise.all 嵌套，防止点击失败和标签页打开的竞态条件
+   6. 如果新标签页未在 timeout 内打开：
+      - 降级：page.context().newPage() 直接导航到
+        https://www.xiaohongshu.com/explore/{noteId}
+      - 记录 warn 日志
+   7. 新标签页 waitForLoadState('domcontentloaded')
+   8. 返回 Page（成功）或 null（完全失败）
 ```
 
 **关键改进：**
 - 每步记录诊断日志
 - `page.evaluate` JS 匹配作为 CSS 选择器的降级
 - URL 直接导航作为点击失败的降级
+- **顺序式**点击→等标签页，避免 Promise.all 竞态（Oracle Finding 6）
+- 硬编码降级选择器需与 `selectors.json` 保持同步，添加注释提醒
 
 ### 4. 腾讯根评论分页修复（`tencentCrawler.ts`）
 
@@ -137,32 +163,59 @@ clickThumbnailAndWaitNewTab(page, noteId, timeout):
 
 **方案：**
 
-修改 `collectVideoComments` 中的滚动调用（影响行：1297, 1323, 1332, 2426, 2449, 2459）：
+修改 `collectVideoComments` 及相关方法中的滚动调用。
 
-```
-滚动目标优先级：
-  1. .scroll-list__wrp .scroll-list    ← 内层无限滚动容器
-  2. .scroll-list__wrp                  ← 中间层
-  3. .feed-comment__wrp                 ← 外层（当前）
-```
+**关键约束：** 腾讯页面使用 wujie 微前端，`.scroll-list__wrp .scroll-list` 在 shadow DOM 内。`page.locator()` 无法穿透 shadow DOM，必须用 `page.evaluate` + `shadowRoot.querySelector` 检测容器是否存在。
 
-新增辅助函数 `getScrollTarget(page)`:
+**实现方式：** 将滚动目标优先级逻辑直接集成到 `scrollShadowContainer` 方法内部，而非新增 `getScrollTarget`。修改 `scrollShadowContainer` 接受 `null` 作为 `containerSelector`，当为 `null` 时按优先级链查找：
+
 ```typescript
-private async getScrollTarget(page: Page): Promise<string> {
-  for (const sel of ['.scroll-list__wrp .scroll-list', '.scroll-list__wrp', '.feed-comment__wrp']) {
-    const exists = await page.locator(sel).count().catch(() => 0);
-    if (exists > 0) return sel;
-  }
-  return '.feed-comment__wrp';
+// scrollShadowContainer 内部修改：
+// 如果 containerSelector 为 null，按优先级查找
+const SCROLL_PRIORITY = [
+  '.scroll-list__wrp .scroll-list',
+  '.scroll-list__wrp',
+  '.feed-comment__wrp',
+];
+
+if (!containerSelector) {
+  const found = await page.evaluate((selectors: string[]) => {
+    const wujieApps = document.querySelectorAll('wujie-app');
+    for (const app of Array.from(wujieApps)) {
+      const sr = (app as HTMLElement).shadowRoot;
+      if (!sr) continue;
+      for (const sel of selectors) {
+        if (sr.querySelector(sel)) return sel;
+      }
+    }
+    // 主文档降级
+    for (const sel of selectors) {
+      if (document.querySelector(sel)) return sel;
+    }
+    return selectors[selectors.length - 1]; // 兜底
+  }, SCROLL_PRIORITY);
+  containerSelector = found;
 }
 ```
 
-在每次滚动循环开始时调用一次（缓存结果），替换所有 `scrollShadowContainer(page, '.feed-comment__wrp', ...)` 为 `scrollShadowContainer(page, scrollTarget, ...)`。
+**影响范围（所有 `.feed-comment__wrp` 滚动调用点）：**
 
-**退出逻辑不变：**
+| 方法 | 行号 | 当前选择器 | 改为 |
+|------|------|-----------|------|
+| `collectVideoComments` | 1297 | `'.feed-comment__wrp'` | `null`（优先级查找） |
+| `collectVideoComments` | 1323 | `'.feed-comment__wrp'` | `null` |
+| `collectVideoComments` | 1332 | `'.feed-comment__wrp'` | `null` |
+| `scrollCommentArea` | 1719, 1723 | `'.feed-comment__wrp'` | `null` |
+| `scrollRootCommentIntoView` | 2426 | `'.feed-comment__wrp'` | `null` |
+| `expandSubRepliesForReply` | 2449, 2459 | `'.feed-comment__wrp'` | `null` |
+
+`scrollShadowContainer` 内部缓存本次调用的查找结果（实例变量），避免每次滚动都重新 evaluate。
+
+**退出逻辑改进：**
 - `downContinueFlag === 0` 且有评论 → 退出
 - 连续 3 次滚动无新评论 → 退出
 - `downContinueFlag === 1` 但连续 2 次无新数据 → 加大滚动幅度（600px），再 1 次仍无效 → 退出
+- **修复 `dataExhausted` 提前退出竞态：** `dataExhausted` 仅在当前迭代没有新 API 响应时才触发退出。如果本次滚动产生了新响应（即使之前的响应 `downContinueFlag=0`），不退出，继续处理新数据。
 
 **新增日志：** 每次滚动后记录 `scrollTarget`、`downContinueFlag`、`rootCount`。
 
