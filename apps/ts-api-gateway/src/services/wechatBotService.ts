@@ -517,7 +517,7 @@ class WeChatBotManager {
           { type: 3, title: '🔄 强制刷新登录页', question: `强制刷新 ${userId} ${platform} ${fid}` },
           { type: 3, title: '♻️ F5刷新QR码', question: `F5刷新 ${userId} ${platform} ${fid}` },
         ],
-        card_action: { type: 1, url: 'https://work.weixin.qq.com' },
+        card_action: imageUrl ? { type: 1, url: imageUrl } : { type: 0 },
       };
 
       if (imageUrl) {
