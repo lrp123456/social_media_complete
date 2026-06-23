@@ -1,7 +1,7 @@
 # Per-Window Queue 设计规格
 
 日期: 2026-06-23
-状态: 已批准
+状态: 已批准 (Oracle 复核通过)
 关联文件:
   - apps/ts-api-gateway/src/services/unifiedQueue.ts (PRIMARY)
   - apps/ts-api-gateway/src/lib/redlock.ts
@@ -10,6 +10,15 @@
   - apps/ts-api-gateway/src/services/wechatBotService.ts
   - apps/ts-api-gateway/src/services/publishService.ts
   - apps/ts-api-gateway/src/lib/taskExecutionRecorder.ts
+
+---
+
+## 0. 部署假设
+
+**单进程部署**：本设计假设 API Gateway 只运行一个 Node.js 进程。
+BullMQ `concurrency: 1` 只在单个 Worker 实例内保证串行。
+如果未来需要多进程水平扩展，BullMQ Pro 的 group 功能或继续使用
+Redlock `acquireWithBackoff` 模式是必要的。
 
 ---
 
@@ -88,19 +97,38 @@ export const platformWorker = new Worker<PlatformTask>(QUEUE_NAME, handler, { co
 ```
 const queues = new Map<string, Queue<PlatformTask>>();   // windowId → Queue
 const workers = new Map<string, Worker<PlatformTask>>();  // windowId → Worker
+const pendingQueues = new Map<string, Promise<Queue<PlatformTask>>>();  // 初始化锁
 
-export function getWindowQueue(windowId: string): Queue<PlatformTask> {
-  if (!queues.has(windowId)) {
-    const name = `platform:${windowId}`;
-    const q = new Queue<PlatformTask>(name, { connection, defaultJobOptions });
-    queues.set(windowId, q);
-    createWindowWorker(windowId, q);  // 懒创建 Worker
+export async function getWindowQueue(windowId: string): Promise<Queue<PlatformTask>> {
+  if (queues.has(windowId)) return queues.get(windowId)!;
+  if (!pendingQueues.has(windowId)) {
+    pendingQueues.set(windowId, (async () => {
+      const name = `platform:${windowId}`;
+      const q = new Queue<PlatformTask>(name, { connection, defaultJobOptions });
+      queues.set(windowId, q);
+      createWindowWorker(windowId, q);
+      pendingQueues.delete(windowId);
+      return q;
+    })());
   }
-  return queues.get(windowId)!;
+  return pendingQueues.get(windowId)!;
+}
+
+export async function destroyWindowQueue(windowId: string): Promise<void> {
+  const worker = workers.get(windowId);
+  if (worker) {
+    await worker.close();
+    workers.delete(windowId);
+  }
+  const q = queues.get(windowId);
+  if (q) {
+    await q.close();
+    queues.delete(windowId);
+  }
 }
 
 export function getAllWindowQueues(): Map<string, Queue<PlatformTask>> {
-  return new Map(queues);  // 返回副本
+  return queues;  // 直接返回引用（Node.js 单线程，Map 只增不删，迭代安全）
 }
 ```
 
@@ -144,16 +172,24 @@ Redis key 示例：
 
 ## 4. Worker 逻辑
 
+### 术语表
+
+- **BullMQ job lock**（`lockDuration: 30min`）：BullMQ 内部机制，防止同一 job 被两个 Worker 同时处理。
+  Worker 需要定期续约，否则 job 被判定为 stalled 并重新入队。
+- **WindowMutex / Redlock**（`TTL: 30s`）：应用层分布式锁，防止同一窗口的浏览器被并发操作。
+  在 per-window 队列设计中，BullMQ `concurrency: 1` 已保证串行，WindowMutex 变为安全网。
+- **tryAcquireOnce**：WindowMutex 的非阻塞方法，尝试一次获取锁，失败返回 null。
+
 ### createWindowWorker(windowId, queue)
 
 ```
-function createWindowWorker(windowId: string, queue: Queue<PlatformTask>) {
+function createWindowWorker(windowId: string, queue: Queue) {
   const worker = new Worker<PlatformTask>(queue.name, handler, {
     connection: getRedis() as any,
     concurrency: 1,              // 核心：每窗口只跑一个任务
     lockDuration: 30 * 60 * 1000, // 30min（浏览器操作慢）
     stalledInterval: 120_000,
-    limiter: { max: 10, duration: 60_000 },
+    // limiter 移除：concurrency=1 下每分钟最多完成 0.06-0.2 个 job，limiter 无意义
   });
 
   // 事件监听
@@ -215,12 +251,11 @@ static async tryAcquireOnce(windowId: string, owner: LockOwner): Promise<MutexHa
   try {
     const lock = await WindowMutex.tryAcquire(windowId);
     await WindowMutex.writeOwnerHash(windowId, owner);
-    const abortController = new AbortController();
     // 不启动心跳续约 — 单次锁，TTL=30s 自动过期
     let released = false;
     const handle: MutexHandle = {
       windowId, owner,
-      signal: abortController.signal,
+      signal: AbortSignal.abort(),  // signal 永远不会触发（无心跳），传一个已中止的 signal 满足接口
       acquiredAt: Date.now(),
       async release() {
         if (released) return;
@@ -424,6 +459,30 @@ for (const [windowId, q] of allQueues) {
 
 同 cancel-all 模式，遍历所有窗口队列取消任务。
 
+### 新增：findJobByTaskId — 跨窗口查询辅助函数
+
+用于 `batch-status` 等需要按 taskId 查找 job 的场景：
+
+```
+export async function findJobByTaskId(taskId: string): Promise<Job | null> {
+  for (const q of getAllWindowQueues().values()) {
+    const job = await q.getJob(taskId).catch(() => null);
+    if (job) return job;
+  }
+  return null;
+}
+```
+
+### 补充：其他使用 monitorQueue 的端点
+
+以下端点也直接使用 `monitorQueue`，需要一并改造：
+
+| 端点 | 当前用法 | 改造方式 |
+|------|---------|---------|
+| `GET /monitor/tasks/batch-status` | `monitorQueue.getJob(taskId)` | 改用 `findJobByTaskId(taskId)` |
+| `POST /monitor/accounts/:userId/trigger` | `monitorQueue.getJobs(...)` + `monitorQueue.add(...)` | 遍历窗口队列查询 + `enqueueMonitor()` |
+| `POST /monitor/trigger-all` | `monitorQueue.add(...)` | `enqueueMonitor()` |
+
 ### 改进：去掉手动 Redis key 操作
 
 当前 cancel/cancel-all 代码手动操作 `bull:platform:${jobId}` 等 Redis key。
@@ -515,7 +574,39 @@ worker.on('ready', async () => {
 
 ---
 
-## 10. BigInt 修复
+## 11. 边界情况处理
+
+### 窗口被删除
+
+调用 `destroyWindowQueue(windowId)` 关闭 Worker + Queue + Redis 连接。
+需要在窗口删除的 API 路由中调用此函数。
+
+### Server 重启后历史任务扫描
+
+`GET /queue/active` 和 `POST /monitor/active-tasks/cancel-all` 除了遍历 `getAllWindowQueues()` 外，
+还需要主动扫描可能遗漏的窗口（通过 `getAllActiveUsers()` 获取所有活跃窗口 ID，对未在 Map 中的
+窗口调用 `getWindowQueue()` 触发创建，然后查询其任务）。
+
+### Redis 连接数估算
+
+```
+100 Worker BRPOPLPUSH 连接
++ 100 Worker 事件连接（completed/failed 的 pub/sub）
++ ~20 共享连接（Queue 操作 + redlock + prisma 缓存）
+= ~220 连接（保守估计）
+```
+
+220 连接对于 Redis 通常不是问题（默认 maxclients=10000），
+但应在部署 checklist 中明确。
+
+### 回滚策略
+
+如果线上出问题，可通过环境变量 `SINGLE_QUEUE_MODE=true` 切回单队列模式。
+`getWindowQueue()` 在该模式下始终返回同一个全局队列（行为与改造前一致）。
+
+---
+
+## 12. BigInt 修复
 
 ### unifiedQueue.ts:277
 
@@ -537,18 +628,28 @@ Number(totalComments._sum.commentCount ?? 0)
 
 ---
 
-## 11. 变更影响总结
+## 13. 变更影响总结
 
 ### 修改文件清单
 
 | 文件 | 改动类型 | 说明 |
 |------|---------|------|
-| unifiedQueue.ts | 重写核心 | 单队列→per-window 队列 Map，懒创建 |
+| unifiedQueue.ts | 重写核心 | 单队列→per-window 队列 Map，Promise-based 懒创建 + destroyWindowQueue + findJobByTaskId |
 | redlock.ts | 新增方法 | `tryAcquireOnce()` 非阻塞获取锁 |
-| matrix.ts | API 改造 | 遍历所有窗口队列聚合状态 |
+| matrix.ts | API 改造 | 遍历所有窗口队列聚合状态 + findJobByTaskId + batch-status + trigger/trigger-all |
 | monitorService.ts | 调度器改造 | 查窗口队列做去重，删 monitorQueue re-export |
 | wechatBotService.ts | 收敛调用 | 3 处 platformQueue.add → enqueueMonitor() |
 | publishService.ts | 别名清理 | 删 publishQueue re-export |
+
+### 新增函数
+
+| 函数 | 文件 | 说明 |
+|------|------|------|
+| `getWindowQueue(windowId)` | unifiedQueue.ts | 获取/创建窗口队列（Promise-based，防竞态） |
+| `getAllWindowQueues()` | unifiedQueue.ts | 获取所有已创建的窗口队列 |
+| `destroyWindowQueue(windowId)` | unifiedQueue.ts | 关闭并销毁窗口队列+Worker |
+| `findJobByTaskId(taskId)` | unifiedQueue.ts | 跨窗口按 taskId 查找 job |
+| `tryAcquireOnce(windowId, owner)` | redlock.ts | 非阻塞获取锁，失败返回 null |
 
 ### 不变的部分
 
