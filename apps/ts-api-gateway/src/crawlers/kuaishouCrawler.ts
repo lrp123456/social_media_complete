@@ -230,42 +230,18 @@ export class KuaishouCrawler {
       return false;
     }
 
-    // 优先使用 LoginTabRegistry
-    const ksWindowId = user.fingerprintWindowId ? String(user.fingerprintWindowId) : '';
-    const { loginTabRegistry: ksRegistry, getLoginFlowConfig: ksGetConfig } = await import('../services/loginFlowHelpers');
-    const { getBrowserManager: ksGetBM } = await import('../lib/browserManager');
-    const ksConfig = ksGetConfig('kuaishou', 'creator');
-    let ksLoginTabUsed = false;
-    if (ksConfig && ksWindowId) {
-      const ksBm = ksGetBM();
-      const ksBrowser = await ksBm.getBrowser(ksWindowId);
-      if (ksBrowser) {
-        // 先查找已有登录标签页（避免重复创建）
-        let ksRecord = await ksRegistry.find(ksWindowId, 'creator', ksBrowser, ksConfig.domain);
-        if (!ksRecord) {
-          ksRecord = await ksRegistry.openLoginTab(ksWindowId, userId, 'creator', ksBrowser, ksConfig);
-        }
-        if (ksRecord) {
-          // 快手登录页可能需要点击"扫码登录"切换按钮才显示 QR
-          try {
-            const switchEl = await ksRecord.page.$('div.platform-switch');
-            if (switchEl) {
-              await switchEl.click();
-              await HumanActions.wait(ksRecord.page, 2000, 3000);
-              logger.info('[Login] Clicked platform switch on login tab');
-            }
-          } catch { /* switch may not be needed */ }
-          const ksQrBuf = await ksRegistry.captureQR(ksRecord.page, ksConfig);
-          if (ksQrBuf) {
-            await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf);
-            ksLoginTabUsed = true;
-            // 导航主页面回创作者首页，避免主页面停留在登录页（防止重复页面）
-            try { await page.goto('https://cp.kuaishou.com/article/publish/video', { waitUntil: 'domcontentloaded', timeout: 10000 }); } catch { /* ignore */ }
-          }
-        }
+    // 使用主页面直接截取 QR（captureQR 支持 iframe）
+    const { loginTabRegistry, getLoginFlowConfig } = await import('../services/loginFlowHelpers');
+    const ksConfig = getLoginFlowConfig('kuaishou', 'creator');
+    let qrSent = false;
+    if (ksConfig) {
+      const qrBuf = await loginTabRegistry.captureQR(page, ksConfig);
+      if (qrBuf) {
+        await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, qrBuf);
+        qrSent = true;
       }
     }
-    if (!ksLoginTabUsed) {
+    if (!qrSent) {
       await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
     }
     onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: '已发送二维码到企业微信，请扫码登录' });
@@ -298,17 +274,10 @@ export class KuaishouCrawler {
           await refreshBtn.first.click().catch(() => {});
           await HumanActions.wait(page, 1000, 2000);
         }
-        if (ksLoginTabUsed && ksConfig && ksWindowId) {
-          const ksBm2 = ksGetBM();
-          const ksBrowser2 = await ksBm2.getBrowser(ksWindowId);
-          if (ksBrowser2) {
-            const ksRecord2 = await ksRegistry.find(ksWindowId, 'creator', ksBrowser2, ksConfig.domain);
-            if (ksRecord2) {
-              const ksQrBuf2 = await ksRegistry.captureQR(ksRecord2.page, ksConfig);
-              if (ksQrBuf2) {
-                await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf2);
-              }
-            }
+        if (qrRefreshCount <= maxQrRefreshes && ksConfig) {
+          const ksQrBuf2 = await loginTabRegistry.captureQR(page, ksConfig);
+          if (ksQrBuf2) {
+            await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf2);
           }
         } else {
           await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);

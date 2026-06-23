@@ -414,7 +414,8 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
 
     // 0. 检查当前页面是否已被重定向到登录页（风控场景常见）
     const currentUrl = page.url();
-    if (currentUrl.includes(config.domain) || currentUrl.includes('login') || currentUrl.includes('passport')) {
+    const isOnLoginPage = currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl === config.loginUrl;
+    if (isOnLoginPage) {
       logger.info({ userId, platform, url: currentUrl }, `[${platform}] 当前页面已在登录域，直接用当前页截图`);
       const qrBuf = await loginTabRegistry.captureQR(page, config);
       if (qrBuf) {
@@ -427,24 +428,10 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
     }
 
     const windowId = String(user.fingerprintWindowId);
-    const { getBrowserManager } = await import('../lib/browserManager');
-    const bm = getBrowserManager();
-    const browser = await bm.getBrowser(windowId);
-    if (!browser) {
-      logger.warn({ userId, windowId }, `[${platform}] getBrowser 返回 null，使用 fallback`);
-      await captureAndSendQR(page, userId, platform, user.wechatUserid);
-      return;
-    }
-
-    // 1. 先查找已有登录标签页（同时清理孤儿页面）
-    let record = await loginTabRegistry.find(windowId, flowId, browser, config.domain);
-    // 2. 未找到则打开新登录标签页
+    const { ensureLoginTab } = await import('./loginFlowHelpers');
+    const record = await ensureLoginTab(windowId, userId, platform, flowId);
     if (!record) {
-      logger.info({ userId, platform, flowId }, `[${platform}] 未找到已有登录标签页，打开新标签页`);
-      record = await loginTabRegistry.openLoginTab(windowId, userId, flowId, browser, config);
-    }
-    if (!record) {
-      logger.warn({ userId, platform }, `[${platform}] openLoginTab 返回 null，使用 fallback`);
+      logger.warn({ userId, platform }, `[${platform}] ensureLoginTab 返回 null，使用 fallback`);
       await captureAndSendQR(page, userId, platform, user.wechatUserid);
       return;
     }

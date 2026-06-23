@@ -609,10 +609,8 @@ async function autoStartBot(): Promise<void> {
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           try {
-            let record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
-            if (!record) {
-              record = await loginTabRegistry.openLoginTab(windowId, targetUserId, targetFlowId, browser, config);
-            }
+            const { ensureLoginTab } = await import('./loginFlowHelpers');
+            const record = await ensureLoginTab(windowId, targetUserId, targetPlatform, targetFlowId);
             if (record) {
               await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
               await record.page.waitForTimeout(3000);
@@ -655,10 +653,8 @@ async function autoStartBot(): Promise<void> {
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           try {
-            let record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
-            if (!record) {
-              record = await loginTabRegistry.openLoginTab(windowId, targetUserId, targetFlowId, browser, config);
-            }
+            const { ensureLoginTab } = await import('./loginFlowHelpers');
+            const record = await ensureLoginTab(windowId, targetUserId, targetPlatform, targetFlowId);
             if (record) {
               // F5 刷新：不重新导航，只刷新当前页面
               await record.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
