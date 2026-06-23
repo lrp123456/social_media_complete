@@ -1149,7 +1149,7 @@ export class XiaohongshuCrawler {
           const rootCounts = [...subCountByRoot.entries()].map(([cid, count]) => ({ cid, replyCount: count }));
           await db.upsertRootCommentCounts(exportId, rootCounts);
           await db.deleteStaleRootCounts(exportId, [...rootCids].concat(rootCounts.map((r) => r.cid)));
-          await db.updateVideoCommentCount(userId, exportId, comments.length);
+          // commentCount 已在 Phase 1 由 reconcileVideosForUser 存储 API 真实值，此处不再覆盖
         }
 
         return { success: true, awemeId: exportId };

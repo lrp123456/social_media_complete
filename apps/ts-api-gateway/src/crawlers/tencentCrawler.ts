@@ -1472,7 +1472,7 @@ export class TencentCrawler {
 
     if (dbCommentsArray.length > 0) {
       await db.batchUpsertComments('tencent', dbCommentsArray, userId);
-      await db.updateVideoCommentCount(userId, exportId, dbCommentsArray.length);
+      // commentCount 已在 Phase 1 由 reconcileVideosForUser 存储 API 真实值，此处不再覆盖
     }
 
     const totalRootCount = allRootComments.size;
