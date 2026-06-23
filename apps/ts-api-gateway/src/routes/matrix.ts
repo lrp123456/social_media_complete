@@ -5,11 +5,12 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { getRedis } from '../lib/redis';
 import { submitPublishTask } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
-import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
-import { enqueueReply, getAllJobs, findJobByTaskId } from '../services/unifiedQueue';
+import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
+import { enqueueReply, enqueueMonitor, getAllJobs, findJobByTaskId, getWindowQueue, getAllWindowQueues } from '../services/unifiedQueue';
 
 const router = Router();
 const logger = createLogger('routes:matrix');
@@ -339,7 +340,7 @@ router.get('/monitor/tasks/batch-status', async (req: Request, res: Response) =>
     const results = await Promise.all(
       taskIds.map(async (taskId) => {
         try {
-          const job = await monitorQueue.getJob(taskId);
+          const job = await findJobByTaskId(taskId);
           const log = await prisma.operationLog.findFirst({
             where: { details: { contains: taskId } },
             orderBy: { createdAt: 'desc' },
@@ -410,9 +411,9 @@ router.get('/monitor/tasks/batch-status', async (req: Request, res: Response) =>
 router.get('/monitor/active-tasks', async (_req: Request, res: Response) => {
   try {
     const [active, waiting, delayed] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
-      monitorQueue.getJobs(['delayed']),
+      getAllJobs(['active']),
+      getAllJobs(['waiting']),
+      getAllJobs(['delayed']),
     ]);
 
     const allJobs = [...active, ...waiting, ...delayed];
@@ -474,9 +475,9 @@ router.post('/monitor/tasks/:taskId/cancel', async (req: Request, res: Response)
 
     // 查找任务 — 通过 data.taskId 查找
     const [active, waiting, delayed] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
-      monitorQueue.getJobs(['delayed']),
+      getAllJobs(['active']),
+      getAllJobs(['waiting']),
+      getAllJobs(['delayed']),
     ]);
 
     const allJobs = [...active, ...waiting, ...delayed];
@@ -501,7 +502,7 @@ router.post('/monitor/tasks/:taskId/cancel', async (req: Request, res: Response)
 
     // Step 2: 从 Redis 强制删除任务及其锁
     try {
-      const redis = monitorQueue.client;
+      const redis = getRedis();
       const queueName = 'platform';
 
       // 删除任务相关的所有 Redis key
@@ -562,13 +563,13 @@ router.post('/monitor/tasks/:taskId/cancel', async (req: Request, res: Response)
 router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Response) => {
   try {
     const [active, waiting, delayed] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
-      monitorQueue.getJobs(['delayed']),
+      getAllJobs(['active']),
+      getAllJobs(['waiting']),
+      getAllJobs(['delayed']),
     ]);
 
     const allJobs = [...active, ...waiting, ...delayed];
-    const redis = monitorQueue.client;
+    const redis = getRedis();
     const queueName = 'platform';
     let cancelled = 0;
 
@@ -1162,7 +1163,7 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     }
 
     // 去重：检查是否已有同用户的 active/waiting 任务
-    const existingJobs = await monitorQueue.getJobs(['active', 'waiting']);
+    const existingJobs = await getAllJobs(['active', 'waiting']);
     const hasExisting = existingJobs.some((j: any) => (j.data as any)?.userId === user.id);
     if (hasExisting) {
       return res.json({
@@ -1173,14 +1174,13 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     }
 
     // Add to BullMQ queue
-    const job = await (monitorQueue.add as any)('monitor', {
-      taskType: 'monitor',
+    const job = await enqueueMonitor({
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
       windowId: user.fingerprintWindowId,
       fingerprintWindowId: user.fingerprintWindowId,
-    }, { jobId: `manual_${Date.now()}_${user.id}` });
+    });
 
     // 重置该 (窗口, 平台) 的调度器倒计时
     resetSchedulerTimer(user.fingerprintWindowId, user.platform);
@@ -1238,17 +1238,12 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     const jobIds: string[] = [];
     for (const [, userGroup] of byWindow) {
       for (const user of userGroup) {
-        const job = await (monitorQueue.add as any)('monitor', {
-          taskType: 'monitor',
+        const job = await enqueueMonitor({
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,
           windowId: user.fingerprintWindowId,
           fingerprintWindowId: user.fingerprintWindowId,
-        }, {
-          // 同一窗口的任务使用相同的 group id，BullMQ 会保证它们串行执行
-          // 通过 opts.group.id 实现（需要 BullMQ Pro 或使用 job dependencies）
-          // 这里利用 WindowMutex 锁来保证串行
         });
         jobIds.push(job.id);
       }
@@ -1292,12 +1287,12 @@ router.post('/monitor/videos/clear', async (_req: Request, res: Response) => {
   try {
     // 1. 清空执行队列（取消所有 active/waiting/delayed 任务）
     const [active, waiting, delayed] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
-      monitorQueue.getJobs(['delayed']),
+      getAllJobs(['active']),
+      getAllJobs(['waiting']),
+      getAllJobs(['delayed']),
     ]);
     const allJobs = [...active, ...waiting, ...delayed];
-    const redis = monitorQueue.client;
+    const redis = getRedis();
     const queueName = 'platform';
     for (const job of allJobs) {
       try {
