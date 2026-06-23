@@ -9,7 +9,7 @@ import { WindowMutex } from '../lib/redlock';
 import { HumanActions, BrowserManager, ExitStrategy } from '@social-media/browser-core';
 import { getBrowserManager } from '../lib/browserManager';
 import {
-  monitorQueue,
+  getWindowQueue,
   enqueueMonitor,
   cancelledJobIds,
   markJobCancelled,
@@ -42,6 +42,7 @@ interface CommentNotificationData {
       text: string;
       userNickname: string;
       createTime?: number;
+      imageUrls?: string[];
     };
     subReplies: Array<{
       cid: string;
@@ -49,6 +50,7 @@ interface CommentNotificationData {
       userNickname: string;
       replyToName?: string;
       createTime?: number;
+      imageUrls?: string[];
     }>;
     newCids: Set<string>;
   }>;
@@ -83,7 +85,7 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return kept.join('\n');
 }
 
-/** 格式化评论树（⭐ 标记新增） */
+/** 格式化评论树（⭐ 标记新增，📷 标记图片评论） */
 function formatCommentTree(group: CommentNotificationData['commentGroups'][number]): string {
   const newMarker = (cid: string): string => group.newCids.has(cid) ? '⭐ ' : '  ';
   const lines: string[] = [];
@@ -91,7 +93,8 @@ function formatCommentTree(group: CommentNotificationData['commentGroups'][numbe
   // ── 根评论 ──
   const rootTime = formatRelativeTime(group.rootComment.createTime);
   const rootTimeStr = rootTime ? ` (${rootTime})` : '';
-  lines.push(`${newMarker(group.rootComment.cid)}${group.rootComment.userNickname}: ${group.rootComment.text}${rootTimeStr}`);
+  const rootImg = group.rootComment.imageUrls?.length ? ' 📷' : '';
+  lines.push(`${newMarker(group.rootComment.cid)}${group.rootComment.userNickname}: ${group.rootComment.text}${rootImg}${rootTimeStr}`);
 
   // ── 子回复（新增在前，已有在后） ──
   const sortedSubs = [...group.subReplies].sort((a, b) => {
@@ -104,7 +107,8 @@ function formatCommentTree(group: CommentNotificationData['commentGroups'][numbe
     const subTime = formatRelativeTime(sub.createTime);
     const subTimeStr = subTime ? ` (${subTime})` : '';
     const toName = sub.replyToName ? `回复 ${sub.replyToName}: ` : '';
-    lines.push(`${newMarker(sub.cid)}  └ ${sub.userNickname}: ${toName}${sub.text}${subTimeStr}`);
+    const imgFlag = sub.imageUrls?.length ? ' 📷' : '';
+    lines.push(`${newMarker(sub.cid)}  └ ${sub.userNickname}: ${toName}${sub.text}${imgFlag}${subTimeStr}`);
   }
 
   return lines.join('\n');
@@ -214,6 +218,7 @@ export async function sendMonitorNotification(
           { keyname: '平台', value: pinfo.label },
           { keyname: '视频', value: videoShort },
           { keyname: '总数', value: `${group.subReplies.length + 1} 条` },
+          ...(group.rootComment.imageUrls?.length ? [{ keyname: '图片', value: `📷 ${group.rootComment.imageUrls.length} 张` }] : []),
         ],
         quote_area: {
           type: 0,
@@ -308,6 +313,7 @@ export async function generateSuggestionsForNewComments(userId: number, platform
       platform,
       videoDescription: videoMap.get(c.videoId) || '',
       parentCommentText: c.level === 2 && c.parentId ? parentMap.get(c.parentId) : undefined,
+      imageUrls: c.imageUrls ? JSON.parse(c.imageUrls) as string[] : undefined,
     } as CommentContext,
   }));
 
@@ -877,10 +883,10 @@ const JOB_TIMEOUT_MS = 10 * 60 * 1000;
 
 // ============================================================
 // 向后兼容：从 unifiedQueue 导入并重新导出
-// cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob, monitorQueue
+// cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob
 // ============================================================
 
-export { cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob, monitorQueue };
+export { cancelledJobIds, markJobCancelled, isJobCancelled, cleanupCancelledJob };
 
 // ============================================================
 // 核心爬取逻辑 — 3阶段流水线 (Phase 1 → Phase 2 → Phase 3)
@@ -995,6 +1001,23 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     const riskType = phase1Result.riskControlInfo?.type || 'unknown';
     logger.error({ userId: task.userId, platform: 'douyin', riskType }, '抖音风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase1Result.riskControlInfo?.evidence || '');
+
+    // 检测二次验证面板 → 自动点击接收短信 + 发送企微验证码卡片
+    const isSecondVerify = await dy.detectSecondVerify(page);
+    if (isSecondVerify) {
+      logger.info({ userId: task.userId }, '抖音二次验证面板检测到');
+      const smsSent = await dy.triggerSmsVerify(page);
+      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
+      if (user?.wechatUserid) {
+        const { botManager } = await import('./wechatBotService');
+        botManager.setPendingVerify(user.wechatUserid, task.userId, 'douyin', task.windowId);
+        await botManager.sendVerifyCard(user.wechatUserid, 'douyin', task.userId);
+        logger.info({ userId: task.userId, smsSent }, '抖音二次验证卡片已发送');
+      }
+      await db.updateUserStatus(task.userId, 'login_required');
+      return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
+    }
+
     await db.updateUserStatus(task.userId, 'login_required');
     await sendLoginQR(page, task.userId, 'douyin');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
@@ -1589,7 +1612,7 @@ function getOrCreateSchedulerState(windowId: string, platform: string): Schedule
     st = {
       timer: null,
       intervalMs: getRandomIntervalForMode('active', platform),
-      nextRunAt: 0,
+      nextRunAt: Date.now() + 10000,  // 新账号初始化 10s 倒计时
       lastRunAt: 0,
       mode: 'active',
       consecutiveNoUpdates: 0,
@@ -1704,30 +1727,19 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
     }
 
     // 去重：查询当前队列中是否有真正在执行的同用户任务
-    // 关键：BullMQ 的 getJobs(['active']) 会返回 stalled jobs（worker 重启后残留）
-    // 通过检查 Redis 中的 BullMQ 任务锁来判断 job 是否真正活跃
+    // per-window 队列：只查该窗口的队列，BullMQ concurrency=1 保证串行
+    const q = await getWindowQueue(windowId);
     const [activeJobs, waitingJobs] = await Promise.all([
-      monitorQueue.getJobs(['active']),
-      monitorQueue.getJobs(['waiting']),
+      q.getJobs(['active']),
+      q.getJobs(['waiting']),
     ]);
-    const redis = getRedis();
     const activeUserIds = new Set<number>();
     for (const j of [...activeJobs, ...waitingJobs]) {
       const data = j.data as any;
       if (!data?.userId) continue;
-      // waiting jobs 一定不是 stalled，直接加入
-      if (!await j.isActive()) {
+      // BullMQ API 判断状态，不需要手动查 Redis lock key
+      if (await j.isActive() || await j.isWaiting()) {
         activeUserIds.add(data.userId);
-        continue;
-      }
-      // active jobs：检查 BullMQ 任务锁是否存在
-      // 锁不存在 = worker 已停止续约 = stale job
-      const lockKey = `bull:platform:${j.id}:lock`;
-      const hasLock = await redis.exists(lockKey);
-      if (hasLock) {
-        activeUserIds.add(data.userId);
-      } else {
-        logger.debug({ jobId: j.id, userId: data.userId }, '[调度] 跳过无锁 active job（疑似 stale）');
       }
     }
 
