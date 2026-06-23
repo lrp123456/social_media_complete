@@ -1387,6 +1387,99 @@ router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Respons
   }
 });
 
+/** POST /api/v1/matrix/monitor/accounts/:userId/clear-all — 清空用户所有数据 */
+router.post('/monitor/accounts/:userId/clear-all', async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(String(req.params.userId), 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    // 1. 获取用户所在窗口
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fingerprintWindowId: true },
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // 2. 获取该窗口下所有用户 ID
+    const windowUsers = await prisma.user.findMany({
+      where: { fingerprintWindowId: user.fingerprintWindowId },
+      select: { id: true },
+    });
+    const userIds = windowUsers.map(u => u.id);
+
+    // 3. 取消正在运行的 BullMQ 任务
+    const activeJobs = await getAllJobs(['waiting', 'active', 'delayed']);
+    for (const job of activeJobs) {
+      if (userIds.includes((job.data as any).userId)) {
+        await job.remove().catch(() => {});
+      }
+    }
+
+    // 4. 获取所有视频 ID
+    const videos = await prisma.video.findMany({
+      where: { userId: { in: userIds } },
+      select: { id: true },
+    });
+    const videoIds = videos.map(v => v.id);
+
+    // 5. 使用事务清空数据
+    const [deletedComments, deletedVideos, deletedRootCounts, deletedCommentRecords, deletedCommentCounts, deletedMonitorStatus] = await prisma.$transaction([
+      prisma.comment.deleteMany({ where: { videoId: { in: videoIds } } }),
+      prisma.video.deleteMany({ where: { userId: { in: userIds } } }),
+      prisma.videoRootCommentCount.deleteMany({ where: { videoId: { in: videoIds } } }),
+      prisma.videoCommentRecord.deleteMany({ where: { videoId: { in: videoIds } } }),
+      prisma.videoCommentCount.deleteMany({ where: { videoId: { in: videoIds } } }),
+      prisma.monitorStatus.deleteMany({ where: { accountId: { in: userIds.map(id => String(id)) } } }),
+    ]);
+
+    // 6. 重置用户状态
+    await prisma.user.updateMany({
+      where: { fingerprintWindowId: user.fingerprintWindowId },
+      data: {
+        status: 'init',
+        monitoringEnabled: true,
+        cooldownUntil: 0,
+        consecutiveNoUpdate: 0,
+        platformAuthorId: null,
+        platformAuthorName: null,
+      },
+    });
+
+    // 7. 写入操作日志
+    await prisma.operationLog.create({
+      data: {
+        action: 'monitor_clear_all_user_data',
+        details: JSON.stringify({
+          userId,
+          windowId: user.fingerprintWindowId,
+          deletedVideos: deletedVideos.count,
+          deletedComments: deletedComments.count,
+        }),
+        userId: 'system',
+        userName: '清空所有数据',
+        result: 'success',
+        level: 'info',
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        userId,
+        deletedVideos: deletedVideos.count,
+        deletedComments: deletedComments.count,
+      },
+    });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '清空用户所有数据失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 /** POST /api/v1/matrix/monitor/accounts/:userId/restore-all — 恢复用户所有平台 */
 router.post('/monitor/accounts/:userId/restore-all', async (req: Request, res: Response) => {
   try {
