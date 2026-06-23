@@ -25,6 +25,7 @@ import * as db from './monitorDatabaseService';
 import { botManager } from './wechatBotService';
 import type { CommentNode } from '../crawlers/douyinCrawler';
 import { updatePhase } from '../lib/taskExecutionRecorder';
+import { getCrawlConfig } from '../routes/config-automation';
 
 const logger = createLogger('monitor-service');
 
@@ -980,6 +981,9 @@ export async function executeMonitorCheck(
 async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const dy = getDouyinCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('douyin');
+  const crawlConfig = await getCrawlConfig('douyin');
+  const isSimpleMode = crawlConfig.mode === 'simple';
+  const maxRootComments = crawlConfig.maxRootComments;
 
   // 注册 API 拦截器
   await dy.registerListener(page, ['/work_list', '/item/list', '/comment/list/select']);
@@ -1070,7 +1074,17 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // Phase 3: 逐视频打开抽屉 → 点击 → 拦截评论 API → 解析 + 存储
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 3: 处理评论队列');
-  const phase3Result = await dy.processCommentsQueue(page, queue);
+
+  let phase3Result;
+  if (isSimpleMode) {
+    // 简单模式：仅采集根评论
+    logger.info({ userId: task.userId, maxRootComments }, '抖音 Simple 模式 — 仅采集根评论');
+    await dy.processCommentsQueueSimple(page, queue, maxRootComments);
+    phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+  } else {
+    // 深度模式：完整评论树采集
+    phase3Result = await dy.processCommentsQueue(page, queue);
+  }
 
   if (phase3Result.riskDetected) {
     const riskType = phase3Result.riskInfo?.type || 'unknown';
@@ -1129,6 +1143,9 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const ks = getKuaishouCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('kuaishou');
+  const crawlConfig = await getCrawlConfig('kuaishou');
+  const isSimpleMode = crawlConfig.mode === 'simple';
+  const maxRootComments = crawlConfig.maxRootComments;
 
   // Phase 0: 登录检测
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 5, detail: '正在检测快手登录状态' });
@@ -1217,7 +1234,17 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   // Phase 3
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Phase 3: 处理评论队列');
-  const phase3Result = await ks.processCommentsQueue(page, queue);
+
+  let phase3Result;
+  if (isSimpleMode) {
+    // 简单模式：仅采集根评论
+    logger.info({ userId: task.userId, maxRootComments }, '快手 Simple 模式 — 仅采集根评论');
+    await ks.processCommentsQueueSimple(page, queue, maxRootComments);
+    phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+  } else {
+    // 深度模式：完整评论树采集
+    phase3Result = await ks.processCommentsQueue(page, queue);
+  }
 
   if (phase3Result.riskDetected) {
     const riskType = phase3Result.riskInfo?.type || 'unknown';
@@ -1274,6 +1301,9 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const xhs = getXiaohongshuCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('xiaohongshu');
+  const crawlConfig = await getCrawlConfig('xiaohongshu');
+  const isSimpleMode = crawlConfig.mode === 'simple';
+  const maxRootComments = crawlConfig.maxRootComments;
   const redis = getRedis();
 
   logger.info({ userId: task.userId, crawlMode }, '[XHS-monitor] Starting xiaohongshu check');
@@ -1349,7 +1379,16 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
 
-  const phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
+  let phase3Result;
+  if (isSimpleMode) {
+    // 简单模式：仅采集根评论
+    logger.info({ userId: task.userId, maxRootComments }, '小红书 Simple 模式 — 仅采集根评论');
+    await xhs.processCommentsQueueSimple(page, queue as any, maxRootComments);
+    phase3Result = (queue as any[]).map((q: any) => ({ awemeId: q.exportId, success: true, error: undefined }));
+  } else {
+    // 深度模式：完整评论树采集
+    phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
+  }
 
   // 退出策略
   await xhs.executeExitStrategy(page);
@@ -1451,6 +1490,9 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
 async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const tc = getTencentCrawler(task.windowId);
+  const crawlConfig = await getCrawlConfig('tencent');
+  const isSimpleMode = crawlConfig.mode === 'simple';
+  const maxRootComments = crawlConfig.maxRootComments;
   // Phase 0: 登录检测
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 10, detail: '正在检测视频号登录状态' });
   const loggedIn = await tc.handleLogin(page, task.userId);
@@ -1534,7 +1576,17 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // Phase 3: 逐视频采集评论详情
   onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
   logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 3: 处理评论队列');
-  const phase3Result = await tc.processCommentsQueue(page, queue, task.userId);
+
+  let phase3Result;
+  if (isSimpleMode) {
+    // 简单模式：仅采集根评论
+    logger.info({ userId: task.userId, maxRootComments }, '视频号 Simple 模式 — 仅采集根评论');
+    await tc.processCommentsQueueSimple(page, queue, maxRootComments);
+    phase3Result = queue.map((q: any) => ({ exportId: q.exportId, success: true, error: undefined }));
+  } else {
+    // 深度模式：完整评论树采集
+    phase3Result = await tc.processCommentsQueue(page, queue, task.userId);
+  }
 
   if (phase3Result.some(r => r.error?.includes('风险') || r.error?.includes('captcha') || r.error?.includes('Risk control'))) {
     const riskType = 'phase3_risk';
