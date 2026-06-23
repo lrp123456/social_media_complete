@@ -1738,6 +1738,25 @@ export class TencentCrawler {
     for (const item of queue) {
       logger.info({ exportId: item.exportId, maxRootComments }, '[Simple] Starting simple mode comment collection');
 
+      // ── 清空拦截器中旧的评论响应 ──
+      this.interceptor.clear(COMMENT_LIST_PATTERN);
+
+      // ── 在视频列表中滚动查找并点击目标视频 ──
+      const videoFound = await this.scrollToFindVideo(page, item.description, item.createTime);
+      if (!videoFound) {
+        logger.warn({ exportId: item.exportId }, '[Simple] Target video not found, trying first video');
+        await this.clickFirstVideoInCommentPage(page);
+      } else {
+        const videoClicked = await this.clickVideoInCommentPage(page, item.description);
+        if (!videoClicked) {
+          logger.warn({ exportId: item.exportId }, '[Simple] Failed to click video after scroll, trying first video');
+          await this.clickFirstVideoInCommentPage(page);
+        }
+      }
+
+      // ── 等待 API 响应 ──
+      await HumanActions.wait(page, 3000, 5000);
+
       // 1. 获取已有的根评论 CID 集合
       const existingCids = await prisma.comment.findMany({
         where: { videoId: item.exportId, level: 1 },

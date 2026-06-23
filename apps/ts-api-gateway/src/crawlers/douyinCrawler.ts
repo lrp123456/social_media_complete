@@ -2409,6 +2409,27 @@ export class DouyinCrawler {
     for (const item of queue) {
       logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
 
+      // ── 清空拦截器中旧的评论响应 ──
+      this.interceptor.clear(COMMENT_LIST_PATTERN);
+      this.interceptor.clear(COMMENT_LIST_PATTERN_V2);
+
+      // ── 打开抽屉 ──
+      const drawerOpened = await this.openSelectWorkDrawer(page);
+      if (!drawerOpened) {
+        logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to open drawer, skipping');
+        continue;
+      }
+
+      // ── 点击视频 ──
+      const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description);
+      if (!clicked) {
+        logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to click video, skipping');
+        continue;
+      }
+
+      // ── 等待 API 响应 ──
+      await HumanActions.wait(page, 3000, 5000);
+
       // 1. 获取已有的根评论 CID 集合
       const existingCids = await prisma.comment.findMany({
         where: { videoId: item.awemeId, level: 1 },
