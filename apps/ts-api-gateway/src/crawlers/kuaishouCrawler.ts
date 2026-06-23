@@ -2983,105 +2983,152 @@ export class KuaishouCrawler {
     page: Page,
     queue: KuaishouCommentQueueItem[],
     maxRootComments: number = 30,
-  ): Promise<void> {
+  ): Promise<{ results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> }> {
+    const results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> = [];
+
     for (const item of queue) {
-      logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
+      try {
+        logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
 
-      // ── 清空拦截器中旧的评论响应 ──
-      for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
-        this.interceptor.clear(p);
-      }
+        // ── 清空拦截器中旧的评论响应 ──
+        for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
+          this.interceptor.clear(p);
+        }
 
-      // ── 打开抽屉 ──
-      const drawerOpened = await this.openSelectVideoDrawer(page);
-      if (!drawerOpened) {
-        logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to open drawer, skipping');
-        continue;
-      }
-
-      // ── 点击视频 ──
-      const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
-      if (!clicked) {
-        logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to click video, skipping');
-        continue;
-      }
-
-      // ── 等待 API 响应 ──
-      await HumanActions.wait(page, 3000, 5000);
-
-      // 1. 获取已有的根评论 CID 集合
-      const existingCids = await prisma.comment.findMany({
-        where: { videoId: item.awemeId, level: 1 },
-        select: { cid: true },
-      });
-      const existingCidSet = new Set(existingCids.map(c => c.cid));
-
-      // 2. 滚动加载根评论
-      const allComments: any[] = [];
-      let consecutiveNoNew = 0;
-      let hasMore = true;
-
-      while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
-        // 等待 API 响应
-        const responses = await this.collectAllCommentResponses(page);
-
-        if (responses.length === 0) {
-          consecutiveNoNew++;
-          logger.info({ awemeId: item.awemeId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+        // ── 打开抽屉 ──
+        const drawerOpened = await this.openSelectVideoDrawer(page);
+        if (!drawerOpened) {
+          logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to open drawer, skipping');
+          results.push({ awemeId: item.awemeId, success: false, error: 'Failed to open drawer' });
           continue;
         }
 
-        // 提取根评论（快手 API 格式）
-        const newComments = responses.flatMap(r => r.body?.data?.list || [])
-          .filter(c => !existingCidSet.has(String(c.commentId)));
+        // ── 点击视频 ──
+        const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
+        if (!clicked) {
+          logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to click video, skipping');
+          results.push({ awemeId: item.awemeId, success: false, error: 'Failed to click video' });
+          continue;
+        }
 
-        if (newComments.length === 0) {
-          consecutiveNoNew++;
+        // ── 等待 API 响应 ──
+        await HumanActions.wait(page, 3000, 5000);
+
+        // 1. 获取已有的根评论 CID 集合
+        const existingCids = await prisma.comment.findMany({
+          where: { videoId: item.awemeId, level: 1 },
+          select: { cid: true },
+        });
+        const existingCidSet = new Set(existingCids.map(c => c.cid));
+
+        // 2. 滚动加载根评论
+        const allComments: any[] = [];
+        let consecutiveNoNew = 0;
+        let hasMore = true;
+
+        while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
+          // 等待 API 响应
+          const responses = await this.collectAllCommentResponses(page);
+
+          if (responses.length === 0) {
+            consecutiveNoNew++;
+            logger.info({ awemeId: item.awemeId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+            continue;
+          }
+
+          // 提取根评论（快手 API 格式）
+          const newComments = responses.flatMap(r => r.body?.data?.list || [])
+            .filter(c => !existingCidSet.has(String(c.commentId)));
+
+          if (newComments.length === 0) {
+            consecutiveNoNew++;
+          } else {
+            consecutiveNoNew = 0;
+            allComments.push(...newComments);
+          }
+
+          // 检查 has_more（快手：pcursor 有值=有更多）
+          const lastResp = responses[responses.length - 1];
+          hasMore = !!lastResp?.body?.data?.pcursor;
+
+          // 继续滚动
+          if (hasMore && allComments.length < maxRootComments) {
+            await this.scrollCommentAreaForKuaishou(page, 'bottom');
+            await HumanActions.wait(page, 8000, 8000);
+          }
+        }
+
+        // 3. 限制到 maxRootComments
+        const commentsToStore = allComments.slice(0, maxRootComments);
+
+        // 4. 存储新评论
+        if (commentsToStore.length > 0) {
+          for (const comment of commentsToStore) {
+            await db.upsertComment(item.awemeId, {
+              cid: String(comment.commentId),
+              text: comment.content || '',
+              user_nickname: comment.authorName || '',
+              user_uid: String(comment.authorId) || '',
+              digg_count: comment.likedCount || 0,
+              create_time: comment.timestamp || 0,
+              reply_id: '0',
+            });
+          }
+
+          logger.info({
+            awemeId: item.awemeId,
+            newCount: commentsToStore.length,
+            totalCollected: allComments.length,
+          }, '[Simple] Stored new root comments');
+
+          // 5. 构建 commentGroups（与 unifiedQueue 兼容）
+          const commentGroups = commentsToStore.map(comment => ({
+            rootComment: {
+              cid: String(comment.commentId),
+              text: comment.content || '',
+              userNickname: comment.authorName || '',
+              userUid: String(comment.authorId) || '',
+              createTime: comment.timestamp || 0,
+              diggCount: comment.likedCount || 0,
+              level: 1 as const,
+              replyId: '0',
+              isAuthor: false,
+              subComments: [],
+              imageUrls: comment.imageUrls,
+            },
+            subReplies: [],
+            newInGroup: [
+              {
+                cid: String(comment.commentId),
+                text: comment.content || '',
+                userNickname: comment.authorName || '',
+                userUid: String(comment.authorId) || '',
+                createTime: comment.timestamp || 0,
+                diggCount: comment.likedCount || 0,
+                level: 1 as const,
+                replyId: '0',
+                isAuthor: false,
+                subComments: [],
+                imageUrls: comment.imageUrls,
+              },
+            ],
+          }));
+
+          // 6. 触发企微通知
+          await this.notifyNewComments(item.awemeId, commentsToStore);
+
+          results.push({ awemeId: item.awemeId, success: true, commentGroups });
         } else {
-          consecutiveNoNew = 0;
-          allComments.push(...newComments);
+          logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+          results.push({ awemeId: item.awemeId, success: true, commentGroups: [] });
         }
-
-        // 检查 has_more（快手：pcursor 有值=有更多）
-        const lastResp = responses[responses.length - 1];
-        hasMore = !!lastResp?.body?.data?.pcursor;
-
-        // 继续滚动
-        if (hasMore && allComments.length < maxRootComments) {
-          await this.scrollCommentAreaForKuaishou(page, 'bottom');
-          await HumanActions.wait(page, 8000, 8000);
-        }
-      }
-
-      // 3. 限制到 maxRootComments
-      const commentsToStore = allComments.slice(0, maxRootComments);
-
-      // 4. 存储新评论
-      if (commentsToStore.length > 0) {
-        for (const comment of commentsToStore) {
-          await db.upsertComment(item.awemeId, {
-            cid: String(comment.commentId),
-            text: comment.content || '',
-            user_nickname: comment.authorName || '',
-            user_uid: String(comment.authorId) || '',
-            digg_count: comment.likedCount || 0,
-            create_time: comment.timestamp || 0,
-            reply_id: '0',
-          });
-        }
-
-        logger.info({
-          awemeId: item.awemeId,
-          newCount: commentsToStore.length,
-          totalCollected: allComments.length,
-        }, '[Simple] Stored new root comments');
-
-        // 5. 触发企微通知
-        await this.notifyNewComments(item.awemeId, commentsToStore);
-      } else {
-        logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+      } catch (err) {
+        logger.error({ awemeId: item.awemeId, err: (err as Error).message }, '[Simple] Error processing comment queue item');
+        results.push({ awemeId: item.awemeId, success: false, error: (err as Error).message });
       }
     }
+
+    return { results };
   }
 
   /**
