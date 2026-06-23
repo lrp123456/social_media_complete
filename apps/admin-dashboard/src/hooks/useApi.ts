@@ -537,6 +537,39 @@ export function useClearUserData() {
   });
 }
 
+/** 一键恢复所有用户 */
+export function useEnableAllUsers() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post('/matrix/monitor/accounts/enable-all'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor-accounts'] });
+    },
+  });
+}
+
+/** 恢复用户所有平台 */
+export function useRestoreAllPlatforms() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) => api.post(`/matrix/monitor/accounts/${userId}/restore-all`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor-accounts'] });
+    },
+  });
+}
+
+/** 清空用户所有数据 */
+export function useClearAllUserData() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) => api.post(`/matrix/monitor/accounts/${userId}/clear-all`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor-accounts'] });
+    },
+  });
+}
+
 export type NewCommentVideo = {
   id: string;
   description: string;
