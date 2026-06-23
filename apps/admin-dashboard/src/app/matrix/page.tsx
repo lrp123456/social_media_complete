@@ -806,6 +806,33 @@ function MonitorTab() {
   const [platformFilter, setPlatformFilter] = useState<string>('all');
   const { toasts, addToast, dismiss } = useMonitorToast();
 
+  // ── Crawl Config ──
+  const [crawlConfig, setCrawlConfig] = useState({
+    mode: 'simple',
+    maxRootComments: 30,
+  });
+
+  useEffect(() => {
+    fetch('/api/v1/matrix/crawl-settings')
+      .then(res => res.json())
+      .then(data => {
+        if (data.success) {
+          setCrawlConfig(data.data);
+        }
+      });
+  }, []);
+
+  const saveConfig = async () => {
+    await fetch('/api/v1/matrix/crawl-settings/douyin', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode: crawlConfig.mode,
+        config: { max_root_comments: crawlConfig.maxRootComments },
+      }),
+    });
+  };
+
   const { data: accountsData, isLoading: accountsLoading, refetch: refetchAccounts } = useMonitorAccounts();
   const { data: newCommentsData, refetch: refetchNewComments } = useNewCommentsOverview();
   const { data: detailData, isLoading: detailLoading, refetch: refetchDetail } = useMonitorAccountDetail(
@@ -1077,8 +1104,41 @@ function MonitorTab() {
                   disabled={updateDebugMode.isPending}
                 />
               </div>
+              </div>
+
+              {/* ── 采集模式配置 ── */}
+              <div className="flex items-center gap-4 px-4 py-3 rounded-xl bg-surface border border-outline-variant flex-shrink-0">
+                <div className="flex items-center gap-2">
+                  <MaterialIcon icon="settings" size="sm" className="text-primary" />
+                  <span className="text-label-md text-on-surface-variant">采集模式</span>
+                </div>
+                <select
+                  value={crawlConfig.mode}
+                  onChange={(e) => setCrawlConfig({...crawlConfig, mode: e.target.value})}
+                  className="form-input text-sm py-1 px-2 rounded-md border border-outline-variant bg-surface-container"
+                >
+                  <option value="simple">简单模式（仅根评论）</option>
+                  <option value="deep">深度模式（完整评论树）</option>
+                </select>
+                <div className="flex items-center gap-2">
+                  <label className="text-label-sm text-on-surface-variant whitespace-nowrap">根评论上限：</label>
+                  <input
+                    type="number"
+                    value={crawlConfig.maxRootComments}
+                    onChange={(e) => setCrawlConfig({...crawlConfig, maxRootComments: parseInt(e.target.value)})}
+                    className="form-input text-sm py-1 px-2 rounded-md border border-outline-variant bg-surface-container w-20"
+                    min={1}
+                  />
+                </div>
+                <button
+                  onClick={saveConfig}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-label-sm font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  <MaterialIcon icon="save" size="xs" />
+                  保存配置
+                </button>
+              </div>
             </div>
-          </div>
 
           {/* ── Update Queue ── */}
           {showQueue && monitorTaskIds.length > 0 && (() => {
