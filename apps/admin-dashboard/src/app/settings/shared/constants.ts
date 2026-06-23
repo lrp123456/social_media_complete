@@ -1,4 +1,4 @@
-export const INFRA_KEYS = ['DB_HOST', 'DATABASE_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'LITELLM_MASTER_KEY', 'LITELLM_BASE_URL', 'WEB_PORT', 'DATA_DIR', 'LOG_LEVEL'];
+export const INFRA_KEYS = ['DB_HOST', 'DATABASE_URL', 'REDIS_HOST', 'REDIS_PORT', 'REDIS_PASSWORD', 'LITELLM_MASTER_KEY', 'LITELLM_BASE_URL', 'WEB_PORT', 'DATA_DIR', 'LOG_LEVEL', 'ROXY_BROWSER_URL', 'BIT_BROWSER_URL'];
 export const GROUP_ORDER = ['video', 'image', 'text'];
 export const FFMPEG_FIELDS = [
   { key: 'res_width', label: '分辨率宽度', type: 'number' },

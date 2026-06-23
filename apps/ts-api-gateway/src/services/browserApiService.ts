@@ -1,6 +1,8 @@
 // @ts-api-gateway/services/browserApiService.ts
 // 指纹浏览器统一抽象层 — 多态接口，BitBrowser / RoxyBrowser 底层实现不同，高层一致
 
+import fs from 'fs';
+import path from 'path';
 import { createLogger } from '../lib/logger';
 
 const logger = createLogger('browser-api');
@@ -817,7 +819,20 @@ function cdpNavigateAndCheck(
 // 启动时自动注册
 // ============================================================
 
+/** 加载 data/infra-overrides.json 中的覆盖值到 process.env */
+function loadInfraOverrides(): void {
+  const overridesFile = path.resolve(process.cwd(), 'data', 'infra-overrides.json');
+  try {
+    const overrides = JSON.parse(fs.readFileSync(overridesFile, 'utf-8'));
+    for (const [k, v] of Object.entries(overrides)) {
+      process.env[k] = String(v);
+    }
+    logger.info(`已加载 infra-overrides.json: ${Object.keys(overrides).join(', ')}`);
+  } catch { /* file may not exist */ }
+}
+
 function autoRegister(): void {
+  loadInfraOverrides();
   const bitUrl = process.env.BIT_BROWSER_URL;
   const roxyUrl = process.env.ROXY_BROWSER_URL;
   const roxyKey = process.env.ROXY_BROWSER_KEY;
@@ -835,3 +850,19 @@ function autoRegister(): void {
 }
 
 autoRegister();
+
+/** 热重载浏览器供应商 URL（用于 config-infra 修改后无需重启） */
+export function reloadBrowserVendors(): void {
+  loadInfraOverrides();
+  const bitUrl = process.env.BIT_BROWSER_URL;
+  const roxyUrl = process.env.ROXY_BROWSER_URL;
+  const roxyKey = process.env.ROXY_BROWSER_KEY;
+  if (bitUrl) {
+    registerBrowser({ vendor: 'bitbrowser', baseUrl: bitUrl, groupId: '402880a99e827246019e8c0932662a17' });
+    logger.info(`热重载 bitbrowser → ${bitUrl}`);
+  }
+  if (roxyUrl) {
+    registerBrowser({ vendor: 'roxybrowser', baseUrl: roxyUrl, apiKey: roxyKey, workspaceId: '111819' });
+    logger.info(`热重载 roxybrowser → ${roxyUrl}`);
+  }
+}
