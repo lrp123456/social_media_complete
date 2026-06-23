@@ -765,32 +765,87 @@ export class XiaohongshuCrawler {
     logger.info({ noteId }, '[XHS-Phase3] Clicking thumbnail to open note detail');
 
     try {
+      // 1. 获取选择器
       const cardDef = getSelector('region.note-card-by-id', XHS_PLATFORM);
       const coverDef = getSelector('region.note-card-cover', XHS_PLATFORM);
 
-      // 监听新标签页
-      const [newPage] = await Promise.all([
-        page.context().waitForEvent('page', { timeout }),
-        (async () => {
-          // 找到卡片内的缩略图并点击
-          const cardSelector = cardDef.css?.replace('{noteId}', noteId);
-          if (!cardSelector) throw new Error('No card selector');
-          const card = await page.waitForSelector(cardSelector, { timeout: 10000 });
-          let clickEl = card;
-          if (coverDef.css) {
-            const cover = await card.$(coverDef.css);
-            if (cover) clickEl = cover;
-          }
-          await (clickEl as any).click();
-        })(),
-      ]);
+      let cardSelector = cardDef.css?.replace('{noteId}', noteId);
+      let coverSelector = coverDef.css;
 
-      await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 });
-      await HumanActions.wait(newPage, 2000, 4000);
-      logger.info({ noteId, url: newPage.url() }, '[XHS-Phase3] New tab opened');
-      return newPage;
+      // 2. 选择器降级：如果 getSelector 返回空，使用硬编码
+      //    注意：这些硬编码值必须与 selectors.json 保持同步
+      if (!cardSelector) {
+        cardSelector = `.note-card[data-impression*="${noteId}"]`;
+        logger.warn({ noteId, cardSelector }, '[XHS-Phase3] Using hardcoded card selector fallback');
+      }
+      if (!coverSelector) {
+        coverSelector = '.note-card__cover .note-card__media';
+        logger.warn({ noteId, coverSelector }, '[XHS-Phase3] Using hardcoded cover selector fallback');
+      }
+
+      logger.info({ noteId, cardSelector, coverSelector }, '[XHS-Phase3] Resolved selectors');
+
+      // 3. 等待卡片元素（CSS 选择器）
+      let card: any = null;
+      try {
+        card = await page.waitForSelector(cardSelector, { timeout: 10000 });
+      } catch {
+        // CSS 选择器失败，降级为 JS evaluate（不受 HTML 转义影响）
+        logger.warn({ noteId, cardSelector }, '[XHS-Phase3] CSS selector failed, trying JS evaluate');
+        const handle = await page.evaluateHandle((nid: string) => {
+          const cards = document.querySelectorAll('.note-card');
+          for (const c of Array.from(cards)) {
+            const imp = c.getAttribute('data-impression') || '';
+            if (imp.includes(nid)) return c;
+          }
+          return null;
+        }, noteId);
+        const element = handle.asElement();
+        if (element) {
+          card = element;
+          logger.info({ noteId }, '[XHS-Phase3] Card found via JS evaluate');
+        }
+      }
+
+      if (!card) {
+        logger.error({ noteId }, '[XHS-Phase3] Card element not found by any method');
+        return null;
+      }
+
+      // 4. 查找 cover 元素
+      let clickEl: any = card;
+      if (coverSelector) {
+        const cover = await card.$(coverSelector);
+        if (cover) clickEl = cover;
+      }
+
+      // 5. 顺序式：先注册 waitForEvent，再点击
+      //    避免 Promise.all 竞态条件（点击失败和标签页打开的竞态）
+      let newPage: Page | null = null;
+      try {
+        const pagePromise = page.context().waitForEvent('page', { timeout });
+        await clickEl.click();
+        newPage = await pagePromise;
+        await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 });
+        await HumanActions.wait(newPage, 2000, 4000);
+        logger.info({ noteId, url: newPage.url() }, '[XHS-Phase3] New tab opened via click');
+        return newPage;
+      } catch {
+        // 点击未打开新标签页，降级为 URL 直接导航
+        logger.warn({ noteId }, '[XHS-Phase3] Click did not open new tab, falling back to direct URL navigation');
+        try {
+          newPage = await page.context().newPage();
+          await newPage.goto(`https://www.xiaohongshu.com/explore/${noteId}`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await HumanActions.wait(newPage, 2000, 4000);
+          logger.info({ noteId, url: newPage.url() }, '[XHS-Phase3] New tab opened via URL fallback');
+          return newPage;
+        } catch (navErr: any) {
+          logger.error({ noteId, error: navErr.message }, '[XHS-Phase3] URL fallback also failed');
+          return null;
+        }
+      }
     } catch (err: any) {
-      logger.warn({ noteId, error: err.message }, '[XHS-Phase3] Failed to open new tab for note');
+      logger.warn({ noteId, error: err.message }, '[XHS-Phase3] Failed to open note detail page');
       return null;
     }
   }
