@@ -38,6 +38,7 @@ export type CommentInfo = {
   reply_id: string;
   label_type?: number;
   label_text?: string;
+  imageUrls?: string[];
 };
 
 export interface CommentNode {
@@ -54,6 +55,7 @@ export interface CommentNode {
   replyToName?: string;
   replyId: string;
   subComments?: CommentNode[];
+  imageUrls?: string[];
 }
 
 export interface RootCommentSnapshot {
@@ -64,6 +66,7 @@ export interface RootCommentSnapshot {
   userUid: string;
   userNickname: string;
   labelType?: number;
+  imageUrls?: string[];
 }
 
 // 引用共享回复目标接口
@@ -93,8 +96,10 @@ const CREATOR_HOME = 'https://creator.douyin.com/creator-micro/home';
 const WORK_LIST_PATTERN = '/work_list';
 const ITEM_LIST_PATTERN = '/item/list';
 const COMMENT_LIST_PATTERN = '/aweme/v1/web/comment/list/select';
+const COMMENT_LIST_PATTERN_V2 = '/aweme/v1/creator/comment/list'; // 抖音创作者平台新 API 端点（301→200 重定向）
 const COMMENT_REPLY_PATTERN = '/aweme/v1/web/comment/list/reply'; // 子回复 API
-const ALL_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_REPLY_PATTERN];
+const ALL_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_LIST_PATTERN_V2, COMMENT_REPLY_PATTERN];
+const COMMENT_LIST_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_LIST_PATTERN_V2]; // 所有评论列表 pattern
 
 const MAX_SCROLL_ATTEMPTS = 30;
 const MAX_SCROLL_NO_NEW_DATA = 10;
@@ -208,7 +213,7 @@ export class DouyinCrawler {
 
     for (const pattern of patterns) {
       const isItemList = pattern === ITEM_LIST_PATTERN;
-      const isCommentList = pattern === COMMENT_LIST_PATTERN;
+      const isCommentList = COMMENT_LIST_PATTERNS.includes(pattern);
       this.interceptor.setValidationConfig(pattern, {
         expectedPageUrls: ['creator.douyin.com'],
         requiredItemFields: isCommentList ? ['id'] : (isItemList ? ['id', 'metrics', 'metrics.comment_count'] : ['id']),
@@ -774,9 +779,11 @@ export class DouyinCrawler {
   }
 
   async fetchCommentDetailsByClick(page: Page, awemeId: string): Promise<CommentInfo[]> {
-    this.interceptor.clear(COMMENT_LIST_PATTERN);
+    for (const p of COMMENT_LIST_PATTERNS) {
+      this.interceptor.clear(p);
+    }
 
-    const listenerId = await this.interceptor.register(page, [COMMENT_LIST_PATTERN]);
+    const listenerId = await this.interceptor.register(page, COMMENT_LIST_PATTERNS);
 
     try {
       logger.info({ awemeId }, 'Attempting precise click on video row for comments');
@@ -792,7 +799,7 @@ export class DouyinCrawler {
 
       await HumanActions.wait(page, 1500, 3000);
 
-      const response = await this.interceptor.waitForResponse(COMMENT_LIST_PATTERN, 10000);
+      const response = await this.waitForCommentResponse(page, 10000);
       if (!response) {
         logger.info({ awemeId }, 'No comment response received after click');
         return [];
@@ -809,51 +816,124 @@ export class DouyinCrawler {
     }
   }
 
+  /**
+   * 从 API 评论对象中提取图片 URL 列表
+   * 支持 image_list (新格式) 和 imageList (旧格式)
+   */
+  private extractImageUrls(c: any): string[] | undefined {
+    const imageList = c.image_list || c.imageList;
+    if (imageList && Array.isArray(imageList) && imageList.length > 0) {
+      const urls = imageList
+        .map((img: any) => {
+          const urlList = img.url_list || img.urlList;
+          if (urlList && Array.isArray(urlList) && urlList.length > 0) {
+            return urlList[0];
+          }
+          return null;
+        })
+        .filter((url: string | null) => url !== null) as string[];
+      return urls.length > 0 ? urls : undefined;
+    }
+    return undefined;
+  }
+
   private parseCommentList(body: any): CommentInfo[] {
-    const comments = body.comments;
+    // 支持 comment_info_list 和 comments 两种格式
+    const comments = body.comment_info_list || body.comments;
     if (!comments || !Array.isArray(comments)) return [];
 
+    // 判断是否为 comment_info_list 格式（新格式）
+    const isNewFormat = !!body.comment_info_list;
+
     const rootComments = comments.filter((c: any) => {
-      const replyId = c.reply_id ?? c.replyId ?? '0';
-      return replyId === 0 || replyId === '0' || replyId === null || replyId === undefined;
+      let replyId: string;
+      if (isNewFormat) {
+        replyId = '0'; // comment_info_list 中的评论总是根评论
+      } else {
+        replyId = String(c.reply_id ?? c.replyId ?? '0');
+      }
+      return replyId === '0' || replyId === null || replyId === undefined;
     });
 
-    logger.info({ totalReceived: comments.length, rootComments: rootComments.length }, 'Root comment filter applied');
+    logger.info({ totalReceived: comments.length, rootComments: rootComments.length, format: isNewFormat ? 'comment_info_list' : 'comments' }, 'Root comment filter applied');
 
-    return rootComments.map((c: any) => ({
-      cid: c.cid,
-      text: c.text || '',
-      user_nickname: c.user?.nickname || '',
-      user_uid: c.user?.uid || '',
-      digg_count: c.digg_count || 0,
-      create_time: c.create_time,
-      reply_id: String(c.reply_id ?? c.replyId ?? '0'),
-      label_type: c.label_type ?? 0,
-      label_text: c.label_text || '',
-    }));
+    return rootComments.map((c: any) => {
+      const imageUrls = this.extractImageUrls(c);
+
+      if (isNewFormat) {
+        return {
+          cid: c.comment_id || '',
+          text: c.text || '',
+          user_nickname: c.user_info?.screen_name || '',
+          user_uid: c.user_info?.user_id || '',
+          digg_count: parseInt(String(c.digg_count || '0'), 10),
+          create_time: parseInt(String(c.create_time || '0'), 10),
+          reply_id: '0',
+          label_type: c.label_type ?? 0,
+          label_text: c.label_text || '',
+          imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
+        };
+      }
+
+      return {
+        cid: c.cid,
+        text: c.text || '',
+        user_nickname: c.user?.nickname || '',
+        user_uid: c.user?.uid || '',
+        digg_count: c.digg_count || 0,
+        create_time: c.create_time,
+        reply_id: String(c.reply_id ?? c.replyId ?? '0'),
+        label_type: c.label_type ?? 0,
+        label_text: c.label_text || '',
+        imageUrls: imageUrls && imageUrls.length > 0 ? imageUrls : undefined,
+      };
+    });
   }
 
   /**
    * 从评论列表 API 响应中提取每条根评论的快照（cid + subCommentCount）
    * 用于后续增量对比检测
    * 抖音 API: /comment/list/select → { comments: [...] }
+   * 新格式: /comment/list/select → { comment_info_list: [...] }
    */
   private parseRootCommentSnapshots(body: any): RootCommentSnapshot[] {
-    const comments: any[] = body?.comments || [];
+    // 支持 comment_info_list 和 comments 两种格式
+    const comments: any[] = body?.comment_info_list || body?.comments || [];
+    const isNewFormat = !!body?.comment_info_list;
+
     return comments
       .filter((c: any) => {
+        if (isNewFormat) {
+          return true; // comment_info_list 中的评论总是根评论
+        }
         const replyId = c.reply_id ?? '0';
-        return replyId === 0 || replyId === '0' || replyId === null;
+        return replyId === '0' || replyId === 0 || replyId === null;
       })
-      .map((c: any) => ({
-        cid: c.cid,
-        text: c.text || '',
-        replyCount: c.reply_comment_total ?? 0,
-        createTime: c.create_time,
-        userUid: c.user?.uid || '',
-        userNickname: c.user?.nickname || '',
-        labelType: c.label_type ?? 0,
-      }));
+      .map((c: any) => {
+        const imageUrls = this.extractImageUrls(c);
+        if (isNewFormat) {
+          return {
+            cid: c.comment_id || '',
+            text: c.text || '',
+            replyCount: c.reply_comment_total ?? 0,
+            createTime: parseInt(String(c.create_time || '0'), 10),
+            userUid: c.user_info?.user_id || '',
+            userNickname: c.user_info?.screen_name || '',
+            labelType: c.label_type ?? 0,
+            imageUrls,
+          };
+        }
+        return {
+          cid: c.cid,
+          text: c.text || '',
+          replyCount: c.reply_comment_total ?? 0,
+          createTime: c.create_time,
+          userUid: c.user?.uid || '',
+          userNickname: c.user?.nickname || '',
+          labelType: c.label_type ?? 0,
+          imageUrls,
+        };
+      });
   }
 
   async detectRiskControlAsync(page: Page): Promise<RiskControlDetection> {
@@ -904,6 +984,93 @@ export class DouyinCrawler {
         type: 'unknown',
         evidence: '',
       };
+    }
+  }
+
+  /**
+   * 检测抖音二次验证面板（"身份验证" + "接收短信验证码"）
+   */
+  async detectSecondVerify(page: Page): Promise<boolean> {
+    try {
+      const bodyText = await HumanActions.cdpGetBodyText(page);
+      return bodyText.includes('身份验证') && bodyText.includes('接收短信验证码');
+    } catch { return false; }
+  }
+
+  /**
+   * 点击"接收短信验证码"按钮，触发短信发送
+   */
+  async triggerSmsVerify(page: Page): Promise<boolean> {
+    try {
+      const clicked = await HumanActions.cdpClickByText(page, '接收短信验证码', { timeout: 5000 });
+      if (clicked) {
+        logger.info('[SecondVerify] Clicked 接收短信验证码');
+        await HumanActions.wait(page, 2000, 3000);
+        return true;
+      }
+      logger.warn('[SecondVerify] Failed to click 接收短信验证码');
+      return false;
+    } catch (err: any) {
+      logger.error({ err: err.message }, '[SecondVerify] triggerSmsVerify failed');
+      return false;
+    }
+  }
+
+  /**
+   * 填入验证码并提交
+   */
+  async submitVerifyCode(page: Page, code: string): Promise<boolean> {
+    try {
+      // 查找验证码输入框 — 抖音通常用 input[type="tel"] 或带 placeholder 的 input
+      const inputSelectors = [
+        'input[type="tel"]',
+        'input[placeholder*="验证码"]',
+        'input[placeholder*="请输入"]',
+        'input[maxlength="6"]',
+        'input[type="text"]',
+        'input[type="number"]',
+      ];
+      let filled = false;
+      for (const sel of inputSelectors) {
+        const inputs = await page.$$(sel);
+        for (const input of inputs) {
+          const isVisible = await input.isVisible().catch(() => false);
+          if (!isVisible) continue;
+          const currentValue = await input.inputValue().catch(() => '');
+          if (currentValue.length > 0) continue; // 跳过已填的
+          await input.fill(code);
+          await HumanActions.wait(page, 500, 1000);
+          filled = true;
+          logger.info({ selector: sel }, '[SecondVerify] Code filled');
+          break;
+        }
+        if (filled) break;
+      }
+      if (!filled) {
+        logger.error('[SecondVerify] No suitable input found for verify code');
+        return false;
+      }
+
+      // 查找提交按钮
+      const submitTexts = ['发送', '确认', '提交', '验证', '确定'];
+      let submitted = false;
+      for (const text of submitTexts) {
+        submitted = await HumanActions.cdpClickByText(page, text, { timeout: 3000 });
+        if (submitted) {
+          logger.info({ text }, '[SecondVerify] Submit button clicked');
+          await HumanActions.wait(page, 2000, 3000);
+          break;
+        }
+      }
+      if (!submitted) {
+        // 尝试 CSS 选择器
+        const btn = await page.$('button[type="submit"], button[class*="submit"], button[class*="confirm"]');
+        if (btn) { await btn.click(); submitted = true; }
+      }
+      return submitted;
+    } catch (err: any) {
+      logger.error({ err: err.message }, '[SecondVerify] submitVerifyCode failed');
+      return false;
     }
   }
 
@@ -1096,6 +1263,23 @@ export class DouyinCrawler {
         node.diggCount = apiMatch.digg_count || apiMatch.diggCount || node.diggCount || 0;
         node.userUid = apiMatch.user?.uid || apiMatch.userUid || '';
         node.userNickname = apiMatch.user?.nickname || apiMatch.userNickname || node.userNickname || '';
+
+        // 合并图片数据
+        const imageList = apiMatch.image_list || apiMatch.imageList;
+        if (imageList && Array.isArray(imageList) && imageList.length > 0) {
+          const urls = imageList
+            .map((img: any) => {
+              const urlList = img.url_list || img.urlList;
+              if (urlList && Array.isArray(urlList) && urlList.length > 0) {
+                return urlList[0];
+              }
+              return null;
+            })
+            .filter((url: string | null) => url !== null);
+          if (urls.length > 0) {
+            node.imageUrls = urls;
+          }
+        }
       }
       if (node.subComments) {
         this.mergeApiDataToDOM(node.subComments, apiComments);
@@ -1512,7 +1696,8 @@ export class DouyinCrawler {
     try {
       // ── 优先处理默认选中视频（页面加载时已显示的评论）──
       // 检查拦截器中是否已有评论 API 响应（默认选中视频的评论数据）
-      const existingResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+      const existingResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN)
+        .concat(this.interceptor.getResponses(COMMENT_LIST_PATTERN_V2));
       if (existingResp.length > 0) {
         const defaultComments = existingResp[existingResp.length - 1].body?.comments || [];
         const defaultAwemeIds = [...new Set(defaultComments.map((c: any) => c.aweme_id))];
@@ -1531,7 +1716,9 @@ export class DouyinCrawler {
         }
       } else {
         // 无默认响应，清空拦截器准备下一阶段
-        this.interceptor.clear(COMMENT_LIST_PATTERN);
+        for (const p of COMMENT_LIST_PATTERNS) {
+          this.interceptor.clear(p);
+        }
         this.interceptor.clear(COMMENT_REPLY_PATTERN);
       }
 
@@ -1552,7 +1739,7 @@ export class DouyinCrawler {
           const preCheckStart = Date.now();
 
           // 先检查拦截器是否已有评论 API 响应（页面加载时默认视频的评论可能已被缓存）
-          const existingCommentResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+          const existingCommentResp = COMMENT_LIST_PATTERNS.flatMap(p => this.interceptor.getResponses(p));
           if (existingCommentResp.length > 0) {
             const latestResp = existingCommentResp[existingCommentResp.length - 1];
             const preComments = latestResp.body?.comments || [];
@@ -1562,7 +1749,9 @@ export class DouyinCrawler {
               allResponses = await this.collectAllCommentResponses(page);
             } else {
               logger.info({ awemeId: item.awemeId, preCheckMs: Date.now() - preCheckStart }, '[Phase3] Pre-check: interceptor response for different video, clearing');
-              this.interceptor.clear(COMMENT_LIST_PATTERN);
+              for (const p of COMMENT_LIST_PATTERNS) {
+                this.interceptor.clear(p);
+              }
               this.interceptor.clear(COMMENT_REPLY_PATTERN);
             }
           }
@@ -1584,7 +1773,9 @@ export class DouyinCrawler {
 
             if (hasCommentContent) {
               // 页面有评论内容但拦截器无匹配响应 → 直接开抽屉，不浪费时间滚动触发 API
-              this.interceptor.clear(COMMENT_LIST_PATTERN);
+              for (const p of COMMENT_LIST_PATTERNS) {
+                this.interceptor.clear(p);
+              }
               this.interceptor.clear(COMMENT_REPLY_PATTERN);
               logger.info({ awemeId: item.awemeId, preCheckMs: Date.now() - preCheckStart }, '[Phase3] Pre-check: page has comments but no matching API response, opening drawer');
             } else {
@@ -1635,12 +1826,12 @@ export class DouyinCrawler {
           continue;
         }
 
-        // 合并所有分页的 comments
-        const allComments = allResponses.flatMap((r: any) => r.body?.comments || []);
-        const wrappedBody = { comments: allComments };
+        // 合并所有分页的 comments（支持 comments 和 comment_info_list 两种格式）
+        const allComments = allResponses.flatMap((r: any) => r.body?.comment_info_list || r.body?.comments || []);
+        const wrappedBody = { comments: allComments, comment_info_list: allComments };
         const pageCommentCounts = allResponses.map((r: any, i: number) => ({
           page: i + 1,
-          comments: (r.body?.comments || []).length,
+          comments: (r.body?.comment_info_list || r.body?.comments || []).length,
           has_more: r.body?.has_more,
           cursor: r.body?.cursor,
         }));
@@ -1726,7 +1917,7 @@ export class DouyinCrawler {
           allCapturedResponses.push(...resp);
           responseByPattern[p] = resp.length;
         }
-        const expandedComments = allCapturedResponses.flatMap((r: any) => r.body?.comments || []);
+        const expandedComments = allCapturedResponses.flatMap((r: any) => r.body?.comment_info_list || r.body?.comments || []);
         const existingCids = new Set(allComments.map((c: any) => c.cid));
         const trulyNew = expandedComments.filter((c: any) => !existingCids.has(c.cid));
         const allApiComments: any[] = [...allComments, ...trulyNew];
@@ -1769,19 +1960,21 @@ export class DouyinCrawler {
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
-            is_author?: boolean;
+            is_author?: boolean; imageUrls?: string;
           }> = [];
 
           for (const root of rootComments) {
             const rootUid = root.user?.uid || '';
             const rootIsAuthor = (root.label_type === 1)
               || (firstCrawlAuthorId ? String(rootUid) === String(firstCrawlAuthorId) : false);
+            const rootImageUrls = this.extractImageUrls(root);
             allFlat.push({
               cid: root.cid, text: root.text || '',
               user_nickname: root.user?.nickname || '', user_uid: rootUid,
               digg_count: root.digg_count || 0, create_time: root.create_time,
               reply_id: '0', level: 1,
               is_author: rootIsAuthor,
+              imageUrls: rootImageUrls ? JSON.stringify(rootImageUrls) : undefined,
             });
           }
           for (const sub of subReplies) {
@@ -1789,6 +1982,7 @@ export class DouyinCrawler {
             const subUid = sub.user?.uid || '';
             const subIsAuthor = (sub.label_type === 1)
               || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
+            const subImageUrls = this.extractImageUrls(sub);
             allFlat.push({
               cid: sub.cid, text: sub.text || '',
               user_nickname: sub.user?.nickname || '', user_uid: subUid,
@@ -1796,6 +1990,7 @@ export class DouyinCrawler {
               reply_id: replyId, rootId: replyId, parentId: replyId,
               level: 2, replyToName: sub.reply_to_username || '',
               is_author: subIsAuthor,
+              imageUrls: subImageUrls ? JSON.stringify(subImageUrls) : undefined,
             });
           }
 
@@ -1824,6 +2019,7 @@ export class DouyinCrawler {
                 const subLabelType = s.label_type ?? 0;
                 const subIsAuthor = (subLabelType === 1)
                   || (firstCrawlAuthorId ? String(subUid) === String(firstCrawlAuthorId) : false);
+                const subImageUrls = this.extractImageUrls(s);
                 return {
                   cid: String(s.cid || ''),
                   text: s.text || '',
@@ -1838,11 +2034,13 @@ export class DouyinCrawler {
                   replyId: String(s.reply_id ?? '0'),
                   isAuthor: subIsAuthor,
                   subComments: [],
+                  imageUrls: subImageUrls,
                 };
               });
 
             const rootIsAuthorFlag = (root.label_type === 1)
               || (firstCrawlAuthorId ? String(root.user?.uid || '') === String(firstCrawlAuthorId) : false);
+            const rootImageUrls = this.extractImageUrls(root);
 
             const rootNode: CommentNode = {
               cid: rootCid,
@@ -1855,6 +2053,7 @@ export class DouyinCrawler {
               replyId: '0',
               isAuthor: rootIsAuthorFlag,
               subComments: [],
+              imageUrls: rootImageUrls,
             };
 
             // 过滤作者评论
@@ -1919,7 +2118,7 @@ export class DouyinCrawler {
             cid: string; text: string; user_nickname: string; user_uid: string;
             digg_count: number; create_time: number; reply_id: string;
             rootId?: string; parentId?: string; level: number; replyToName?: string;
-            is_author?: boolean;
+            is_author?: boolean; imageUrls?: string;
           }> = [];
 
           const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
@@ -1967,6 +2166,7 @@ export class DouyinCrawler {
                 level: 1,
                 replyToName: undefined,
                 is_author: isAuthor,
+                imageUrls: snapshot.imageUrls ? JSON.stringify(snapshot.imageUrls) : undefined,
               });
             }
           }
@@ -1988,6 +2188,7 @@ export class DouyinCrawler {
             const isAuthor = (c.label_type === 1)
               || (platformAuthorId ? (c.user?.uid || '') === platformAuthorId : false);
             newSubsFromTrulyNew++;
+            const trulyNewImageUrls = this.extractImageUrls(c);
             newCommentsToUpsert.push({
               cid,
               text: c.text || '',
@@ -2001,6 +2202,7 @@ export class DouyinCrawler {
               level: 2,
               replyToName: c.reply_to_reply_id ? undefined : undefined,
               is_author: isAuthor,
+              imageUrls: trulyNewImageUrls ? JSON.stringify(trulyNewImageUrls) : undefined,
             });
           }
           if (newSubsFromTrulyNew > 0) {
@@ -2040,6 +2242,7 @@ export class DouyinCrawler {
                     const isAuthor = (apiMatch?.label_type === 1)
                       || (platformAuthorId ? userUid === platformAuthorId : false);
                     newSubsFrom3b++;
+                    const replyImageUrls = this.extractImageUrls(apiMatch);
                     newCommentsToUpsert.push({
                       cid,
                       text: reply.text,
@@ -2053,6 +2256,7 @@ export class DouyinCrawler {
                       level: 2,
                       replyToName: reply.replyToName,
                       is_author: isAuthor,
+                      imageUrls: replyImageUrls ? JSON.stringify(replyImageUrls) : undefined,
                     });
                   }
                 }
@@ -2108,6 +2312,7 @@ export class DouyinCrawler {
               const groupNew = newCommentsToUpsert.filter(n =>
                 n.cid === snapshot.cid || n.rootId === snapshot.cid
               );
+              const incrImageUrls = snapshot.imageUrls;
               commentGroups.push({
                 rootComment: {
                   cid: snapshot.cid,
@@ -2119,23 +2324,31 @@ export class DouyinCrawler {
                   level: 1,
                   replyId: '0',
                   subComments: [],
+                  imageUrls: incrImageUrls,
                 },
                 subReplies: [],
-                newInGroup: groupNew.map(n => ({
-                  cid: n.cid,
-                  text: n.text,
-                  userNickname: n.user_nickname,
-                  userUid: n.user_uid,
-                  createTime: n.create_time,
-                  diggCount: n.digg_count || 0,
-                  level: n.level as 1 | 2,
-                  rootId: n.rootId || undefined,
-                  parentId: n.parentId || undefined,
-                  replyToName: n.replyToName || undefined,
-                  replyId: n.reply_id || '0',
-                  isAuthor: n.is_author || false,
-                  subComments: [],
-                })),
+                newInGroup: groupNew.map(n => {
+                  let nImageUrls: string[] | undefined;
+                  if (n.imageUrls) {
+                    try { nImageUrls = JSON.parse(n.imageUrls) as string[]; } catch {}
+                  }
+                  return {
+                    cid: n.cid,
+                    text: n.text,
+                    userNickname: n.user_nickname,
+                    userUid: n.user_uid,
+                    createTime: n.create_time,
+                    diggCount: n.digg_count || 0,
+                    level: n.level as 1 | 2,
+                    rootId: n.rootId || undefined,
+                    parentId: n.parentId || undefined,
+                    replyToName: n.replyToName || undefined,
+                    replyId: n.reply_id || '0',
+                    isAuthor: n.is_author || false,
+                    subComments: [],
+                    imageUrls: nImageUrls,
+                  };
+                }),
               });
             }
           }
@@ -2182,6 +2395,107 @@ export class DouyinCrawler {
     logger.info({ elapsed, total: queue.length, success: successCount, failed: failCount }, '[Phase3] Queue processing complete');
 
     return { results, riskDetected: false };
+  }
+
+  /**
+   * 简单模式 Phase3：仅采集根评论（最多 30 条）
+   * 使用纯 CID 去重，不采集子评论内容
+   */
+  async processCommentsQueueSimple(
+    page: Page,
+    queue: CommentQueueItem[],
+    maxRootComments: number = 30,
+  ): Promise<void> {
+    for (const item of queue) {
+      logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
+
+      // 1. 获取已有的根评论 CID 集合
+      const existingCids = await prisma.comment.findMany({
+        where: { videoId: item.awemeId, level: 1 },
+        select: { cid: true },
+      });
+      const existingCidSet = new Set(existingCids.map(c => c.cid));
+
+      // 2. 滚动加载根评论
+      const allComments: any[] = [];
+      let consecutiveNoNew = 0;
+      let hasMore = true;
+
+      while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
+        // 等待 API 响应
+        const responses = await this.collectAllCommentResponses(page);
+
+        if (responses.length === 0) {
+          consecutiveNoNew++;
+          logger.info({ awemeId: item.awemeId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+          continue;
+        }
+
+        // 提取根评论
+        const newComments = responses.flatMap(r => r.body?.comments || [])
+          .filter(c => !existingCidSet.has(c.cid));
+
+        if (newComments.length === 0) {
+          consecutiveNoNew++;
+        } else {
+          consecutiveNoNew = 0;
+          allComments.push(...newComments);
+        }
+
+        // 检查 has_more
+        const lastResp = responses[responses.length - 1];
+        hasMore = lastResp?.body?.has_more === 1;
+
+        // 继续滚动
+        if (hasMore && allComments.length < maxRootComments) {
+          await this.scrollCommentArea(page, 'bottom');
+          await HumanActions.wait(page, 8000, 8000);
+        }
+      }
+
+      // 3. 限制到 maxRootComments
+      const commentsToStore = allComments.slice(0, maxRootComments);
+
+      // 4. 存储新评论
+      if (commentsToStore.length > 0) {
+        for (const comment of commentsToStore) {
+          await db.upsertComment(item.awemeId, {
+            cid: comment.cid,
+            text: comment.text || '',
+            user_nickname: comment.user?.nickname || '',
+            user_uid: comment.user?.uid || '',
+            digg_count: comment.digg_count || 0,
+            create_time: comment.create_time || 0,
+            reply_id: '0',
+            is_author: false,
+          });
+        }
+
+        logger.info({
+          awemeId: item.awemeId,
+          newCount: commentsToStore.length,
+          totalCollected: allComments.length,
+        }, '[Simple] Stored new root comments');
+
+        // 5. 触发企微通知
+        await this.notifyNewComments(item.awemeId, commentsToStore);
+      } else {
+        logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+      }
+    }
+  }
+
+  /**
+   * 通知新评论（复用现有逻辑）
+   */
+  private async notifyNewComments(awemeId: string, comments: any[]): Promise<void> {
+    try {
+      const { monitorService } = await import('../services/monitorService');
+      // 调用现有的通知逻辑
+      await monitorService.notifyNewComments(awemeId, comments);
+    } catch (err: any) {
+      logger.error({ awemeId, err: err.message }, '[Simple] Failed to notify new comments');
+    }
   }
 
   private async openSelectWorkDrawer(page: Page): Promise<boolean> {
@@ -3114,11 +3428,14 @@ export class DouyinCrawler {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
-      const responses = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
-      if (responses.length > 0) {
-        const latest = responses[responses.length - 1];
-        logger.info({ awemeId: '(current)', responseTime: Date.now() - startTime }, '[Phase3] Comment API response captured');
-        return latest;
+      // 检查所有评论列表 pattern（旧端点 + 新端点）
+      for (const pattern of COMMENT_LIST_PATTERNS) {
+        const responses = this.interceptor.getResponses(pattern);
+        if (responses.length > 0) {
+          const latest = responses[responses.length - 1];
+          logger.info({ awemeId: '(current)', pattern, responseTime: Date.now() - startTime }, '[Phase3] Comment API response captured');
+          return latest;
+        }
       }
       await new Promise(resolve => setTimeout(resolve, 200));
     }
