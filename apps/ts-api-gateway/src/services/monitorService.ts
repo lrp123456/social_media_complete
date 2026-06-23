@@ -1080,6 +1080,10 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '抖音 Simple 模式 — 仅采集根评论');
     await dy.processCommentsQueueSimple(page, queue, maxRootComments);
+    // Phase3 结束后更新 Video.commentCount
+    for (const q of queue) {
+      await db.updateCommentCount(q.awemeId, q.newCount);
+    }
     phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
@@ -1240,6 +1244,10 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '快手 Simple 模式 — 仅采集根评论');
     await ks.processCommentsQueueSimple(page, queue, maxRootComments);
+    // Phase3 结束后更新 Video.commentCount
+    for (const q of queue) {
+      await db.updateCommentCount(q.awemeId, q.newCount);
+    }
     phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
@@ -1384,6 +1392,10 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '小红书 Simple 模式 — 仅采集根评论');
     await xhs.processCommentsQueueSimple(page, queue as any, maxRootComments);
+    // Phase3 结束后更新 Video.commentCount
+    for (const q of queue) {
+      await db.updateCommentCount(q.exportId, q.newCount);
+    }
     phase3Result = (queue as any[]).map((q: any) => ({ awemeId: q.exportId, success: true, error: undefined }));
   } else {
     // 深度模式：完整评论树采集
@@ -1582,6 +1594,10 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '视频号 Simple 模式 — 仅采集根评论');
     await tc.processCommentsQueueSimple(page, queue, maxRootComments);
+    // Phase3 结束后更新 Video.commentCount
+    for (const q of queue) {
+      await db.updateCommentCount(q.exportId, q.newCount);
+    }
     phase3Result = queue.map((q: any) => ({ exportId: q.exportId, success: true, error: undefined }));
   } else {
     // 深度模式：完整评论树采集
