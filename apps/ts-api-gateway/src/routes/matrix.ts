@@ -1387,6 +1387,64 @@ router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Respons
   }
 });
 
+/** POST /api/v1/matrix/monitor/accounts/:userId/restore-all — 恢复用户所有平台 */
+router.post('/monitor/accounts/:userId/restore-all', async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    if (isNaN(userId)) {
+      return res.status(400).json({ success: false, error: 'Invalid userId' });
+    }
+
+    // 1. 获取用户所在窗口
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fingerprintWindowId: true },
+    });
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // 2. 重置该窗口下所有用户（不限平台）
+    const result = await prisma.user.updateMany({
+      where: { fingerprintWindowId: user.fingerprintWindowId },
+      data: {
+        status: 'init',
+        monitoringEnabled: true,
+        cooldownUntil: 0,
+        consecutiveNoUpdate: 0,
+        platformAuthorId: null,
+        platformAuthorName: null,
+      },
+    });
+
+    // 3. 重置调度器
+    const allUsers = await prisma.user.findMany({
+      where: { fingerprintWindowId: user.fingerprintWindowId },
+      select: { fingerprintWindowId: true, platform: true },
+    });
+    for (const u of allUsers) {
+      resetSchedulerTimer(u.fingerprintWindowId, u.platform);
+    }
+
+    // 4. 写入操作日志
+    await prisma.operationLog.create({
+      data: {
+        action: 'monitor_restore_all_platforms',
+        details: JSON.stringify({ userId, windowId: user.fingerprintWindowId, updatedCount: result.count }),
+        userId: 'system',
+        userName: '恢复所有平台',
+        result: 'success',
+        level: 'info',
+      },
+    });
+
+    res.json({ success: true, data: { userId, updatedCount: result.count } });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '恢复用户所有平台失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 /** POST /api/v1/matrix/monitor/accounts/enable-all — 一键恢复所有用户 */
 router.post('/monitor/accounts/enable-all', async (_req: Request, res: Response) => {
   try {
