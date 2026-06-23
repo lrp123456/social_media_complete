@@ -54,7 +54,7 @@ export async function upsertVideosBatch(
           description: v.description,
           createTime: BigInt(v.create_time),
           // 首次创建时记录初始 count（后续由 Phase3 更新）
-          commentCount: 0,
+          commentCount: v.comment_count ?? 0,
           metrics: JSON.stringify(v.metrics || {}),
         },
       }),
@@ -242,13 +242,14 @@ export async function reconcileVideosForUser(
           update: {
             description: v.description,
             metrics: JSON.stringify(v.metrics || {}),
+            commentCount: v.comment_count ?? undefined,
           },
           create: {
             id: v.aweme_id,
             userId,
             description: v.description,
             createTime: BigInt(v.create_time),
-            commentCount: 0,
+            commentCount: v.comment_count ?? 0,
             metrics: JSON.stringify(v.metrics || {}),
           },
         }),
