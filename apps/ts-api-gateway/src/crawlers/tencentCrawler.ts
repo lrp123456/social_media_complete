@@ -1734,103 +1734,148 @@ export class TencentCrawler {
     page: Page,
     queue: CommentQueueItem[],
     maxRootComments: number = 30,
-  ): Promise<void> {
+  ): Promise<{ results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> }> {
+    const results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> = [];
+
     for (const item of queue) {
-      logger.info({ exportId: item.exportId, maxRootComments }, '[Simple] Starting simple mode comment collection');
+      try {
+        logger.info({ exportId: item.exportId, maxRootComments }, '[Simple] Starting simple mode comment collection');
 
-      // ── 清空拦截器中旧的评论响应 ──
-      this.interceptor.clear(COMMENT_LIST_PATTERN);
+        // ── 清空拦截器中旧的评论响应 ──
+        this.interceptor.clear(COMMENT_LIST_PATTERN);
 
-      // ── 在视频列表中滚动查找并点击目标视频 ──
-      const videoFound = await this.scrollToFindVideo(page, item.description, item.createTime);
-      if (!videoFound) {
-        logger.warn({ exportId: item.exportId }, '[Simple] Target video not found, trying first video');
-        await this.clickFirstVideoInCommentPage(page);
-      } else {
-        const videoClicked = await this.clickVideoInCommentPage(page, item.description);
-        if (!videoClicked) {
-          logger.warn({ exportId: item.exportId }, '[Simple] Failed to click video after scroll, trying first video');
+        // ── 在视频列表中滚动查找并点击目标视频 ──
+        const videoFound = await this.scrollToFindVideo(page, item.description, item.createTime);
+        if (!videoFound) {
+          logger.warn({ exportId: item.exportId }, '[Simple] Target video not found, trying first video');
           await this.clickFirstVideoInCommentPage(page);
-        }
-      }
-
-      // ── 等待 API 响应 ──
-      await HumanActions.wait(page, 3000, 5000);
-
-      // 1. 获取已有的根评论 CID 集合
-      const existingCids = await prisma.comment.findMany({
-        where: { videoId: item.exportId, level: 1 },
-        select: { cid: true },
-      });
-      const existingCidSet = new Set(existingCids.map(c => c.cid));
-
-      // 2. 滚动加载根评论
-      const allComments: any[] = [];
-      let consecutiveNoNew = 0;
-      let hasMore = true;
-
-      while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
-        // 获取当前拦截到的 API 响应
-        const responses = await this.collectAllCommentResponses(page);
-
-        if (responses.length === 0) {
-          consecutiveNoNew++;
-          logger.info({ exportId: item.exportId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
-          continue;
-        }
-
-        // 提取根评论（视频号 API 格式：body.data.comment）
-        const newComments = responses.flatMap(r => r.body?.data?.comment || [])
-          .filter((c: any) => !existingCidSet.has(c.commentId));
-
-        if (newComments.length === 0) {
-          consecutiveNoNew++;
         } else {
-          consecutiveNoNew = 0;
-          allComments.push(...newComments);
+          const videoClicked = await this.clickVideoInCommentPage(page, item.description);
+          if (!videoClicked) {
+            logger.warn({ exportId: item.exportId }, '[Simple] Failed to click video after scroll, trying first video');
+            await this.clickFirstVideoInCommentPage(page);
+          }
         }
 
-        // 检查 has_more（视频号：data.downContinueFlag !== 0）
-        const lastResp = responses[responses.length - 1];
-        hasMore = lastResp?.body?.data?.downContinueFlag !== 0;
+        // ── 等待 API 响应 ──
+        await HumanActions.wait(page, 3000, 5000);
 
-        // 继续滚动
-        if (hasMore && allComments.length < maxRootComments) {
-          await this.scrollCommentArea(page, 'bottom');
-          await HumanActions.wait(page, 8000, 8000);
+        // 1. 获取已有的根评论 CID 集合
+        const existingCids = await prisma.comment.findMany({
+          where: { videoId: item.exportId, level: 1 },
+          select: { cid: true },
+        });
+        const existingCidSet = new Set(existingCids.map(c => c.cid));
+
+        // 2. 滚动加载根评论
+        const allComments: any[] = [];
+        let consecutiveNoNew = 0;
+        let hasMore = true;
+
+        while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
+          // 获取当前拦截到的 API 响应
+          const responses = await this.collectAllCommentResponses(page);
+
+          if (responses.length === 0) {
+            consecutiveNoNew++;
+            logger.info({ exportId: item.exportId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+            continue;
+          }
+
+          // 提取根评论（视频号 API 格式：body.data.comment）
+          const newComments = responses.flatMap(r => r.body?.data?.comment || [])
+            .filter((c: any) => !existingCidSet.has(c.commentId));
+
+          if (newComments.length === 0) {
+            consecutiveNoNew++;
+          } else {
+            consecutiveNoNew = 0;
+            allComments.push(...newComments);
+          }
+
+          // 检查 has_more（视频号：data.downContinueFlag !== 0）
+          const lastResp = responses[responses.length - 1];
+          hasMore = lastResp?.body?.data?.downContinueFlag !== 0;
+
+          // 继续滚动
+          if (hasMore && allComments.length < maxRootComments) {
+            await this.scrollCommentArea(page, 'bottom');
+            await HumanActions.wait(page, 8000, 8000);
+          }
         }
-      }
 
-      // 3. 限制到 maxRootComments
-      const commentsToStore = allComments.slice(0, maxRootComments);
+        // 3. 限制到 maxRootComments
+        const commentsToStore = allComments.slice(0, maxRootComments);
 
-      // 4. 存储新评论
-      if (commentsToStore.length > 0) {
-        for (const comment of commentsToStore) {
-          await db.upsertComment(item.exportId, {
-            cid: comment.commentId,
-            text: comment.commentContent || '',
-            user_nickname: comment.commentNickname || '',
-            user_uid: comment.username || '',
-            digg_count: comment.commentLikeCount || 0,
-            create_time: parseInt(comment.commentCreatetime) || 0,
-            reply_id: '0',
-            is_author: false,
-          });
+        // 4. 存储新评论
+        if (commentsToStore.length > 0) {
+          for (const comment of commentsToStore) {
+            await db.upsertComment(item.exportId, {
+              cid: comment.commentId,
+              text: comment.commentContent || '',
+              user_nickname: comment.commentNickname || '',
+              user_uid: comment.username || '',
+              digg_count: comment.commentLikeCount || 0,
+              create_time: parseInt(comment.commentCreatetime) || 0,
+              reply_id: '0',
+              is_author: false,
+            });
+          }
+
+          logger.info({
+            exportId: item.exportId,
+            newCount: commentsToStore.length,
+            totalCollected: allComments.length,
+          }, '[Simple] Stored new root comments');
+
+          // 5. 构建 commentGroups（与 unifiedQueue 兼容）
+          const commentGroups = commentsToStore.map(comment => ({
+            rootComment: {
+              cid: comment.commentId,
+              text: comment.commentContent || '',
+              userNickname: comment.commentNickname || '',
+              userUid: comment.username || '',
+              createTime: parseInt(comment.commentCreatetime) || 0,
+              diggCount: comment.commentLikeCount || 0,
+              level: 1 as const,
+              replyId: '0',
+              isAuthor: false,
+              subComments: [],
+              imageUrls: comment.imageUrls,
+            },
+            subReplies: [],
+            newInGroup: [
+              {
+                cid: comment.commentId,
+                text: comment.commentContent || '',
+                userNickname: comment.commentNickname || '',
+                userUid: comment.username || '',
+                createTime: parseInt(comment.commentCreatetime) || 0,
+                diggCount: comment.commentLikeCount || 0,
+                level: 1 as const,
+                replyId: '0',
+                isAuthor: false,
+                subComments: [],
+                imageUrls: comment.imageUrls,
+              },
+            ],
+          }));
+
+          // 6. 触发企微通知
+          await this.notifyNewComments(item.exportId, commentsToStore);
+
+          results.push({ awemeId: item.exportId, success: true, commentGroups });
+        } else {
+          logger.info({ exportId: item.exportId }, '[Simple] No new root comments found');
+          results.push({ awemeId: item.exportId, success: true, commentGroups: [] });
         }
-
-        logger.info({
-          exportId: item.exportId,
-          newCount: commentsToStore.length,
-          totalCollected: allComments.length,
-        }, '[Simple] Stored new root comments');
-
-        // 5. 触发企微通知
-        await this.notifyNewComments(item.exportId, commentsToStore);
-      } else {
-        logger.info({ exportId: item.exportId }, '[Simple] No new root comments found');
+      } catch (err) {
+        logger.error({ exportId: item.exportId, err: (err as Error).message }, '[Simple] Error processing comment queue item');
+        results.push({ awemeId: item.exportId, success: false, error: (err as Error).message });
       }
     }
+
+    return { results };
   }
 
   /**
