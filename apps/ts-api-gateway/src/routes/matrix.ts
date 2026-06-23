@@ -5,11 +5,11 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
-import { submitPublishTask, publishQueue } from '../services/publishService';
+import { submitPublishTask } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
 import { monitorQueue, getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
-import { enqueueReply, platformQueue } from '../services/unifiedQueue';
+import { enqueueReply, getAllJobs, findJobByTaskId } from '../services/unifiedQueue';
 
 const router = Router();
 const logger = createLogger('routes:matrix');
@@ -225,7 +225,7 @@ router.get('/publish/tasks/batch-status', async (req: Request, res: Response) =>
     const results = await Promise.all(
       taskIds.map(async (taskId) => {
         try {
-          const job = await publishQueue.getJob(taskId);
+          const job = await findJobByTaskId(taskId);
           const log = await prisma.operationLog.findFirst({
             where: { details: { contains: taskId } },
             orderBy: { createdAt: 'desc' },
@@ -1674,9 +1674,9 @@ router.get('/bgm', async (_req: Request, res: Response) => {
 router.get('/queue/active', async (_req: Request, res: Response) => {
   try {
     const [active, waiting, delayed] = await Promise.all([
-      platformQueue.getJobs(['active']),
-      platformQueue.getJobs(['waiting']),
-      platformQueue.getJobs(['delayed']),
+      getAllJobs(['active']),
+      getAllJobs(['waiting']),
+      getAllJobs(['delayed']),
     ]);
 
     const allJobs = [...active, ...waiting, ...delayed];

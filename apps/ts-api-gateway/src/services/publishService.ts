@@ -3,16 +3,10 @@
 import { getPublisher } from '../platforms';
 import { createLogger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
-import { enqueuePublish, publishQueue } from './unifiedQueue';
+import { enqueuePublish } from './unifiedQueue';
 import type { PublishTask, PublishResult } from '../platforms/types';
 
 const logger = createLogger('publish-service');
-
-// ============================================================
-// 向后兼容：从 unifiedQueue 导入并重新导出
-// ============================================================
-
-export { publishQueue };
 
 // ============================================================
 // 监控回调定时器（Webhook 超时补兜）

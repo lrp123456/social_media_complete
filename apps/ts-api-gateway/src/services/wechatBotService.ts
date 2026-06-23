@@ -52,6 +52,12 @@ class WeChatBotManager {
     videoIds: string[];
     timestamp: number;
   }>();
+  private pendingVerifyCodes = new Map<string, {
+    userId: number;
+    platform: string;
+    windowId: string;
+    timeout: NodeJS.Timeout;
+  }>();
 
   // 自动重连状态
   private reconnecting = false;
@@ -335,6 +341,27 @@ class WeChatBotManager {
     this.pendingReplies.delete(commentCid);
   }
 
+  setPendingVerify(userid: string, userId: number, platform: string, windowId: string, timeoutMs = 300_000): void {
+    const existing = this.pendingVerifyCodes.get(userid);
+    if (existing) clearTimeout(existing.timeout);
+    const timeout = setTimeout(() => {
+      this.pendingVerifyCodes.delete(userid);
+      logger.info({ userid }, '待验证码上下文超时，已清除');
+    }, timeoutMs);
+    this.pendingVerifyCodes.set(userid, { userId, platform, windowId, timeout });
+    logger.info({ userid, userId, platform }, '已设置待验证码上下文');
+  }
+
+  getPendingVerify(userid: string) {
+    return this.pendingVerifyCodes.get(userid);
+  }
+
+  clearPendingVerify(userid: string): void {
+    const existing = this.pendingVerifyCodes.get(userid);
+    if (existing) clearTimeout(existing.timeout);
+    this.pendingVerifyCodes.delete(userid);
+  }
+
   trackNotification(userid: string, videoIds: string[]): void {
     this.pendingNotifications.set(userid, { videoIds, timestamp: Date.now() });
     // Auto-expire after 24 hours
@@ -415,6 +442,33 @@ class WeChatBotManager {
     };
     const label = platformNames[platform] || platform;
 
+    // 查询窗口名称和操作员手机号，用于提示用户用哪台手机扫码
+    let windowName = '';
+    let phone = '';
+    try {
+      const { prisma } = await import('../lib/prisma');
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { fingerprintWindowId: true },
+      }).catch(() => null);
+      if (user) {
+        const bw = await prisma.browserWindow.findFirst({
+          where: { externalId: user.fingerprintWindowId },
+          select: { windowName: true, boundOperatorId: true },
+        }).catch(() => null);
+        if (bw) {
+          windowName = bw.windowName || '';
+          if (bw.boundOperatorId) {
+            const op = await prisma.operator.findUnique({
+              where: { id: bw.boundOperatorId },
+              select: { phone: true },
+            }).catch(() => null);
+            if (op?.phone) phone = op.phone;
+          }
+        }
+      }
+    } catch { /* 静默降级，不影响正常流程 */ }
+
     try {
       // 如果有截图，先尝试上传到 OSS
       let imageUrl: string | undefined;
@@ -455,6 +509,8 @@ class WeChatBotManager {
           { keyname: '用户ID', value: String(userId) },
           { keyname: '平台', value: label },
           { keyname: '状态', value: '等待扫码登录' },
+          ...(windowName ? [{ keyname: '窗口', value: windowName }] : []),
+          ...(phone ? [{ keyname: '手机号', value: phone }] : []),
         ],
         jump_list: [
           { type: 3, title: '✅ 已登录，继续监控', question: `继续监控 ${userId} ${platform} ${fid}` },
@@ -472,6 +528,57 @@ class WeChatBotManager {
     } catch (err: any) {
       logger.error({ userid, platform, userId, err }, '发送登录告警失败');
       await this.sendTextMessage([userid], `🔐 ${label} 需要登录\n用户ID: ${userId}\n登录后回复"继续监控 ${userId} ${platform}"恢复监控`);
+    }
+  }
+
+  /**
+   * 发送二次验证卡片 — 提示用户输入验证码
+   */
+  async sendVerifyCard(userid: string, platform: string, userId: number): Promise<void> {
+    const platformNames: Record<string, string> = {
+      douyin: '抖音', kuaishou: '快手', xiaohongshu: '小红书', tencent: '视频号',
+    };
+    const label = platformNames[platform] || platform;
+
+    // 查询窗口名和手机号
+    let windowName = '';
+    let phone = '';
+    try {
+      const { prisma } = await import('../lib/prisma');
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { fingerprintWindowId: true } }).catch(() => null);
+      if (user) {
+        const bw = await prisma.browserWindow.findFirst({ where: { externalId: user.fingerprintWindowId }, select: { windowName: true, boundOperatorId: true } }).catch(() => null);
+        if (bw) {
+          windowName = bw.windowName || '';
+          if (bw.boundOperatorId) {
+            const op = await prisma.operator.findUnique({ where: { id: bw.boundOperatorId }, select: { phone: true } }).catch(() => null);
+            if (op?.phone) phone = op.phone;
+          }
+        }
+      }
+    } catch { /* 静默降级 */ }
+
+    try {
+      const card: any = {
+        card_type: 'text_notice',
+        source: { desc: '监控系统', desc_color: 0 },
+        main_title: { title: `📱 ${label} 需要短信验证码`, desc: '已自动点击接收短信，请输入收到的验证码' },
+        horizontal_content_list: [
+          { keyname: '用户ID', value: String(userId) },
+          { keyname: '平台', value: label },
+          { keyname: '状态', value: '等待输入验证码' },
+          ...(windowName ? [{ keyname: '窗口', value: windowName }] : []),
+          ...(phone ? [{ keyname: '手机号', value: phone }] : []),
+        ],
+        jump_list: [
+          { type: 3, title: '🔢 点击输入验证码', question: `验证码 ` },
+        ],
+        card_action: { type: 1, url: 'https://work.weixin.qq.com' },
+      };
+      await this.sendTemplateCard([userid], card);
+    } catch (err: any) {
+      logger.error({ userid, platform, userId, err }, '发送验证码卡片失败');
+      await this.sendTextMessage([userid], `📱 ${label} 需要短信验证码\n请回复"验证码 <6位数字>"完成验证`);
     }
   }
 }
@@ -555,31 +662,60 @@ async function autoStartBot(): Promise<void> {
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           const record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
-          if (!record) {
-            // 登录标签页不存在，直接恢复（用户可能已在别处登录）
-            await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
-            const { platformQueue } = await import('./unifiedQueue');
-            await platformQueue.add('monitor', { taskType: 'monitor', taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, fingerprintWindowId: user.fingerprintWindowId });
-            await botManager.sendTextMessage([userid], `✅ 已恢复 ${targetPlatform} 监控（直接触发）`);
-            return;
-          }
-
-          const loginState = await loginTabRegistry.checkLoginState(record.page, config);
-          if (loginState === 'logged_in') {
+          if (record) {
+            // 检查登录标签页是否已从登录页跳转（URL 不再包含 login/passport）
+            let tabUrl = record.page.url();
+            let isStillOnLoginPage = tabUrl.includes('login') || tabUrl.includes('passport');
+            if (isStillOnLoginPage) {
+              // 主动导航到平台首页，验证是否真正登录
+              try {
+                await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                await record.page.waitForTimeout(3000);
+                tabUrl = record.page.url();
+                isStillOnLoginPage = tabUrl.includes('login') || tabUrl.includes('passport');
+              } catch { /* navigation failed, assume still on login */ }
+            }
+            if (isStillOnLoginPage) {
+              // 仍在登录页 → 设置 15min 自动重试
+              const { enqueueMonitor } = await import('./unifiedQueue');
+              const retryDelay = 15 * 60 * 1000;
+              await prisma.user.update({
+                where: { id: targetUserId },
+                data: { status: 'login_required', cooldownUntil: Date.now() + retryDelay },
+              }).catch(() => null);
+              setTimeout(async () => {
+                try {
+                  await prisma.user.update({
+                    where: { id: targetUserId },
+                    data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true },
+                  }).catch(() => null);
+                  await enqueueMonitor({
+                    taskId: `retry_${Date.now()}_${targetUserId}`,
+                    userId: targetUserId, platform: targetPlatform as any,
+                    windowId, fingerprintWindowId: user.fingerprintWindowId,
+                  });
+                  logger.info({ targetUserId, targetPlatform }, '15min 自动重试监控已触发');
+                } catch (err: any) {
+                  logger.error({ targetUserId, err: err.message }, '自动重试监控失败');
+                }
+              }, retryDelay);
+              await botManager.sendTextMessage([userid], `⏳ 尚未检测到登录成功，15分钟后将自动重试监控\n如已登录请稍等，或点"强制刷新"重新扫码`);
+              return;
+            }
+            // 登录成功：关闭标签页（或仅取消注册）
             if (config.closeOnLoginSuccess) {
               await loginTabRegistry.closeLoginTab(windowId, targetFlowId);
             } else {
               await loginTabRegistry.unregister(windowId, targetFlowId);
             }
-            const { delFlowState } = await import('./monitorService');
-            await delFlowState(targetUserId, targetFlowId);
-            await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
-            const { platformQueue } = await import('./unifiedQueue');
-            await platformQueue.add('monitor', { taskType: 'monitor', taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, fingerprintWindowId: user.fingerprintWindowId });
-            await botManager.sendTextMessage([userid], `✅ ${targetPlatform} 登录成功，已恢复监控`);
-          } else {
-            await botManager.sendTextMessage([userid], `❌ 尚未检测到登录成功，请先扫码或点"刷新"`);
           }
+          // 恢复监控
+          const { delFlowState } = await import('./monitorService');
+          await delFlowState(targetUserId, targetFlowId);
+          await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+          const { enqueueMonitor } = await import('./unifiedQueue');
+          await enqueueMonitor({ taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, fingerprintWindowId: user.fingerprintWindowId });
+          await botManager.sendTextMessage([userid], `✅ ${targetPlatform} 已恢复监控`);
           return;
         }
 
@@ -668,6 +804,75 @@ async function autoStartBot(): Promise<void> {
           } catch (err: any) {
             logger.error({ targetUserId, targetPlatform, err }, 'F5刷新页面失败');
             await botManager.sendTextMessage([userid], `❌ F5刷新失败: ${err.message || '未知错误'}`);
+          }
+          return;
+        }
+
+        // 匹配"验证码 <数字>" — 抖音二次验证码填入
+        const verifyCodeMatch = content.match(/^验证码\s+(\d{4,8})$/);
+        if (verifyCodeMatch) {
+          const code = verifyCodeMatch[1];
+          const pending = botManager.getPendingVerify(userid);
+          if (!pending) {
+            await botManager.sendTextMessage([userid], '❌ 没有待处理的验证码请求');
+            return;
+          }
+          try {
+            const { getBrowserManager } = await import('../lib/browserManager');
+            const bm = getBrowserManager();
+            const browser = await bm.getBrowser(pending.windowId);
+            if (!browser) {
+              await botManager.sendTextMessage([userid], '❌ 无法连接浏览器');
+              botManager.clearPendingVerify(userid);
+              return;
+            }
+            // 找到抖音验证页面
+            const ctx = browser.contexts()[0];
+            const pages = ctx.pages();
+            let targetPage: any = null;
+            for (const p of pages) {
+              const url = p.url();
+              if (url.includes('douyin') || url.includes('creator')) {
+                const bodyText = await p.evaluate(() => document.body?.innerText?.substring(0, 500) || '').catch(() => '');
+                if (bodyText.includes('身份验证') || bodyText.includes('验证码')) {
+                  targetPage = p;
+                  break;
+                }
+              }
+            }
+            if (!targetPage) {
+              await botManager.sendTextMessage([userid], '❌ 未找到验证页面，请重试');
+              return;
+            }
+            // 填入验证码并提交
+            const { DouyinCrawler } = await import('../crawlers/douyinCrawler');
+            const dy = new DouyinCrawler();
+            const success = await dy.submitVerifyCode(targetPage, code);
+            if (success) {
+              botManager.clearPendingVerify(userid);
+              await botManager.sendTextMessage([userid], `✅ 验证码已填入并提交，等待验证结果`);
+              // 等待 5 秒检查是否验证成功
+              await new Promise(r => setTimeout(r, 5000));
+              const stillVerify = await targetPage.evaluate(() => document.body?.innerText?.includes('身份验证') || false).catch(() => false);
+              if (!stillVerify) {
+                await botManager.sendTextMessage([userid], `✅ ${pending.platform} 二次验证成功，正在恢复监控`);
+                // 恢复监控
+                const { prisma } = await import('../lib/prisma');
+                await prisma.user.update({ where: { id: pending.userId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+                const { enqueueMonitor } = await import('./unifiedQueue');
+                await enqueueMonitor({ taskId: `manual_${Date.now()}_${pending.userId}`, userId: pending.userId, platform: pending.platform as any, windowId: pending.windowId, fingerprintWindowId: pending.windowId });
+              } else {
+                await botManager.sendTextMessage([userid], `⚠️ 验证页面仍在，可能验证码错误，请重新输入`);
+                botManager.setPendingVerify(userid, pending.userId, pending.platform, pending.windowId);
+              }
+            } else {
+              await botManager.sendTextMessage([userid], `❌ 验证码填入失败，请手动处理`);
+              botManager.clearPendingVerify(userid);
+            }
+          } catch (err: any) {
+            logger.error({ userid, err: err.message }, '验证码处理失败');
+            await botManager.sendTextMessage([userid], `❌ 验证码处理失败: ${err.message}`);
+            botManager.clearPendingVerify(userid);
           }
           return;
         }
