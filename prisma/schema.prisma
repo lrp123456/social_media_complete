@@ -69,6 +69,8 @@ model Comment {
   isAuthor     Boolean  @default(false) @map("is_author")
   createdAt    DateTime @default(now()) @map("created_at")
 
+  imageUrls    String?  @map("image_urls") @db.Text  // JSON 数组，存储图片 URL
+
   // AI 客服建议字段
   suggestedReply      String?    @map("suggested_reply") @db.Text
   suggestionStatus    String     @default("none") @map("suggestion_status") @db.VarChar(16)
@@ -153,8 +155,9 @@ model SystemStatus {
 model CrawlSetting {
   id        Int      @id @default(autoincrement())
   platform  String   @unique
-  mode      String   @default("deep") // deep | light
+  mode      String   @default("simple") // "simple" | "deep"
   enabled   Boolean  @default(true)
+  config    Json?    // { max_root_comments: 30 }
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("crawl_settings")
