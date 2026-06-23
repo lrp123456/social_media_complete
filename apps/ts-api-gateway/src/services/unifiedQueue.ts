@@ -64,7 +64,7 @@ export async function getWindowQueue(windowId: string): Promise<Queue<PlatformTa
   if (queues.has(windowId)) return queues.get(windowId)!;
   if (!pendingQueues.has(windowId)) {
     pendingQueues.set(windowId, (async () => {
-      const name = `platform:${windowId}`;
+      const name = `platform-${windowId}`;
       const q = new Queue<PlatformTask>(name, {
         connection: getRedis() as any,
         defaultJobOptions,
@@ -445,7 +445,7 @@ function createWindowWorker(windowId: string, queue: Queue<PlatformTask>): Worke
   worker.on('ready', async () => {
     try {
       const redis = getRedis();
-      const queueName = `platform:${windowId}`;
+      const queueName = `platform-${windowId}`;
       const activeKey = `bull:${queueName}:active`;
       const stalledKey = `bull:${queueName}:stalled`;
 
