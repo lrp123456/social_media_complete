@@ -1702,6 +1702,130 @@ export class TencentCrawler {
     return false;
   }
 
+  // ════════════════════════════════════════
+  // 简单模式 Phase3：仅采集根评论（最多 30 条）
+  // ════════════════════════════════════════
+
+  /**
+   * 收集当前拦截到的所有 comment_list API 响应
+   */
+  private async collectAllCommentResponses(page: Page): Promise<any[]> {
+    return this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+  }
+
+  /**
+   * 滚动评论区容器（wujie shadow DOM）
+   */
+  private async scrollCommentArea(page: Page, direction: 'bottom' | 'top' | number): Promise<boolean> {
+    if (direction === 'bottom') {
+      return this.scrollShadowContainer(page, '.feed-comment__wrp', 500, 4);
+    } else if (direction === 'top') {
+      return this.scrollShadowContainer(page, '.feed-comment__wrp', -500, 4);
+    } else {
+      return this.scrollShadowContainer(page, '.feed-comment__wrp', Math.abs(direction), 3);
+    }
+  }
+
+  /**
+   * 简单模式 Phase3：仅采集根评论（最多 30 条）
+   * 使用纯 CID 去重，不采集子评论内容
+   */
+  async processCommentsQueueSimple(
+    page: Page,
+    queue: CommentQueueItem[],
+    maxRootComments: number = 30,
+  ): Promise<void> {
+    for (const item of queue) {
+      logger.info({ exportId: item.exportId, maxRootComments }, '[Simple] Starting simple mode comment collection');
+
+      // 1. 获取已有的根评论 CID 集合
+      const existingCids = await prisma.comment.findMany({
+        where: { videoId: item.exportId, level: 1 },
+        select: { cid: true },
+      });
+      const existingCidSet = new Set(existingCids.map(c => c.cid));
+
+      // 2. 滚动加载根评论
+      const allComments: any[] = [];
+      let consecutiveNoNew = 0;
+      let hasMore = true;
+
+      while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
+        // 获取当前拦截到的 API 响应
+        const responses = await this.collectAllCommentResponses(page);
+
+        if (responses.length === 0) {
+          consecutiveNoNew++;
+          logger.info({ exportId: item.exportId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+          continue;
+        }
+
+        // 提取根评论（视频号 API 格式：body.data.comment）
+        const newComments = responses.flatMap(r => r.body?.data?.comment || [])
+          .filter((c: any) => !existingCidSet.has(c.commentId));
+
+        if (newComments.length === 0) {
+          consecutiveNoNew++;
+        } else {
+          consecutiveNoNew = 0;
+          allComments.push(...newComments);
+        }
+
+        // 检查 has_more（视频号：data.downContinueFlag !== 0）
+        const lastResp = responses[responses.length - 1];
+        hasMore = lastResp?.body?.data?.downContinueFlag !== 0;
+
+        // 继续滚动
+        if (hasMore && allComments.length < maxRootComments) {
+          await this.scrollCommentArea(page, 'bottom');
+          await HumanActions.wait(page, 8000, 8000);
+        }
+      }
+
+      // 3. 限制到 maxRootComments
+      const commentsToStore = allComments.slice(0, maxRootComments);
+
+      // 4. 存储新评论
+      if (commentsToStore.length > 0) {
+        for (const comment of commentsToStore) {
+          await db.upsertComment(item.exportId, {
+            cid: comment.commentId,
+            text: comment.commentContent || '',
+            user_nickname: comment.commentNickname || '',
+            user_uid: comment.username || '',
+            digg_count: comment.commentLikeCount || 0,
+            create_time: parseInt(comment.commentCreatetime) || 0,
+            reply_id: '0',
+            is_author: false,
+          });
+        }
+
+        logger.info({
+          exportId: item.exportId,
+          newCount: commentsToStore.length,
+          totalCollected: allComments.length,
+        }, '[Simple] Stored new root comments');
+
+        // 5. 触发企微通知
+        await this.notifyNewComments(item.exportId, commentsToStore);
+      } else {
+        logger.info({ exportId: item.exportId }, '[Simple] No new root comments found');
+      }
+    }
+  }
+
+  /**
+   * 通知新评论（复用现有逻辑）
+   */
+  private async notifyNewComments(exportId: string, comments: any[]): Promise<void> {
+    try {
+      const { monitorService } = await import('../services/monitorService');
+      await monitorService.notifyNewComments(exportId, comments);
+    } catch (err: any) {
+      logger.error({ exportId, err: err.message }, '[Simple] Failed to notify new comments');
+    }
+  }
+
   async processCommentsQueue(
     page: Page,
     queue: CommentQueueItem[],
