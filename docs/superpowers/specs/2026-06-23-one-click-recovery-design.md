@@ -1,7 +1,7 @@
 # 一键恢复功能设计规格
 
 **日期**: 2026-06-23
-**状态**: 已批准
+**状态**: 已批准（Oracle 审查通过）
 **作者**: 矩阵智能运营系统
 
 ---
@@ -20,9 +20,9 @@
 
 | 功能 | 操作 | 影响范围 |
 |------|------|----------|
-| 一键恢复所有用户 | 启用所有已暂停的监控用户 | 所有 User 记录 |
-| 各用户所有平台恢复 | 启用监控 + 重置状态为 `init` | 单个用户的所有平台 |
-| 各用户所有平台清空数据 | 清空视频、评论、监控状态 + 重置用户状态 | 单个用户的所有平台 |
+| 一键恢复所有用户 | 启用所有已暂停的监控用户 + 重置调度器 | 所有 User 记录 |
+| 各用户所有平台恢复 | 启用监控 + 重置状态为 `init` + 重置调度器 | 单个窗口的所有平台 |
+| 各用户所有平台清空数据 | 清空视频、评论、监控状态 + 重置用户状态 | 单个窗口的所有平台 |
 
 ---
 
@@ -39,14 +39,41 @@
 {
   "success": true,
   "data": {
-    "updatedCount": 12
+    "enabledCount": 12
   }
 }
 ```
 
-**数据库操作**:
-```sql
-UPDATE users SET monitoring_enabled = true WHERE monitoring_enabled = false;
+**实现逻辑**:
+```typescript
+// 1. 查询所有已暂停的用户
+const pausedUsers = await prisma.user.findMany({
+  where: { monitoringEnabled: false },
+  select: { id: true, fingerprintWindowId: true, platform: true },
+});
+
+// 2. 批量启用
+await prisma.user.updateMany({
+  where: { monitoringEnabled: false },
+  data: { monitoringEnabled: true },
+});
+
+// 3. 重置调度器
+for (const user of pausedUsers) {
+  resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+}
+
+// 4. 写入操作日志
+await prisma.operationLog.create({
+  data: {
+    action: 'monitor_enable_all',
+    details: JSON.stringify({ enabledCount: pausedUsers.length }),
+    userId: 'system',
+    userName: '一键恢复',
+    result: 'success',
+    level: 'info',
+  },
+});
 ```
 
 ### 3.2 恢复用户所有平台
@@ -66,13 +93,47 @@ UPDATE users SET monitoring_enabled = true WHERE monitoring_enabled = false;
 }
 ```
 
-**数据库操作**:
-```sql
-UPDATE users 
-SET status = 'init', monitoring_enabled = true, cooldown_until = 0 
-WHERE fingerprint_window_id = (
-  SELECT fingerprint_window_id FROM users WHERE id = ?
-) AND platform IN ('douyin', 'kuaishou', 'xiaohongshu', 'tencent');
+**实现逻辑**:
+```typescript
+// 1. 获取用户所在窗口
+const user = await prisma.user.findUnique({
+  where: { id: userId },
+  select: { fingerprintWindowId: true },
+});
+
+// 2. 重置该窗口下所有用户（不限平台）
+const result = await prisma.user.updateMany({
+  where: { fingerprintWindowId: user.fingerprintWindowId },
+  data: {
+    status: 'init',
+    monitoringEnabled: true,
+    cooldownUntil: 0,
+    consecutiveNoUpdate: 0,
+    platformAuthorId: null,
+    platformAuthorName: null,
+  },
+});
+
+// 3. 重置调度器
+const allUsers = await prisma.user.findMany({
+  where: { fingerprintWindowId: user.fingerprintWindowId },
+  select: { fingerprintWindowId: true, platform: true },
+});
+for (const u of allUsers) {
+  resetSchedulerTimer(u.fingerprintWindowId, u.platform);
+}
+
+// 4. 写入操作日志
+await prisma.operationLog.create({
+  data: {
+    action: 'monitor_restore_all_platforms',
+    details: JSON.stringify({ userId, windowId: user.fingerprintWindowId, updatedCount: result.count }),
+    userId: 'system',
+    userName: '恢复所有平台',
+    result: 'success',
+    level: 'info',
+  },
+});
 ```
 
 ### 3.3 清空用户所有数据
@@ -93,37 +154,84 @@ WHERE fingerprint_window_id = (
 }
 ```
 
-**数据库操作**:
-```sql
--- 1. 删除评论
-DELETE FROM comments WHERE video_id IN (
-  SELECT id FROM videos WHERE user_id IN (
-    SELECT id FROM users WHERE fingerprint_window_id = (
-      SELECT fingerprint_window_id FROM users WHERE id = ?
-    )
-  )
-);
+**实现逻辑**:
+```typescript
+// 1. 获取用户所在窗口
+const user = await prisma.user.findUnique({
+  where: { id: userId },
+  select: { fingerprintWindowId: true },
+});
 
--- 2. 删除视频
-DELETE FROM videos WHERE user_id IN (
-  SELECT id FROM users WHERE fingerprint_window_id = (
-    SELECT fingerprint_window_id FROM users WHERE id = ?
-  )
-);
+// 2. 获取该窗口下所有用户 ID
+const windowUsers = await prisma.user.findMany({
+  where: { fingerprintWindowId: user.fingerprintWindowId },
+  select: { id: true },
+});
+const userIds = windowUsers.map(u => u.id);
 
--- 3. 删除监控状态
-DELETE FROM monitor_status WHERE account_id IN (
-  SELECT id::text FROM users WHERE fingerprint_window_id = (
-    SELECT fingerprint_window_id FROM users WHERE id = ?
-  )
-);
+// 3. 取消正在运行的 BullMQ 任务
+const activeJobs = await monitorQueue.getJobs(['waiting', 'active', 'delayed']);
+for (const job of activeJobs) {
+  if (userIds.includes(job.data.userId)) {
+    await job.remove().catch(() => {});
+  }
+}
 
--- 4. 重置用户状态
-UPDATE users 
-SET status = 'init', monitoring_enabled = true, cooldown_until = 0 
-WHERE fingerprint_window_id = (
-  SELECT fingerprint_window_id FROM users WHERE id = ?
-);
+// 4. 使用事务清空数据
+const [deletedComments, deletedVideos, deletedRootCounts, deletedCommentRecords, deletedCommentCounts, deletedMonitorStatus] = await prisma.$transaction([
+  // 删除评论
+  prisma.comment.deleteMany({
+    where: { videoId: { in: await prisma.video.findMany({ where: { userId: { in: userIds } }, select: { id: true } }).then(v => v.map(v => v.id)) } },
+  }),
+  // 删除视频
+  prisma.video.deleteMany({ where: { userId: { in: userIds } } }),
+  // 删除根评论计数
+  prisma.videoRootCommentCount.deleteMany({
+    where: { videoId: { in: await prisma.video.findMany({ where: { userId: { in: userIds } }, select: { id: true } }).then(v => v.map(v => v.id)) } },
+  }),
+  // 删除评论记录
+  prisma.videoCommentRecord.deleteMany({
+    where: { videoId: { in: await prisma.video.findMany({ where: { userId: { in: userIds } }, select: { id: true } }).then(v => v.map(v => v.id)) } },
+  }),
+  // 删除评论计数
+  prisma.videoCommentCount.deleteMany({
+    where: { videoId: { in: await prisma.video.findMany({ where: { userId: { in: userIds } }, select: { id: true } }).then(v => v.map(v => v.id)) } },
+  }),
+  // 删除监控状态
+  prisma.monitorStatus.deleteMany({
+    where: { accountId: { in: userIds.map(id => String(id)) } },
+  }),
+]);
+
+// 5. 重置用户状态
+await prisma.user.updateMany({
+  where: { fingerprintWindowId: user.fingerprintWindowId },
+  data: {
+    status: 'init',
+    monitoringEnabled: true,
+    cooldownUntil: 0,
+    consecutiveNoUpdate: 0,
+    platformAuthorId: null,
+    platformAuthorName: null,
+  },
+});
+
+// 6. 写入操作日志
+await prisma.operationLog.create({
+  data: {
+    action: 'monitor_clear_all_user_data',
+    details: JSON.stringify({
+      userId,
+      windowId: user.fingerprintWindowId,
+      deletedVideos: deletedVideos.count,
+      deletedComments: deletedComments.count,
+    }),
+    userId: 'system',
+    userName: '清空所有数据',
+    result: 'success',
+    level: 'info',
+  },
+});
 ```
 
 ---
@@ -155,7 +263,7 @@ WHERE fingerprint_window_id = (
 <button onClick={() => restoreAllPlatforms(userId)} className="btn-secondary">
   恢复所有平台
 </button>
-<button onClick={() => clearAllData(userId)} className="btn-danger">
+<button onClick={() => setShowClearConfirm(true)} className="btn-danger">
   清空所有数据
 </button>
 ```
@@ -179,10 +287,28 @@ WHERE fingerprint_window_id = (
       <li>监控状态</li>
     </ul>
     <p>此操作不可撤销！</p>
-    <button onClick={confirmClear}>确认清空</button>
-    <button onClick={() => setShowClearConfirm(false)}>取消</button>
+    <button onClick={confirmClear} disabled={clearCountdown > 0}>
+      {clearCountdown > 0 ? `确认清空 (${clearCountdown}s)` : '确认清空'}
+    </button>
+    <button onClick={() => { setShowClearConfirm(false); setClearCountdown(0); }}>
+      取消
+    </button>
   </div>
 )}
+```
+
+**安全措施**: 确认按钮默认禁用 3 秒倒计时，防止误触。
+
+### 4.4 Hook 命名
+
+```typescript
+// 新增 hooks
+useEnableAllUsers()           // POST /matrix/monitor/accounts/enable-all
+useRestoreAllPlatforms()      // POST /matrix/monitor/accounts/:userId/restore-all
+useClearAllUserData()         // POST /matrix/monitor/accounts/:userId/clear-all
+
+// 已有 hook（不修改）
+useClearUserData()            // POST /matrix/monitor/accounts/:userId/clear（单平台）
 ```
 
 ---
@@ -191,11 +317,11 @@ WHERE fingerprint_window_id = (
 
 ### 5.1 需要修改的文件
 
-| 文件 | 修改内容 |
-|------|----------|
-| `apps/ts-api-gateway/src/routes/matrix.ts` | 添加 3 个新 API 端点 |
-| `apps/admin-dashboard/src/app/matrix/page.tsx` | 添加按钮和交互逻辑 |
-| `apps/admin-dashboard/src/hooks/useApi.ts` | 添加 mutation hooks |
+| 文件 | 修改内容 | 复用关系 |
+|------|----------|----------|
+| `apps/ts-api-gateway/src/routes/matrix.ts` | 添加 3 个新 API 端点 | 复用现有 `clear` 逻辑 |
+| `apps/admin-dashboard/src/app/matrix/page.tsx` | 添加按钮和交互逻辑 | 复用现有 UI 组件 |
+| `apps/admin-dashboard/src/hooks/useApi.ts` | 添加 3 个 mutation hooks | 新增，不修改现有 |
 
 ### 5.2 不需要修改的部分
 
@@ -208,6 +334,9 @@ WHERE fingerprint_window_id = (
 
 1. "一键恢复所有用户"按钮可用，点击后所有暂停的用户恢复启用
 2. "恢复所有平台"按钮可用，点击后该用户所有平台状态重置为 `init`
-3. "清空所有数据"按钮可用，点击后弹出二次确认，确认后清空数据
+3. "清空所有数据"按钮可用，点击后弹出二次确认（3 秒倒计时），确认后清空数据
 4. 所有操作成功后自动刷新监控列表
 5. 错误处理：API 失败时显示错误提示
+6. 操作日志：所有操作都写入 `operation_logs` 表
+7. 调度器重置：启用/恢复操作后调度器立即感知变化
+8. 事务安全：清空操作使用数据库事务，失败时回滚
