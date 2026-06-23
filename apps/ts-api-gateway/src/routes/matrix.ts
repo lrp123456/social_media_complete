@@ -1527,7 +1527,7 @@ router.put('/monitor/crawl-settings/:platform', async (req: Request, res: Respon
   try {
     const paramsSchema = z.object({ platform: z.string().min(1) });
     const bodySchema = z.object({
-      mode: z.enum(['deep', 'light']),
+      mode: z.enum(['deep', 'simple']),
       enabled: z.boolean().optional(),
     });
 
