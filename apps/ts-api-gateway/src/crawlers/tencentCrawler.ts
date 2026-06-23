@@ -1248,13 +1248,15 @@ export class TencentCrawler {
     const MAX_SCROLL_ATTEMPTS = 15;
     let lastRootCount = 0;
     let dataExhausted = false;
+    let prevResponseCount = 0; // 跟踪已处理过的响应数量，防止 dataExhausted 竞态
 
     while (scrollAttempts < MAX_SCROLL_ATTEMPTS) {
       // 获取最新捕获的 comment_list 响应
       const responses = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
       let currentRootCount = 0;
 
-      for (const resp of responses) {
+      for (let i = 0; i < responses.length; i++) {
+        const resp = responses[i];
         const extracted = this.extractCommentsFromResponse(resp, exportId);
 
         // 添加根评论
@@ -1271,13 +1273,14 @@ export class TencentCrawler {
           }
         }
 
-        // 检查是否还有更多根评论
-        if (extracted.downContinueFlag === 0 && extracted.rootComments.length > 0) {
+        // 仅对当前迭代新到达的响应检查 downContinueFlag，防止旧响应触发错误退出
+        if (i >= prevResponseCount && extracted.downContinueFlag === 0 && extracted.rootComments.length > 0) {
           dataExhausted = true;
         }
       }
 
       currentRootCount = allRootComments.size;
+      prevResponseCount = responses.length; // 更新已处理计数
 
       // 如果已确认没有更多数据且已处理了数据，退出循环
       if (dataExhausted && currentRootCount > 0) {
@@ -1299,6 +1302,14 @@ export class TencentCrawler {
       await this.scrollShadowContainer(page, '.feed-comment__wrp', 300);
       await HumanActions.wait(page, 2000, 3000);
       scrollAttempts++;
+
+      logger.info({
+        exportId,
+        scrollTarget: '.feed-comment__wrp',
+        downContinueFlag: dataExhausted ? 0 : 1,
+        rootCount: currentRootCount,
+        scrollAttempts,
+      }, '[Phase3:Collect] Scroll iteration');
     }
 
     logger.info({
@@ -1591,6 +1602,32 @@ export class TencentCrawler {
     deltaY: number = 300,
     segments: number = 3,
   ): Promise<boolean> {
+    // ── 0. 优先级容器检测 ──
+    // 腾讯页面使用 wujie shadow DOM，内层 .scroll-list__wrp .scroll-list
+    // 才是真正绑定 infinite-scroll 的容器。如果传入外层 .feed-comment__wrp，
+    // 滚动该容器不一定能触发内层 infinite-scroll。
+    if (containerSelector === '.feed-comment__wrp') {
+      const PRIORITY_SELECTORS = [
+        '.scroll-list__wrp .scroll-list',
+        '.scroll-list__wrp',
+        '.feed-comment__wrp',
+      ];
+      containerSelector = await page.evaluate((selectors: string[]) => {
+        const wujieApps = document.querySelectorAll('wujie-app');
+        for (const sel of selectors) {
+          // 先查 shadow DOM
+          for (const app of Array.from(wujieApps)) {
+            const sr = (app as HTMLElement).shadowRoot;
+            if (sr?.querySelector(sel)) return sel;
+          }
+          // 再查主文档
+          if (document.querySelector(sel)) return sel;
+        }
+        return selectors[selectors.length - 1]; // 降级到最后一个
+      }, PRIORITY_SELECTORS);
+      logger.info({ containerSelector, original: '.feed-comment__wrp' }, '[ShadowScroll] Priority container selected');
+    }
+
     // ── 1. 从 shadow DOM 获取容器的视口坐标 ──
     const rect = await page.evaluate((sel: string) => {
       // 主路径: wujie-app 的 shadowRoot
