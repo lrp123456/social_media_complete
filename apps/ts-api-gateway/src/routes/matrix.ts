@@ -1387,6 +1387,49 @@ router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Respons
   }
 });
 
+/** POST /api/v1/matrix/monitor/accounts/enable-all — 一键恢复所有用户 */
+router.post('/monitor/accounts/enable-all', async (_req: Request, res: Response) => {
+  try {
+    // 1. 查询所有已暂停的用户
+    const pausedUsers = await prisma.user.findMany({
+      where: { monitoringEnabled: false },
+      select: { id: true, fingerprintWindowId: true, platform: true },
+    });
+
+    if (pausedUsers.length === 0) {
+      return res.json({ success: true, data: { enabledCount: 0 } });
+    }
+
+    // 2. 批量启用
+    await prisma.user.updateMany({
+      where: { monitoringEnabled: false },
+      data: { monitoringEnabled: true },
+    });
+
+    // 3. 重置调度器
+    for (const user of pausedUsers) {
+      resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+    }
+
+    // 4. 写入操作日志
+    await prisma.operationLog.create({
+      data: {
+        action: 'monitor_enable_all',
+        details: JSON.stringify({ enabledCount: pausedUsers.length }),
+        userId: 'system',
+        userName: '一键恢复',
+        result: 'success',
+        level: 'info',
+      },
+    });
+
+    res.json({ success: true, data: { enabledCount: pausedUsers.length } });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '一键恢复所有用户失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 /** PUT /api/v1/matrix/monitor/accounts/:userId/toggle — 切换监控开关 */
 router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Response) => {
   try {
