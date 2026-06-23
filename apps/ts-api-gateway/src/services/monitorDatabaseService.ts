@@ -140,7 +140,7 @@ export async function getLastCommentTime(videoId: string): Promise<number> {
  * 更新视频的评论数
  */
 export async function updateCommentCount(videoId: string, count: number): Promise<void> {
-  await prisma.video.update({
+  await prisma.video.updateMany({
     where: { id: videoId },
     data: { commentCount: count },
   });
