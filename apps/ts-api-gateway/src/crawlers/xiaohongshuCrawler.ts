@@ -56,6 +56,16 @@ export interface XiaohongshuCheckResult {
   riskControlInfo?: RiskControlDetection;
 }
 
+export interface XhsCommentQueueItem {
+  awemeId: string;
+  description: string;
+  createTime: number;
+  oldCount: number;
+  newCount: number;
+  isFirstCrawl: boolean;
+  _userId: number;
+}
+
 export class XiaohongshuCrawler {
   private interceptor: RequestInterceptor;
   private listenerPageId: string | null = null;
@@ -1190,6 +1200,137 @@ export class XiaohongshuCrawler {
     }
 
     return results;
+  }
+
+  /**
+   * 简单模式 Phase3：仅采集根评论（最多 30 条）
+   * 使用纯 CID 去重，不采集子评论内容
+   */
+  async processCommentsQueueSimple(
+    page: Page,
+    queue: XhsCommentQueueItem[],
+    maxRootComments: number = 30,
+  ): Promise<void> {
+    const { prisma } = await import('../lib/prisma');
+    const db = await import('../services/monitorDatabaseService');
+
+    for (const item of queue) {
+      logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
+
+      // 1. 获取已有的根评论 CID 集合
+      const existingCids = await prisma.comment.findMany({
+        where: { videoId: item.awemeId, level: 1 },
+        select: { cid: true },
+      });
+      const existingCidSet = new Set(existingCids.map(c => c.cid));
+
+      // 2. 滚动加载根评论
+      const allComments: any[] = [];
+      let consecutiveNoNew = 0;
+      let hasMore = true;
+
+      while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
+        // 等待 API 响应
+        const responses = await this.collectAllCommentResponses(page);
+
+        if (responses.length === 0) {
+          consecutiveNoNew++;
+          logger.info({ awemeId: item.awemeId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
+          continue;
+        }
+
+        // 提取根评论（小红书 API 格式）
+        const newComments = responses.flatMap(r => r.data?.comments || [])
+          .filter(c => !existingCidSet.has(c.id));
+
+        if (newComments.length === 0) {
+          consecutiveNoNew++;
+        } else {
+          consecutiveNoNew = 0;
+          allComments.push(...newComments);
+        }
+
+        // 检查 has_more（小红书：data.has_more === true）
+        const lastResp = responses[responses.length - 1];
+        hasMore = lastResp?.data?.has_more === true;
+
+        // 继续滚动
+        if (hasMore && allComments.length < maxRootComments) {
+          await this.scrollCommentArea(page, 'bottom');
+          await HumanActions.wait(page, 8000, 8000);
+        }
+      }
+
+      // 3. 限制到 maxRootComments
+      const commentsToStore = allComments.slice(0, maxRootComments);
+
+      // 4. 存储新评论
+      if (commentsToStore.length > 0) {
+        for (const comment of commentsToStore) {
+          await db.upsertComment(item.awemeId, {
+            cid: comment.id,
+            text: comment.content || '',
+            user_nickname: comment.user_info?.nickname || '',
+            user_uid: comment.user_info?.user_id || '',
+            digg_count: parseInt(comment.like_count) || 0,
+            create_time: comment.create_time || 0,
+            reply_id: '0',
+          });
+        }
+
+        logger.info({
+          awemeId: item.awemeId,
+          newCount: commentsToStore.length,
+          totalCollected: allComments.length
+        }, '[Simple] Stored new root comments');
+
+        // 5. 触发企微通知
+        await this.notifyNewComments(item.awemeId, commentsToStore);
+      } else {
+        logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+      }
+    }
+  }
+
+  /**
+   * 通知新评论（复用现有逻辑）
+   */
+  private async notifyNewComments(awemeId: string, comments: any[]): Promise<void> {
+    try {
+      const { monitorService } = await import('../services/monitorService');
+      await monitorService.notifyNewComments(awemeId, comments);
+    } catch (err: any) {
+      logger.error({ awemeId, err: err.message }, '[Simple] Failed to notify new comments');
+    }
+  }
+
+  /**
+   * 从评论拦截器中收集所有当前 API 响应
+   */
+  private async collectAllCommentResponses(page: Page): Promise<any[]> {
+    if (!this.commentInterceptor) {
+      return [];
+    }
+    const responses = this.commentInterceptor.getResponses('/api/sns/web/v2/comment/page') as any[];
+    return responses.map(r => r.body || r.data || r);
+  }
+
+  /**
+   * 滚动评论区容器
+   */
+  private async scrollCommentArea(page: Page, direction: 'bottom' | 'top' | number): Promise<boolean> {
+    try {
+      const scrollerDef = getSelector('region.comment-scroller', XHS_PLATFORM);
+      if (scrollerDef.css) {
+        await HumanActions.cdpSmartScroll(page, [scrollerDef.css], direction === 'bottom' ? 99999 : 99999, direction === 'bottom' ? 'down' : 'up');
+      } else {
+        await HumanActions.cdpSmartScroll(page, ['.comments-container', '.list-container'], 99999, direction === 'bottom' ? 'down' : 'up');
+      }
+      return true;
+    } catch (err: any) {
+      logger.warn({ error: err.message }, '[scrollCommentArea] Failed to scroll comment area');
+      return false;
+    }
   }
 
   /**
