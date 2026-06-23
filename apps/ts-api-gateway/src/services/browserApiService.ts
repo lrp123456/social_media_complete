@@ -865,4 +865,12 @@ export function reloadBrowserVendors(): void {
     registerBrowser({ vendor: 'roxybrowser', baseUrl: roxyUrl, apiKey: roxyKey, workspaceId: '111819' });
     logger.info(`热重载 roxybrowser → ${roxyUrl}`);
   }
+  // 重建 BrowserManager 单例，使其使用新端口/密钥
+  try {
+    const { resetBrowserManager } = require('../lib/browserManager');
+    resetBrowserManager();
+    logger.info('BrowserManager 单例已重置');
+  } catch (err: any) {
+    logger.warn(`重置 BrowserManager 失败: ${err.message}`);
+  }
 }

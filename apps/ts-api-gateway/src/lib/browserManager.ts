@@ -21,6 +21,14 @@ function loadInfraOverrides(): void {
   } catch { /* file may not exist */ }
 }
 
+/** 重建 BrowserManager 单例（用于 config-infra 热重载后更新端口/密钥） */
+export function resetBrowserManager(): void {
+  if (instance) {
+    logger.info('BrowserManager 单例已销毁，下次调用将重建');
+    instance = null;
+  }
+}
+
 export function getBrowserManager(): BrowserManager {
   if (!instance) {
     loadInfraOverrides();
