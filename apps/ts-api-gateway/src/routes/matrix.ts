@@ -659,10 +659,8 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
     // For each user, get total comment count (sum of video.commentCount) and new comment count
     const enriched = await Promise.all(
       users.map(async (user) => {
-        const [totalCommentsSum, newComments, lastMonitorTime] = await Promise.all([
-          user._count.videos > 0
-            ? prisma.video.aggregate({ where: { userId: user.id }, _sum: { commentCount: true } })
-            : Promise.resolve({ _sum: { commentCount: 0 } }),
+        const [totalComments, newComments, lastMonitorTime] = await Promise.all([
+          prisma.comment.count({ where: { video: { userId: user.id } } }),
           prisma.comment.count({ where: { video: { userId: user.id }, isNew: 1 } }),
           prisma.monitorStatus.findFirst({
             where: { accountId: String(user.id), platform: user.platform },
@@ -685,7 +683,7 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
           status: user.status,
           monitoringEnabled: user.monitoringEnabled,
           videoCount: user._count.videos,
-          totalComments: totalCommentsSum._sum.commentCount ?? 0,
+          totalComments,
           newComments,
           lastCheckTime: lastMonitorTime?.lastCheckTime || null,
           cooldownUntil: user.cooldownUntil ? Number(user.cooldownUntil) : 0,
@@ -799,7 +797,7 @@ router.get('/monitor/videos', async (req: Request, res: Response) => {
         userId: v.userId,
         description: v.description,
         createTime: Number(v.createTime),
-        commentCount: v.commentCount,
+        commentCount: v._count?.comments ?? 0,
         platform: v.user.platform,
         windowId: v.user.fingerprintWindowId,
         metrics: v.metrics ? JSON.parse(v.metrics) : null,
@@ -1116,7 +1114,7 @@ router.get('/monitor/accounts/:userId', async (req: Request, res: Response) => {
       id: v.id,
       description: v.description,
       createTime: Number(v.createTime),
-      commentCount: v.commentCount,
+      commentCount: v._count?.comments ?? 0,
       newCommentCount: v.comments.length,
       metrics: v.metrics ? JSON.parse(v.metrics) : null,
       updatedAt: v.updatedAt,
