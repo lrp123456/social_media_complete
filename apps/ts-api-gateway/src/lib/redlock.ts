@@ -262,6 +262,45 @@ export class WindowMutex {
   }
 
   // ------------------------------------------------------------
+  // 公开：tryAcquireOnce（非阻塞，用于 per-window 队列安全网）
+  // ------------------------------------------------------------
+
+  static async tryAcquireOnce(windowId: string, owner: LockOwner): Promise<MutexHandle | null> {
+    try {
+      const lock = await WindowMutex.tryAcquire(windowId);
+      try {
+        await WindowMutex.writeOwnerHash(windowId, owner);
+      } catch (writeErr) {
+        await lock.release().catch(() => {});
+        throw writeErr;
+      }
+
+      let released = false;
+      const handle: MutexHandle = {
+        windowId,
+        owner,
+        signal: AbortSignal.abort(), // 无心跳，signal 不会触发，仅满足接口
+        acquiredAt: Date.now(),
+        async release() {
+          if (released) return;
+          released = true;
+          await WindowMutex.delOwnerHash(windowId).catch(() => {});
+          try {
+            await lock.release();
+            console.log(`[Redlock] 🔓 窗口锁已释放: ${windowId}`);
+          } catch (err) {
+            console.warn(`[Redlock] ⚠️ 窗口锁释放异常: ${windowId}`, (err as Error).message);
+          }
+        },
+      };
+
+      return handle;
+    } catch {
+      return null;
+    }
+  }
+
+  // ------------------------------------------------------------
   // 公开：inspect
   // ------------------------------------------------------------
 
