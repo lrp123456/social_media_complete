@@ -189,12 +189,18 @@ export class TencentCrawler {
       const tcBm = tcGetBM();
       const tcBrowser = await tcBm.getBrowser(tcWindowId);
       if (tcBrowser) {
-        const tcRecord = await tcRegistry.openLoginTab(tcWindowId, userId, 'creator', tcBrowser, tcConfig);
+        // 先查找已有登录标签页（避免重复创建）
+        let tcRecord = await tcRegistry.find(tcWindowId, 'creator', tcBrowser, tcConfig.domain);
+        if (!tcRecord) {
+          tcRecord = await tcRegistry.openLoginTab(tcWindowId, userId, 'creator', tcBrowser, tcConfig);
+        }
         if (tcRecord) {
           const tcQrBuf = await tcRegistry.captureQR(tcRecord.page, tcConfig);
           if (tcQrBuf) {
             await botManager.sendLoginAlert(user.wechatUserid, 'tencent', userId, tcQrBuf);
             tcLoginTabUsed = true;
+            // 导航主页面回平台首页，避免主页面停留在登录页（防止重复页面）
+            try { await page.goto(TENCENT_HOME, { waitUntil: 'domcontentloaded', timeout: 10000 }); } catch { /* ignore */ }
             // 首次 QR 发送后交由后台轮询，直接返回
             return false;
           }

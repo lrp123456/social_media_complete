@@ -7187,6 +7187,9 @@
             "nav[class*=\"nav\"]"
           ],
           "qrSelectors": [
+            "div.qrcode-area img",
+            "div.qrcode-wrap img",
+            "img[src^=\"data:image/png\"]",
             ".qrcode-img",
             "img[src*=\"qr\"]",
             "canvas"

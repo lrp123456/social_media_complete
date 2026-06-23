@@ -383,6 +383,94 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
   }
 }
 
+/**
+ * 统一的登录二维码发送函数（所有平台共用）。
+ * 1. 检查当前页面是否已在登录页（风控重定向）→ 直接用当前页截图
+ * 2. 否则 find 已有登录标签页（避免重复创建）
+ * 3. 未找到则 openLoginTab 打开新登录页
+ * 4. captureQR 截取二维码 → sendLoginAlert 发送企微通知
+ * 5. 若 openLoginTab 失败，fallback 到 captureAndSendQR（当前页面截图）
+ */
+async function sendLoginQR(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { wechatUserid: true, fingerprintWindowId: true },
+    });
+    if (!user?.wechatUserid) {
+      logger.warn({ userId }, `[${platform}] 用户无 wechatUserid，无法发送登录二维码`);
+      return;
+    }
+
+    const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
+    const config = getLoginFlowConfig(platform, flowId);
+
+    if (!config || !user.fingerprintWindowId) {
+      // 无配置或无 windowId → 使用当前页面截图
+      logger.info({ userId, platform }, `[${platform}] 无 loginFlow 配置或 fingerprintWindowId，使用 fallback`);
+      await captureAndSendQR(page, userId, platform, user.wechatUserid);
+      return;
+    }
+
+    // 0. 检查当前页面是否已被重定向到登录页（风控场景常见）
+    const currentUrl = page.url();
+    if (currentUrl.includes(config.domain) || currentUrl.includes('login') || currentUrl.includes('passport')) {
+      logger.info({ userId, platform, url: currentUrl }, `[${platform}] 当前页面已在登录域，直接用当前页截图`);
+      const qrBuf = await loginTabRegistry.captureQR(page, config);
+      if (qrBuf) {
+        const { botManager } = await import('./wechatBotService');
+        await botManager.sendLoginAlert(user.wechatUserid, platform, userId, qrBuf, flowId);
+        logger.info({ userId, platform, flowId }, `[${platform}] 登录二维码已发送（当前页面）`);
+        return;
+      }
+      logger.warn({ userId, platform }, `[${platform}] 当前页面 captureQR 失败，尝试 openLoginTab`);
+    }
+
+    const windowId = String(user.fingerprintWindowId);
+    const { getBrowserManager } = await import('../lib/browserManager');
+    const bm = getBrowserManager();
+    const browser = await bm.getBrowser(windowId);
+    if (!browser) {
+      logger.warn({ userId, windowId }, `[${platform}] getBrowser 返回 null，使用 fallback`);
+      await captureAndSendQR(page, userId, platform, user.wechatUserid);
+      return;
+    }
+
+    // 1. 先查找已有登录标签页（同时清理孤儿页面）
+    let record = await loginTabRegistry.find(windowId, flowId, browser, config.domain);
+    // 2. 未找到则打开新登录标签页
+    if (!record) {
+      logger.info({ userId, platform, flowId }, `[${platform}] 未找到已有登录标签页，打开新标签页`);
+      record = await loginTabRegistry.openLoginTab(windowId, userId, flowId, browser, config);
+    }
+    if (!record) {
+      logger.warn({ userId, platform }, `[${platform}] openLoginTab 返回 null，使用 fallback`);
+      await captureAndSendQR(page, userId, platform, user.wechatUserid);
+      return;
+    }
+
+    // 3. 截取二维码
+    const qrBuf = await loginTabRegistry.captureQR(record.page, config);
+    if (!qrBuf) {
+      logger.warn({ userId, platform }, `[${platform}] captureQR 返回 null`);
+      await captureAndSendQR(page, userId, platform, user.wechatUserid);
+      return;
+    }
+
+    // 4. 发送企微通知
+    const { botManager } = await import('./wechatBotService');
+    await botManager.sendLoginAlert(user.wechatUserid, platform, userId, qrBuf, flowId);
+    logger.info({ userId, platform, flowId }, `[${platform}] 登录二维码已发送`);
+  } catch (err: any) {
+    logger.error({ userId, platform, err: err.message }, `[${platform}] sendLoginQR 异常`);
+    // 最终 fallback：当前页面截图
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+      if (user?.wechatUserid) await captureAndSendQR(page, userId, platform, user.wechatUserid);
+    } catch { /* give up */ }
+  }
+}
+
 /** 旧版 QR 截取逻辑作为 fallback */
 async function captureAndSendQRLegacy(page: any, userId: number, platform: string, wechatUserid: string): Promise<void> {
   try {
@@ -921,30 +1009,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId, platform: 'douyin', riskType }, '抖音风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
-    if (user?.wechatUserid) {
-      // 优先使用 LoginTabRegistry
-      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
-      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
-      const dyConfig = dyGetConfig('douyin', 'creator');
-      if (dyConfig && user.fingerprintWindowId) {
-        const dyWindowId = String(user.fingerprintWindowId);
-        const dyBm = dyGetBM();
-        const dyBrowser = await dyBm.getBrowser(dyWindowId);
-        if (dyBrowser) {
-          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
-          if (dyRecord) {
-            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
-            if (dyQrBuf) {
-              const { botManager: dyBot } = await import('./wechatBotService');
-              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
-            }
-          }
-        }
-      } else {
-        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
-      }
-    }
+    await sendLoginQR(page, task.userId, 'douyin');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -1002,30 +1067,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     logger.error({ userId: task.userId }, '抖音 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, phase3Result.riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
-    if (user?.wechatUserid) {
-      // 优先使用 LoginTabRegistry
-      const { loginTabRegistry: dyRegistry, getLoginFlowConfig: dyGetConfig } = await import('./loginFlowHelpers');
-      const { getBrowserManager: dyGetBM } = await import('../lib/browserManager');
-      const dyConfig = dyGetConfig('douyin', 'creator');
-      if (dyConfig && user.fingerprintWindowId) {
-        const dyWindowId = String(user.fingerprintWindowId);
-        const dyBm = dyGetBM();
-        const dyBrowser = await dyBm.getBrowser(dyWindowId);
-        if (dyBrowser) {
-          const dyRecord = await dyRegistry.openLoginTab(dyWindowId, task.userId, 'creator', dyBrowser, dyConfig);
-          if (dyRecord) {
-            const dyQrBuf = await dyRegistry.captureQR(dyRecord.page, dyConfig);
-            if (dyQrBuf) {
-              const { botManager: dyBot } = await import('./wechatBotService');
-              await dyBot.sendLoginAlert(user.wechatUserid, 'douyin', task.userId, dyQrBuf);
-            }
-          }
-        }
-      } else {
-        await captureAndSendQR(page, task.userId, 'douyin', user.wechatUserid);
-      }
-    }
+    await sendLoginQR(page, task.userId, 'douyin');
     dy.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
@@ -1115,8 +1157,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     logger.error({ userId: task.userId, platform: 'kuaishou', riskType }, '快手风控触发');
     await db.logRiskScene(task.userId, 'kuaishou', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'kuaishou', user.wechatUserid);
+    await sendLoginQR(page, task.userId, 'kuaishou');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -1173,8 +1214,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     logger.error({ userId: task.userId }, '快手 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'kuaishou', riskType, phase3Result.riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-    if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'kuaishou', user.wechatUserid);
+    await sendLoginQR(page, task.userId, 'kuaishou');
     ks.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
@@ -1252,11 +1292,10 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     logger.error({ userId: task.userId, platform: 'xiaohongshu', riskType }, '小红书风控触发');
     await db.logRiskScene(task.userId, 'xiaohongshu', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.setUserCooldown(task.userId, Date.now() + 30 * 60 * 1000);
-    // 登录失效时发送 QR 码到企微（与快手、视频号逻辑一致）
+    // 登录失效时发送 QR 码到企微
     if (['login_redirect', 'session_expired', 'url_redirect'].includes(riskType)) {
       await db.updateUserStatus(task.userId, 'login_required');
-      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-      if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'xiaohongshu', user.wechatUserid);
+      await sendLoginQR(page, task.userId, 'xiaohongshu');
     }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
@@ -1429,8 +1468,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
     await db.logRiskScene(task.userId, 'tencent', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, isLoginExpired ? 'login_required' : 'risk_control');
     if (isLoginExpired) {
-      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
-      if (user?.wechatUserid) await captureAndSendQR(page, task.userId, 'tencent', user.wechatUserid);
+      await sendLoginQR(page, task.userId, 'tencent');
     }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }

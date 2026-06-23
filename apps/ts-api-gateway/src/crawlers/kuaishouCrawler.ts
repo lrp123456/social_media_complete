@@ -240,12 +240,27 @@ export class KuaishouCrawler {
       const ksBm = ksGetBM();
       const ksBrowser = await ksBm.getBrowser(ksWindowId);
       if (ksBrowser) {
-        const ksRecord = await ksRegistry.openLoginTab(ksWindowId, userId, 'creator', ksBrowser, ksConfig);
+        // 先查找已有登录标签页（避免重复创建）
+        let ksRecord = await ksRegistry.find(ksWindowId, 'creator', ksBrowser, ksConfig.domain);
+        if (!ksRecord) {
+          ksRecord = await ksRegistry.openLoginTab(ksWindowId, userId, 'creator', ksBrowser, ksConfig);
+        }
         if (ksRecord) {
+          // 快手登录页可能需要点击"扫码登录"切换按钮才显示 QR
+          try {
+            const switchEl = await ksRecord.page.$('div.platform-switch');
+            if (switchEl) {
+              await switchEl.click();
+              await HumanActions.wait(ksRecord.page, 2000, 3000);
+              logger.info('[Login] Clicked platform switch on login tab');
+            }
+          } catch { /* switch may not be needed */ }
           const ksQrBuf = await ksRegistry.captureQR(ksRecord.page, ksConfig);
           if (ksQrBuf) {
             await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf);
             ksLoginTabUsed = true;
+            // 导航主页面回创作者首页，避免主页面停留在登录页（防止重复页面）
+            try { await page.goto('https://cp.kuaishou.com/article/publish/video', { waitUntil: 'domcontentloaded', timeout: 10000 }); } catch { /* ignore */ }
           }
         }
       }
