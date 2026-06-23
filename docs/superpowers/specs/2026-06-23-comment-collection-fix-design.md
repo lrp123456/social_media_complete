@@ -84,7 +84,7 @@ update: { commentCount: v.comment_count ?? undefined, ... }
 
 腾讯视频列表 API (`post_list`) 的返回结构中已包含 `commentCount` 字段（`TencentVideoInfo.commentCount`），Phase 1 的 `parseVideoItem` 已提取此字段。Phase 1 直接存入 DB，Phase 3 不再更新。
 
-`comment_list` API 响应中的 `data.commentCount`（如 `24`）仅用于 Phase 1 的评论数变化检测对比，不用于 DB 写入。
+`comment_list` API 响应中的 `data.commentCount` 不参与 DB 写入或二次验证。Phase 1 的 `post_list` 值即为最终值。
 
 ### 3. XHS clickThumbnailAndWaitNewTab 修复（`xiaohongshuCrawler.ts`）
 
