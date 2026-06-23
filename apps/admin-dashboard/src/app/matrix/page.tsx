@@ -22,6 +22,9 @@ import {
   useTriggerMonitor,
   useToggleMonitor,
   useClearUserData,
+  useEnableAllUsers,
+  useRestoreAllPlatforms,
+  useClearAllUserData,
   useDebugMode,
   useUpdateDebugMode,
   useNewCommentsOverview,
@@ -847,6 +850,12 @@ function MonitorTab() {
   const triggerAllMonitor = useTriggerAllMonitor();
   const toggleMonitor = useToggleMonitor();
   const clearUserData = useClearUserData();
+  const enableAllUsers = useEnableAllUsers();
+  const restoreAllPlatforms = useRestoreAllPlatforms();
+  const clearAllUserData = useClearAllUserData();
+
+  const [showClearConfirm, setShowClearConfirm] = useState<number | null>(null);
+  const [clearCountdown, setClearCountdown] = useState(0);
   const { data: debugModeData } = useDebugMode();
   const updateDebugMode = useUpdateDebugMode();
   const isDebugMode = debugModeData?.enabled ?? false;
@@ -927,6 +936,23 @@ function MonitorTab() {
     const timer = setInterval(() => setTick(t => t + 1), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // 清空确认倒计时
+  useEffect(() => {
+    if (showClearConfirm !== null) {
+      setClearCountdown(3);
+      const timer = setInterval(() => {
+        setClearCountdown(prev => {
+          if (prev <= 1) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+      return () => clearInterval(timer);
+    }
+  }, [showClearConfirm]);
 
   // 渲染时计算倒计时，直接从最新 schedulerData 读取，不依赖闭包
   const countdownMap = useMemo(() => {
@@ -1074,6 +1100,16 @@ function MonitorTab() {
                   className={triggerAllMonitor.isPending ? 'animate-spin' : ''}
                 />
                 {triggerAllMonitor.isPending ? '创建任务中…' : '立即更新全部'}
+              </button>
+
+              {/* 一键恢复所有用户 */}
+              <button
+                onClick={() => enableAllUsers.mutate()}
+                disabled={enableAllUsers.isPending}
+                className="flex items-center gap-2 px-4 py-3 rounded-xl text-label-md font-medium shadow-sm transition-all bg-green-600 text-white hover:bg-green-700 disabled:opacity-50 active:scale-[0.98] flex-shrink-0"
+              >
+                <MaterialIcon icon="replay" size="sm" />
+                {enableAllUsers.isPending ? '恢复中...' : '一键恢复所有用户'}
               </button>
 
               {/* 清空数据库按钮 */}
@@ -1434,6 +1470,23 @@ function MonitorTab() {
                         </div>
                       </div>
 
+                      {/* 用户级操作按钮 */}
+                      <div className="px-4 py-2 flex gap-2 border-t border-outline-variant/50">
+                        <button
+                          onClick={() => restoreAllPlatforms.mutate(group.accounts[0]?.id)}
+                          disabled={restoreAllPlatforms.isPending}
+                          className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                        >
+                          {restoreAllPlatforms.isPending ? '恢复中...' : '恢复所有平台'}
+                        </button>
+                        <button
+                          onClick={() => setShowClearConfirm(group.accounts[0]?.id ?? 0)}
+                          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+                        >
+                          清空所有数据
+                        </button>
+                      </div>
+
                       {/* 平台卡片网格 */}
                       <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                         {group.accounts.map((account) => {
@@ -1769,9 +1822,6 @@ function MonitorTab() {
           </div>
         </div>
       ) : (
-        /* ═══════════════════════════════════════════
-           DETAIL VIEW
-           ═══════════════════════════════════════════ */
         <div className="flex-1 overflow-y-auto px-4 pb-8">
           {/* Breadcrumb */}
           <button
@@ -2105,6 +2155,42 @@ function MonitorTab() {
           )}
         </div>
       )}
+
+      {/* ── 清空数据确认对话框 ── */}
+      {showClearConfirm !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl">
+            <h3 className="text-lg font-bold mb-4 text-on-surface">确认清空数据</h3>
+            <p className="mb-4 text-on-surface-variant">确定要清空该用户的所有数据吗？此操作将删除：</p>
+            <ul className="list-disc list-inside mb-4 text-gray-600 space-y-1">
+              <li>所有视频记录</li>
+              <li>所有评论记录</li>
+              <li>监控状态</li>
+            </ul>
+            <p className="mb-4 text-red-600 font-semibold">此操作不可撤销！</p>
+            <div className="flex gap-4">
+              <button
+                onClick={() => {
+                  clearAllUserData.mutate(showClearConfirm, {
+                    onSuccess: () => setShowClearConfirm(null),
+                  });
+                }}
+                disabled={clearAllUserData.isPending || clearCountdown > 0}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors flex-1"
+              >
+                {clearCountdown > 0 ? `确认清空 (${clearCountdown}s)` : '确认清空'}
+              </button>
+              <button
+                onClick={() => { setShowClearConfirm(null); setClearCountdown(0); }}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors flex-1"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
