@@ -938,6 +938,9 @@ async function autoStartBot(): Promise<void> {
             return;
           }
 
+          // 立即设置 AI 生成状态，防止竞态条件
+          botManager.setPendingAIGeneration(genCommentCid, { platform: genPlatform, userid });
+
           // 内容截断辅助函数
           const truncate = (text: string, maxLen: number) =>
             text.length > maxLen ? text.slice(0, maxLen) + '...' : text;
@@ -949,6 +952,7 @@ async function autoStartBot(): Promise<void> {
           }).catch(() => null);
 
           if (!genComment) {
+            botManager.clearPendingAIGeneration(genCommentCid);
             await botManager.sendTextMessage([userid], '❌ 未找到该评论，可能已被删除');
             return;
           }
@@ -991,9 +995,6 @@ async function autoStartBot(): Promise<void> {
             suggestedReply: '',
             suggestionStatus: 'pending',
           });
-
-          // 设置 AI 生成状态
-          botManager.setPendingAIGeneration(genCommentCid, { platform: genPlatform, userid });
 
           // 立即回复加载状态消息
           const loadingMsg = `⏳ 正在为评论「${truncate(genComment.text, 30)}」生成AI回复...\n视频ID: ${genComment.videoId}\n平台: ${genPlatform}\n预计等待: 10-30秒`;
