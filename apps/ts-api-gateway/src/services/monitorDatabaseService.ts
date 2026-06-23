@@ -97,6 +97,7 @@ export async function upsertComment(
     create_time: number;
     reply_id: string;
     is_author?: boolean;
+    imageUrls?: string;  // JSON 字符串数组
   },
 ): Promise<void> {
   await prisma.comment.upsert({
@@ -105,6 +106,7 @@ export async function upsertComment(
       text: comment.text,
       diggCount: comment.digg_count,
       isAuthor: comment.is_author ?? false,
+      imageUrls: comment.imageUrls ?? undefined,
     },
     create: {
       videoId,
@@ -117,6 +119,7 @@ export async function upsertComment(
       replyId: comment.reply_id,
       isAuthor: comment.is_author ?? false,
       isNew: 1,
+      imageUrls: comment.imageUrls ?? undefined,
     },
   });
 }
@@ -497,7 +500,7 @@ export async function getCrawlMode(platform: string): Promise<string> {
     where: { platform },
     select: { mode: true },
   });
-  return setting?.mode || 'deep';
+  return setting?.mode || 'simple';
 }
 
 // ============================================================
@@ -544,6 +547,7 @@ export async function upsertCommentWithHierarchy(
     level: number;
     replyToName?: string;
     is_author?: boolean;
+    imageUrls?: string;  // JSON 字符串数组
   },
 ): Promise<void> {
   await prisma.comment.upsert({
@@ -556,6 +560,7 @@ export async function upsertCommentWithHierarchy(
       level: comment.level,
       replyToName: comment.replyToName ?? null,
       isAuthor: comment.is_author ?? false,
+      imageUrls: comment.imageUrls ?? undefined,
     },
     create: {
       videoId,
@@ -572,6 +577,7 @@ export async function upsertCommentWithHierarchy(
       replyToName: comment.replyToName ?? null,
       isAuthor: comment.is_author ?? false,
       isNew: 1,
+      imageUrls: comment.imageUrls ?? undefined,
     },
   });
 }
@@ -594,6 +600,7 @@ export async function upsertCommentTree(
     level: number;
     replyToName?: string;
     is_author?: boolean;
+    imageUrls?: string;  // JSON 字符串数组
   }>,
 ): Promise<void> {
   if (comments.length === 0) return;
@@ -609,6 +616,7 @@ export async function upsertCommentTree(
           level: c.level,
           replyToName: c.replyToName ?? null,
           isAuthor: c.is_author ?? false,
+          imageUrls: c.imageUrls ?? undefined,
         },
         create: {
           videoId,
@@ -625,6 +633,7 @@ export async function upsertCommentTree(
           replyToName: c.replyToName ?? null,
           isAuthor: c.is_author ?? false,
           isNew: 1,
+          imageUrls: c.imageUrls ?? undefined,
         },
       });
     }
@@ -651,6 +660,7 @@ export async function batchUpsertComments(
     root_id?: string;
     parent_id?: string;
     reply_to_name?: string;
+    imageUrls?: string;  // JSON 字符串数组
   }>,
   userId: number,
 ): Promise<void> {
@@ -668,6 +678,7 @@ export async function batchUpsertComments(
           parentId: c.parent_id || null,
           replyToName: c.reply_to_name || null,
           isAuthor: c.is_author,
+          imageUrls: c.imageUrls ?? undefined,
         },
         create: {
           videoId: c.export_id,
@@ -684,6 +695,7 @@ export async function batchUpsertComments(
           replyToName: c.reply_to_name || null,
           isAuthor: c.is_author,
           isNew: 1,
+          imageUrls: c.imageUrls ?? undefined,
         },
       });
     }
@@ -798,6 +810,7 @@ export async function getCommentsNeedingSuggestion(
   level: number;
   rootId: string | null;
   parentId: string | null;
+  imageUrls: string | null;
 }>> {
   return prisma.comment.findMany({
     where: {
@@ -816,6 +829,7 @@ export async function getCommentsNeedingSuggestion(
       level: true,
       rootId: true,
       parentId: true,
+      imageUrls: true,
     },
     take: limit,
     orderBy: { createTime: 'desc' },

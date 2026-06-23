@@ -1702,7 +1702,7 @@ router.get('/monitor/crawl-settings', async (_req: Request, res: Response) => {
       return {
         platform,
         platformName: PLATFORM_DISPLAY_NAMES[platform] || platform,
-        mode: setting?.mode || 'deep',
+        mode: setting?.mode || 'simple',
         enabled: setting?.enabled ?? true,
         updatedAt: setting?.updatedAt || null,
       };
