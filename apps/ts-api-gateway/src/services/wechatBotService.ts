@@ -1061,13 +1061,12 @@ async function autoStartBot(): Promise<void> {
         // 匹配复制回复: 格式 "复制回复 <platform> <commentCid>"（来自结果卡片 jump_list）
         const copyReplySetup = content.match(/^复制回复\s+(\S+)\s+(\S+)$/);
         if (copyReplySetup) {
-          const copyPlatform = copyReplySetup[1];
           const copyCommentCid = copyReplySetup[2];
 
           const { prisma: prismaCopy } = await import('../lib/prisma');
           const copyComment = await prismaCopy.comment.findUnique({
             where: { cid: copyCommentCid },
-            select: { suggestedReply: true, suggestionStatus: true, text: true },
+            select: { suggestedReply: true, suggestionStatus: true },
           }).catch(() => null);
 
           if (!copyComment) {
