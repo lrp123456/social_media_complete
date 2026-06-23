@@ -932,6 +932,16 @@ async function autoStartBot(): Promise<void> {
           const genPlatform = aiGenSetup[1];
           const genCommentCid = aiGenSetup[2];
 
+          // 检查是否正在生成中
+          if (botManager.isGeneratingAI(genCommentCid)) {
+            await botManager.sendTextMessage([userid], '⏳ 该评论正在生成 AI 回复，请稍候...');
+            return;
+          }
+
+          // 内容截断辅助函数
+          const truncate = (text: string, maxLen: number) =>
+            text.length > maxLen ? text.slice(0, maxLen) + '...' : text;
+
           const { prisma: prismaGen } = await import('../lib/prisma');
           const genComment = await prismaGen.comment.findUnique({
             where: { cid: genCommentCid },
@@ -982,22 +992,68 @@ async function autoStartBot(): Promise<void> {
             suggestionStatus: 'pending',
           });
 
-          const genResult = await replyGenerator.generateReply(ctx);
+          // 设置 AI 生成状态
+          botManager.setPendingAIGeneration(genCommentCid, { platform: genPlatform, userid });
 
-          if (genResult.success && genResult.reply) {
-            await genDb.updateCommentSuggestion(genComment.id, {
-              suggestedReply: genResult.reply,
-              suggestionStatus: 'ready',
-              suggestionModel: genResult.model,
-              suggestionLatencyMs: genResult.latencyMs,
+          // 立即回复加载状态消息
+          const loadingMsg = `⏳ 正在为评论「${truncate(genComment.text, 30)}」生成AI回复...\n视频ID: ${genComment.videoId}\n平台: ${genPlatform}\n预计等待: 10-30秒`;
+          await botManager.sendTextMessage([userid], loadingMsg);
+
+          // 异步调用 LLM 生成回复
+          const genUserPlatform = genUser?.platform || genPlatform;
+          replyGenerator.generateReply(ctx)
+            .then(async (genResult) => {
+              if (genResult.success && genResult.reply) {
+                await genDb.updateCommentSuggestion(genComment.id, {
+                  suggestedReply: genResult.reply,
+                  suggestionStatus: 'ready',
+                  suggestionModel: genResult.model,
+                  suggestionLatencyMs: genResult.latencyMs,
+                });
+
+                // 发送结果卡片
+                const truncatedReply = truncate(genResult.reply, 40);
+                const truncatedComment = truncate(genComment.text, 80);
+                const resultCard = {
+                  card_type: 'text_notice' as const,
+                  source: { desc: '🤖 AI 回复助手 · 最终结果', desc_color: 0 },
+                  main_title: {
+                    title: '✅ AI 回复已生成',
+                    desc: `回复视频id:${genComment.videoId}的评论`,
+                  },
+                  emphasis_content: {
+                    title: truncatedReply,
+                    desc: 'AI 生成',
+                  },
+                  sub_title_text: '评论：' + truncatedComment,
+                  horizontal_content_list: [
+                    { keyname: '平台', value: genUserPlatform },
+                    { keyname: '视频ID', value: genComment.videoId },
+                    { keyname: '评论', value: truncatedComment },
+                    { keyname: '模型', value: genResult.model || 'unknown' },
+                  ],
+                  jump_list: [
+                    { type: 3 as const, title: '📋 复制完整回复', question: `复制回复 ${genUserPlatform} ${genCommentCid}` },
+                    { type: 3 as const, title: '📤 直接发送', question: `ai发送 ${genUserPlatform} ${genCommentCid}` },
+                  ],
+                  card_action: { type: 1 as const, url: 'https://creator.douyin.com/creator-micro/interactive/comment' },
+                };
+                await botManager.sendTemplateCard([userid], resultCard);
+                logger.info({ commentCid: genCommentCid, commentId: genComment.id, model: genResult.model }, '企微触发的 AI 回复已生成');
+              } else {
+                await genDb.markSuggestionError(genComment.id, genResult.error || '未知错误');
+                await botManager.sendTextMessage([userid], `❌ AI 回复生成失败\n评论：${truncate(genComment.text, 50)}\n错误：${genResult.error || '未知错误'}\n请稍后重试，或手动回复`);
+              }
+            })
+            .catch(async (err) => {
+              logger.error({ commentCid: genCommentCid, err: err.message }, 'AI 回复生成异常');
+              await genDb.markSuggestionError(genComment.id, err.message || '未知错误');
+              await botManager.sendTextMessage([userid], `❌ AI 回复生成失败\n评论：${truncate(genComment.text, 50)}\n错误：${err.message || '未知错误'}\n请稍后重试，或手动回复`);
+            })
+            .finally(() => {
+              botManager.clearPendingAIGeneration(genCommentCid);
             });
-            const preview = genResult.reply.length > 80 ? genResult.reply.slice(0, 80) + '...' : genResult.reply;
-            await botManager.sendTextMessage([userid], `🤖 AI 回复已生成:\n> ${preview}\n\n模型: ${genResult.model || 'unknown'} · ${genResult.latencyMs}ms\n\n点击 **发送 AI 回复** 按钮即可发送此回复到评论区`);
-            logger.info({ commentCid: genCommentCid, commentId: genComment.id, model: genResult.model }, '企微触发的 AI 回复已生成');
-          } else {
-            await genDb.markSuggestionError(genComment.id, genResult.error || '未知错误');
-            await botManager.sendTextMessage([userid], `❌ AI 回复生成失败: ${genResult.error || '未知错误'}`);
-          }
+
           return;
         }
 
