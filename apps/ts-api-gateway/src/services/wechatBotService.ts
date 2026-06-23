@@ -1058,6 +1058,34 @@ async function autoStartBot(): Promise<void> {
           return;
         }
 
+        // 匹配复制回复: 格式 "复制回复 <platform> <commentCid>"（来自结果卡片 jump_list）
+        const copyReplySetup = content.match(/^复制回复\s+(\S+)\s+(\S+)$/);
+        if (copyReplySetup) {
+          const copyPlatform = copyReplySetup[1];
+          const copyCommentCid = copyReplySetup[2];
+
+          const { prisma: prismaCopy } = await import('../lib/prisma');
+          const copyComment = await prismaCopy.comment.findUnique({
+            where: { cid: copyCommentCid },
+            select: { suggestedReply: true, suggestionStatus: true, text: true },
+          }).catch(() => null);
+
+          if (!copyComment) {
+            await botManager.sendTextMessage([userid], '❌ 未找到该评论，可能已被删除');
+            return;
+          }
+
+          if (copyComment.suggestionStatus !== 'ready' || !copyComment.suggestedReply) {
+            await botManager.sendTextMessage([userid], '❌ 该评论暂无可用的 AI 回复，请先生成');
+            return;
+          }
+
+          // 发送回复内容供用户复制
+          const replyText = `📋 AI 回复内容（可复制后修改）：\n\n${copyComment.suggestedReply}\n\n💡 你可以修改后直接发送给机器人，我会处理发送任务。`;
+          await botManager.sendTextMessage([userid], replyText);
+          return;
+        }
+
         // 匹配 AI 发送回复: 格式 "ai发送 <platform> <commentCid>"（来自 jump_list type=3）
         const aiSendSetup = content.match(/^ai发送\s+(\S+)\s+(\S+)$/);
         if (aiSendSetup) {
