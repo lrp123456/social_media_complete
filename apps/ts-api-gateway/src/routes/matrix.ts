@@ -1674,6 +1674,8 @@ router.get('/monitor/new-comments', async (_req: Request, res: Response) => {
       updatedAt: v.updatedAt,
       comments: v.comments.map((c) => ({
         ...c,
+        createTime: Number(c.createTime),
+        diggCount: Number(c.diggCount),
         isLightMode: typeof c.cid === 'string' && c.cid.startsWith('light_'),
       })),
     }));
