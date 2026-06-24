@@ -9,6 +9,7 @@ import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import { isDescriptionMatch } from './timeParser';
+import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
 
@@ -1485,9 +1486,12 @@ export class DouyinCrawler {
 
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
+      const decision = getCommentCrawlDecision({
+        currentCount: video.comment_count,
+        storedCount: dbVideo?.commentCount,
+      });
+
       if (!dbVideo) {
-        // 跨用户保护：视频可能已被其他用户首次爬取入库（窗口登录态混淆等）
-        // 此时不应重复爬取和通知，直接跳过
         const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
         if (existingVideo && existingVideo.userId !== userId) {
           logger.warn({
@@ -1498,12 +1502,13 @@ export class DouyinCrawler {
           }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
           continue;
         }
-        // 新视频首次入库：如果有评论，入队获取（ID归一化已修复跨源重复）
-        if (video.comment_count > 0) {
+
+        if (decision.shouldQueue) {
           logger.info({
             awemeId: video.aweme_id,
             description: video.description,
             commentCount: video.comment_count,
+            reason: decision.reason,
           }, '[Phase1] New video with comments — enqueuing for initial fetch');
           commentsQueue.push({
             awemeId: video.aweme_id,
@@ -1511,23 +1516,21 @@ export class DouyinCrawler {
             createTime: video.create_time,
             oldCount: 0,
             newCount: video.comment_count,
-            isFirstCrawl: true,
+            isFirstCrawl: decision.isFirstCrawl,
             _userId: userId,
             isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
           });
         } else {
-          logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New video with no comments — skipping');
+          logger.info({ awemeId: video.aweme_id, description: video.description, reason: decision.reason }, '[Phase1] New video with no comments — skipping');
         }
 
-        // 同步作者 ID（首次绑定 + 自愈）
         if (video.authorUid) {
           await db.syncPlatformAuthorId(userId, video.authorUid, video.authorNickname);
         }
-
         continue;
       }
 
-      if (video.comment_count > dbVideo.commentCount) {
+      if (decision.shouldQueue) {
         const diff = video.comment_count - dbVideo.commentCount;
         logger.info({
           awemeId: video.aweme_id,
@@ -1535,7 +1538,8 @@ export class DouyinCrawler {
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
           diff,
-        }, '[Phase1] Comment count increased — enqueuing for comment fetch (NO click on list page)');
+          reason: decision.reason,
+        }, '[Phase1] Comment count changed — enqueuing for comment fetch (NO click on list page)');
 
         commentsQueue.push({
           awemeId: video.aweme_id,
@@ -1543,35 +1547,17 @@ export class DouyinCrawler {
           createTime: video.create_time,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
-          isFirstCrawl: false,
+          isFirstCrawl: decision.isFirstCrawl,
           _userId: userId,
           isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
         });
       } else {
-        // 评论数未变，但检查是否需要首次爬取（无评论记录）
-        const existingComments = await prisma.comment.count({ where: { videoId: video.aweme_id } });
-        if (existingComments === 0 && video.comment_count > 0) {
-          logger.info({
-            awemeId: video.aweme_id,
-            description: video.description,
-          }, '[Phase1] Existing video without comments — enqueuing for initial fetch');
-          commentsQueue.push({
-            awemeId: video.aweme_id,
-            description: video.description,
-            createTime: video.create_time,
-            oldCount: dbVideo.commentCount,
-            newCount: video.comment_count,
-            isFirstCrawl: true,
-            _userId: userId,
-            isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
-          });
-        } else {
-          logger.info({
-            awemeId: video.aweme_id,
-            current: video.comment_count,
-            stored: dbVideo.commentCount,
-          }, '[Phase1] Comment count unchanged');
-        }
+        logger.info({
+          awemeId: video.aweme_id,
+          current: video.comment_count,
+          stored: dbVideo.commentCount,
+          reason: decision.reason,
+        }, '[Phase1] Comment count unchanged');
       }
     }
 
@@ -1870,7 +1856,11 @@ export class DouyinCrawler {
         });
         const lastCheckTime = monitorStatus?.lastCheckTime?.getTime() || 0;
 
-        const isFirstCrawl = item.isFirstCrawl || lastSnapshots.size === 0;
+        const isFirstCrawl = item.isFirstCrawl;
+        const snapshotFallback = !isFirstCrawl && lastSnapshots.size === 0;
+        if (snapshotFallback) {
+          logger.warn({ awemeId: item.awemeId }, '[Tree] Incremental crawl missing root snapshots — using DB cid fallback without switching to first crawl');
+        }
         logger.info({
           awemeId: item.awemeId,
           isFirstCrawl,
@@ -2135,7 +2125,6 @@ export class DouyinCrawler {
           }> = [];
 
           const apiRootCids = new Set(currentSnapshots.map(s => s.cid));
-          const dbRootCids = new Set(lastSnapshots.keys());
 
           // 加载该视频的所有已入库 cid（含子回复），用于去重展开后的子回复
           const dbAllCids = new Set(
@@ -2144,6 +2133,7 @@ export class DouyinCrawler {
               select: { cid: true },
             })).map(c => c.cid)
           );
+          const dbRootCids = getRootCidSetForIncremental(lastSnapshots, dbAllCids, currentSnapshots);
 
           // 获取作者 ID 用于过滤（作者的评论不计为新增）
           const currentUser = await db.getUserById(item._userId!);
@@ -2229,7 +2219,7 @@ export class DouyinCrawler {
           let newSubsFrom3b = 0;
           for (const snapshot of currentSnapshots) {
             const lastCount = lastSnapshots.get(snapshot.cid);
-            if (lastCount !== undefined && snapshot.replyCount > lastCount) {
+            if (shouldCompareReplyCounts(lastSnapshots) && lastCount !== undefined && snapshot.replyCount > lastCount) {
               rootsWithReplyIncrease++;
               const diff = snapshot.replyCount - lastCount;
               logger.info({ awemeId: item.awemeId, rootCid: snapshot.cid, oldReplyCount: lastCount, newReplyCount: snapshot.replyCount, diff }, '[Tree] Incremental 3b: replyCount increased for root');
@@ -2580,9 +2570,6 @@ export class DouyinCrawler {
             };
           });
 
-          // 6. 触发企微通知
-          await this.notifyNewComments(item.awemeId, commentsToStore);
-
           results.push({ awemeId: item.awemeId, success: true, commentGroups });
         } else {
           logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
@@ -2595,19 +2582,6 @@ export class DouyinCrawler {
     }
 
     return { results };
-  }
-
-  /**
-   * 通知新评论（复用现有逻辑）
-   */
-  private async notifyNewComments(awemeId: string, comments: any[]): Promise<void> {
-    try {
-      const { monitorService } = await import('../services/monitorService');
-      // 调用现有的通知逻辑
-      await monitorService.notifyNewComments(awemeId, comments);
-    } catch (err: any) {
-      logger.error({ awemeId, err: err.message }, '[Simple] Failed to notify new comments');
-    }
   }
 
   private async openSelectWorkDrawer(page: Page): Promise<boolean> {
