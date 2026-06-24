@@ -49,14 +49,16 @@ export function getRootCidSetForIncremental(
 }
 
 /**
- * 按 create_time 倒序取最新 limit 条。
- * create_time 缺失按 0 处理（排到末尾），不抛异常。不修改入参数组。
+ * 按 create_time 或 createTime 倒序取最新 limit 条。
+ * 时间戳缺失按 0 处理（排到末尾），不抛异常。不修改入参数组。
  */
-export function truncateToNewest<T extends { create_time?: number }>(
+export function truncateToNewest<T extends { create_time?: number } | { createTime?: number }>(
   items: T[],
   limit: number,
 ): T[] {
+  const getTime = (item: T): number =>
+    (item as any).create_time ?? (item as any).createTime ?? 0;
   return [...items]
-    .sort((a, b) => (b.create_time ?? 0) - (a.create_time ?? 0))
+    .sort((a, b) => getTime(b) - getTime(a))
     .slice(0, limit);
 }

@@ -6,7 +6,7 @@ import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getSelectorReader } from '../lib/selectorStore';
-import { getCommentCrawlDecision } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
@@ -939,8 +939,8 @@ export class TencentCrawler {
 
     const commentsQueue: CommentQueueItem[] = [];
 
-    // 先过滤非公开和评论已关闭的视频，再截断到 maxMonitorVideos
-    const filteredVideos = enriched.filter(video => {
+    // 先过滤非公开和评论已关闭的视频，再按 create_time 倒序截断到 maxMonitorVideos
+    const publicVideos = enriched.filter(video => {
       if (video.commentClose === 1) {
         logger.debug({ exportId: video.exportId }, '[Phase1] Skipping video with comments closed');
         return false;
@@ -950,7 +950,8 @@ export class TencentCrawler {
         return false;
       }
       return true;
-    }).slice(0, this.maxMonitorVideos);
+    });
+    const filteredVideos = truncateToNewest(publicVideos, this.maxMonitorVideos);
 
     for (const video of filteredVideos) {
       const encodedId = video.exportId.replace(/\//g, '_');
