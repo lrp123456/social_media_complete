@@ -479,6 +479,7 @@ export type MonitorVideoDetail = {
   newCommentCount: number;
   metrics: Record<string, number> | null;
   updatedAt: string;
+  isPinned: boolean;
 };
 
 export type MonitorAccountDetail = {
@@ -564,6 +565,18 @@ export function useClearAllUserData() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (userId: number) => api.post(`/matrix/monitor/accounts/${userId}/clear-all`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor-accounts'] });
+    },
+  });
+}
+
+/** 更新置顶视频跳过设置 */
+export function useUpdateSkipPinnedVideos() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, skipPinnedVideos }: { userId: number; skipPinnedVideos: Record<string, boolean> }) =>
+      api.patch(`/matrix/monitor/accounts/${userId}/skip-pinned`, { skipPinnedVideos }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['monitor-accounts'] });
     },
@@ -1439,7 +1452,7 @@ export function useCreateOperator() {
 export function useUpdateOperator() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { id: number; displayName?: string; phone?: string; enabled?: boolean }) =>
+    mutationFn: (data: { id: number; wechatUserId?: string; displayName?: string; phone?: string; enabled?: boolean }) =>
       api.put(`/operators/${data.id}`, data).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['operators'] }),
   });
