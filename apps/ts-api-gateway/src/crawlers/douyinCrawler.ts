@@ -9,7 +9,7 @@ import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import { isDescriptionMatch } from './timeParser';
-import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts, truncateToNewest } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
 
@@ -1434,7 +1434,10 @@ export class DouyinCrawler {
     // syncPlatformAuthorId 会处理首次绑定 + 自愈检测，不需要 needAuthorId 标志
 
     logger.info({ userId }, '[Phase1] Fetching video list from source');
-    const videos = await this.fetchVideoListFromSource(page, source);
+    let videos = await this.fetchVideoListFromSource(page, source);
+    const fetchedCount = videos.length;
+    videos = truncateToNewest(videos, this.maxMonitorVideos);
+    logger.info({ userId, fetched: fetchedCount, monitored: videos.length, cap: this.maxMonitorVideos }, '[Phase1] Truncated to newest N videos');
 
     // 诊断日志：记录每个视频的评论数提取情况
     logger.info({
