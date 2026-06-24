@@ -35,6 +35,8 @@ export type TencentVideoInfo = {
   visibleType?: number;
   status?: number;
   flag?: number;
+  stickyOpStatus?: number;   // 置顶状态（2 = 置顶）
+  isPinned: boolean;         // 是否置顶（由 stickyOpStatus 推导）
 };
 
 export type TencentCommentInfo = {
@@ -63,6 +65,7 @@ export interface CommentQueueItem {
   newCount: number;
   isFirstCrawl: boolean;
   _userId: number;
+  isPinned?: boolean;  // 是否置顶
 }
 
 export interface CommentProcessResult {
@@ -875,10 +878,21 @@ export class TencentCrawler {
       return true;
     });
 
-    logger.info({ userId, videoCount: videos.length, totalRaw: allRawVideos.length, intercepted: !!intercepted }, '[Phase1] Videos fetched');
+    // 从原始 API 数据构建置顶映射（stickyOpStatus: 2 = 置顶）
+    const awemeIdToIsPinned = new Map<string, boolean>();
+    for (const item of allRawVideos) {
+      awemeIdToIsPinned.set(item.exportId, item.stickyOpStatus === 2);
+    }
+    // 将 isPinned 字段注入到已去重的视频列表中
+    const enriched = videos.map(v => ({
+      ...v,
+      isPinned: awemeIdToIsPinned.get(v.exportId) || false,
+    }));
+
+    logger.info({ userId, videoCount: enriched.length, totalRaw: allRawVideos.length, intercepted: !!intercepted }, '[Phase1] Videos fetched');
 
     // 检测会话失效：拦截器超时或返回空列表，且之前有视频记录
-    if (videos.length === 0) {
+    if (enriched.length === 0) {
       const dbVideosForCheck = await db.getVideosByUserId(userId);
       if (dbVideosForCheck.length > 0 || !intercepted) {
         // 之前有视频但现在返回 0，或拦截器完全没捕获到响应 —— 可能是会话过期
@@ -911,7 +925,7 @@ export class TencentCrawler {
 
     // 动态剔除：已入库视频变为非公开时从数据库删除
     for (const dbVideo of dbVideos) {
-      const freshVideo = videos.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
+      const freshVideo = enriched.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
       if (!freshVideo) {
         // 视频不在新列表中，可能已删除或变为非公开
         continue;
@@ -925,7 +939,7 @@ export class TencentCrawler {
     const commentsQueue: CommentQueueItem[] = [];
 
     // 先过滤非公开和评论已关闭的视频，再截断到 maxMonitorVideos
-    const filteredVideos = videos.filter(video => {
+    const filteredVideos = enriched.filter(video => {
       if (video.commentClose === 1) {
         logger.debug({ exportId: video.exportId }, '[Phase1] Skipping video with comments closed');
         return false;
@@ -963,6 +977,7 @@ export class TencentCrawler {
             newCount,
             isFirstCrawl: true,
             _userId: userId,
+            isPinned: video.isPinned,
           });
         }
         continue;
@@ -977,6 +992,7 @@ export class TencentCrawler {
           newCount,
           isFirstCrawl: false,
           _userId: userId,
+          isPinned: video.isPinned,
         });
       }
     }
