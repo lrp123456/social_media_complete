@@ -1066,29 +1066,6 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     }
   }
 
-  // Light mode: 仅通知评论数变化，不获取具体内容
-  if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '抖音 Light 模式 — 跳过 Phase 2/3');
-    await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-    const updates = filteredQueue.map(q => ({
-      awemeId: q.awemeId,
-      description: q.description,
-      oldCount: q.oldCount,
-      newCount: q.newCount,
-    }));
-    // Light 模式：创建合成 Comment 记录，供前端 new-comments API 显示
-    for (const u of updates) {
-      const diff = u.newCount - u.oldCount;
-      if (diff > 0) {
-        await db.upsertLightModeComment(u.awemeId, {
-          text: `[轻量模式] ${diff} 条新评论`,
-          create_time: Math.floor(Date.now() / 1000),
-        });
-      }
-    }
-    return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
-  }
-
   // Phase 2: 导航到评论管理页
   onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${filteredQueue.length} 个视频有新评论` });
   logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '抖音 Phase 2: 导航到评论管理');
@@ -1244,28 +1221,6 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     }
   }
 
-  if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '快手 Light 模式 — 跳过 Phase 2/3');
-    await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-    const updates = filteredQueue.map(q => ({
-      awemeId: q.awemeId,
-      description: q.description,
-      oldCount: q.oldCount,
-      newCount: q.newCount,
-    }));
-    // Light 模式：创建合成 Comment 记录
-    for (const u of updates) {
-      const diff = u.newCount - u.oldCount;
-      if (diff > 0) {
-        await db.upsertLightModeComment(u.awemeId, {
-          text: `[轻量模式] ${diff} 条新评论`,
-          create_time: Math.floor(Date.now() / 1000),
-        });
-      }
-    }
-    return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
-  }
-
   // Phase 2
   onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${filteredQueue.length} 个视频有新评论` });
   logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '快手 Phase 2: 导航到评论管理');
@@ -1410,8 +1365,8 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     }
   }
 
-  // 无新评论或 Light 模式 → 正常退出
-  if (crawlMode === 'light' || filteredQueue.length === 0) {
+  // 无新评论 → 正常退出
+  if (filteredQueue.length === 0) {
     // recheck 标记清理：无新评论说明登录态不影响，清除标记
     if (needsLoginRecheck && filteredQueue.length === 0) {
       await redis.del(loginRecheckKey);
@@ -1425,7 +1380,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
       newCount: v.newCount,
     }));
 
-    // Light 模式：更新评论数和标记已通知（Phase3 不会运行）
+    // 更新评论数和标记已通知（Phase3 不会运行）
     for (const u of updates) {
       const diff = u.newCount - u.oldCount;
       if (diff > 0) {
@@ -1628,29 +1583,6 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
       logger.info({ platform: task.platform, count: pinnedVideos.length }, '跳过置顶视频');
       filteredQueue = queue.filter(q => !q.isPinned);
     }
-  }
-
-  // Light 模式：仅通知评论数变化，不获取具体内容
-  if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '视频号 Light 模式 — 跳过 Phase 2/3');
-    await tc.executeExitStrategy(page);
-    const updates = filteredQueue.map(q => ({
-      awemeId: q.exportId,
-      description: q.description,
-      oldCount: q.oldCount,
-      newCount: q.newCount,
-    }));
-    // Light 模式：创建合成 Comment 记录
-    for (const u of updates) {
-      const diff = u.newCount - u.oldCount;
-      if (diff > 0) {
-        await db.upsertLightModeComment(u.awemeId, {
-          text: `[轻量模式] ${diff} 条新评论`,
-          create_time: Math.floor(Date.now() / 1000),
-        });
-      }
-    }
-    return { hasUpdate: true, newComments: updates.reduce((s, u) => s + u.newCount - u.oldCount, 0), updatedVideos: updates, phase: 'Phase1', riskDetected: false };
   }
 
   // Phase 2: 导航评论管理
