@@ -27,6 +27,7 @@ model User {
   platformAuthorName   String?  @map("platform_author_name")  // 作者昵称
   createdAt            DateTime @default(now()) @map("created_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
+  skipPinnedVideos     Json?    @map("skip_pinned_videos")
 
   videos    Video[]
   @@unique([fingerprintWindowId, platform], name: "idx_users_window_platform")
@@ -42,6 +43,7 @@ model Video {
   metrics      String   @default("{}") // JSON
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
+  isPinned     Boolean  @default(false) @map("is_pinned")
 
   user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   comments Comment[]
