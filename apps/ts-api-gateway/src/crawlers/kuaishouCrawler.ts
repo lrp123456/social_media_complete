@@ -53,7 +53,7 @@ export interface RootCommentSnapshot {
 
 export interface RiskControlDetection {
   detected: boolean;
-  type: 'captcha' | 'login_redirect' | 'security_verify' | 'unknown';
+  type: 'captcha' | 'login_redirect' | 'security_verify' | 'drawer_click_failure' | 'unknown';
   evidence: string;
 }
 
@@ -78,7 +78,8 @@ const PHOTO_ANALYSIS_PATTERN = '/rest/cp/creator/analysis/pc/photo/list';
 const COMMENT_LIST_PATTERN = '/rest/cp/creator/comment/commentList';
 const COMMENT_REPLY_PATTERN = '/rest/cp/creator/comment/subCommentList';
 const COMMENT_HOME_PATTERN = '/rest/cp/creator/comment/home';
-const ALL_KUAISHOU_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_REPLY_PATTERN, COMMENT_HOME_PATTERN];
+const PHOTO_LIST_PATTERN = '/rest/cp/creator/comment/photoList';
+const ALL_KUAISHOU_COMMENT_PATTERNS = [COMMENT_LIST_PATTERN, COMMENT_REPLY_PATTERN, COMMENT_HOME_PATTERN, PHOTO_LIST_PATTERN];
 
 const MAX_SCROLL_ATTEMPTS = 30;
 const MAX_SCROLL_NO_NEW_DATA = 10;
@@ -1559,11 +1560,29 @@ export class KuaishouCrawler {
       logger.warn('[Phase3] comment/home response not received after waiting, will try drawer for first video');
     }
 
+    // 连续失败计数器（用于检测抽屉点击问题）
+    let consecutiveDrawerFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3;
+
     try {
       for (let i = 0; i < queue.length; i++) {
         const item = queue[i];
         const videoT0 = Date.now();
         logger.info({ index: i + 1, total: queue.length, awemeId: item.awemeId }, '[Phase3] Processing kuaishou video in queue');
+
+        // 检查连续失败次数，超过阈值则暂停监控
+        if (consecutiveDrawerFailures >= MAX_CONSECUTIVE_FAILURES) {
+          logger.error({ consecutiveFailures: consecutiveDrawerFailures, maxAllowed: MAX_CONSECUTIVE_FAILURES }, '[Phase3] 连续抽屉点击失败超过阈值，暂停快手监控');
+          return {
+            results,
+            riskDetected: true,
+            riskInfo: {
+              detected: true,
+              type: 'drawer_click_failure',
+              evidence: `连续${consecutiveDrawerFailures}次抽屉点击失败，可能是选择器配置问题`,
+            },
+          };
+        }
 
         const riskCheck = await this.detectRiskControlAsync(page);
         if (riskCheck.detected) {
@@ -1610,8 +1629,28 @@ export class KuaishouCrawler {
           const drawerOpened = await this.openSelectVideoDrawer(page);
           if (!drawerOpened) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Failed to open drawer — skipping');
+            consecutiveDrawerFailures++;
             results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Failed to open drawer' });
             continue;
+          }
+
+          // 抽屉打开后，photoList API 被调用，从中提取视频真实评论数
+          const photoListCounts = await this.updateCommentCountsFromPhotoList(page, item._userId);
+          if (photoListCounts.size > 0) {
+            // 如果当前视频的评论数在 photoList 响应中，更新到 item 用于后续流程
+            const photoListCount = photoListCounts.get(item.awemeId);
+            if (photoListCount !== undefined && photoListCount !== item.newCount) {
+              logger.info({
+                awemeId: item.awemeId,
+                oldCount: item.newCount,
+                photoListCount,
+              }, '[Phase3] PhotoList comment count differs from work_list — using photoList value');
+              item.newCount = photoListCount;
+            }
+            logger.info({
+              awemeId: item.awemeId,
+              photoListCounts: Array.from(photoListCounts.entries()),
+            }, '[Phase3] Extracted photoList comment counts');
           }
 
           const clickT0 = Date.now();
@@ -1619,10 +1658,13 @@ export class KuaishouCrawler {
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer click completed');
           if (!clicked) {
             logger.error({ awemeId: item.awemeId }, '[Phase3] Video not found in drawer — skipping');
+            consecutiveDrawerFailures++;
             await this.closeDrawer(page);
             results.push({ awemeId: item.awemeId, success: false, comments: [], error: 'Video not found in drawer' });
             continue;
           }
+          // 成功点击，重置连续失败计数器
+          consecutiveDrawerFailures = 0;
 
           // 等待抽屉关闭 + 评论 API 响应
           await HumanActions.wait(page, 1500, 2500);
@@ -1936,25 +1978,12 @@ export class KuaishouCrawler {
 
   private async isDrawerVisible(page: Page): Promise<boolean> {
     try {
-      const selectVideoDef = getSelector('page.select-video-btn', PLATFORM);
-      if (selectVideoDef.css) {
-        const visible = await HumanActions.cdpIsElementVisible(page, selectVideoDef.css);
-        if (visible) {
-          logger.info({ selector: selectVideoDef.css }, 'Kuaishou drawer area detected via direct CSS');
-          return true;
-        }
-      }
-
-      // 使用管理的选择器检测抽屉
-      const drawerDef = getSelector('drawer.container', PLATFORM);
+      // 快手抽屉容器：.drawer.video-list（不是按钮本身）
       const drawerSelectors = [
-        drawerDef.css,
-        '[class*="drawer"]',
-        '[class*="sidesheet"]',
-        '[class*="modal"]',
-        '[class*="select-video"]',
-        '[class*="selectVideo"]',
-      ].filter(Boolean) as string[];
+        '.drawer.video-list',
+        '.drawer__content',
+        '[class*="video-list"]',
+      ];
 
       for (const selector of drawerSelectors) {
         const visible = await HumanActions.cdpIsElementVisible(page, selector);
@@ -1964,9 +1993,10 @@ export class KuaishouCrawler {
         }
       }
 
+      // 检查抽屉内容特征：作品列表标题
       try {
         const bodyText = await HumanActions.cdpGetBodyText(page);
-        if (bodyText.includes('选择视频') && (bodyText.includes('评论数') || bodyText.includes('发布于'))) {
+        if (bodyText.includes('作品列表') && bodyText.includes('个作品')) {
           logger.info('Kuaishou drawer content detected via body text');
           return true;
         }
@@ -2061,10 +2091,11 @@ export class KuaishouCrawler {
           const descPrefix = desc.toLowerCase().substring(0, 20);
           if (descPrefix.length > 0 && !fullText.toLowerCase().includes(descPrefix)) continue;
 
-          // 匹配成功，点击 detail 区域
-          const detailEl = item.querySelector('.video-info__content__detail') || item.querySelector('.video-info__content');
-          if (detailEl) {
-            (detailEl as HTMLElement).click();
+          // 匹配成功，点击 date 区域（安全区域，不会触发跳转）
+          // 注意：不要点击 .video-info__cover 或 .video-info__content__title，它们会跳转到视频详情页
+          const dateClickEl = item.querySelector('.video-info__content__date');
+          if (dateClickEl) {
+            (dateClickEl as HTMLElement).click();
             return { found: true, domTimestamp, title: title.substring(0, 50), itemCount, minTimestamp, maxTimestamp, timeDiffs };
           }
         }
@@ -2080,6 +2111,32 @@ export class KuaishouCrawler {
       logger.info({ scrollAttempt, loadedItems: matchResult.itemCount, latestDate: matchResult.maxTimestamp, oldestDate: matchResult.minTimestamp, targetCreateTime: createTime }, '[Drawer] Scroll diagnostic');
 
       if (matchResult.found) {
+        // 检测是否误点击导致跳转
+        await HumanActions.wait(page, 500, 800);
+        const currentUrl = page.url();
+        if (currentUrl.includes('kuaishou.com/short-video/') || currentUrl.includes('kuaishou.com/video/')) {
+          logger.warn({ awemeId, currentUrl, expectedUrl: 'cp.kuaishou.com/article/comment' }, '[Drawer] 误点击导致跳转到视频详情页，返回评论管理页面');
+          // 返回评论管理页面
+          await page.goto('https://cp.kuaishou.com/article/comment', { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await HumanActions.wait(page, 2000, 3000);
+          // 重新打开抽屉
+          const drawerOpened = await this.openSelectVideoDrawer(page);
+          if (!drawerOpened) {
+            logger.error({ awemeId }, '[Drawer] 返回后重新打开抽屉失败');
+            return false;
+          }
+          // 重试计数
+          const retryKey = `retry_${awemeId}`;
+          const retryCount = (this as any)[retryKey] || 0;
+          if (retryCount >= 3) {
+            logger.error({ awemeId, retryCount }, '[Drawer] 连续误点击超过3次，跳过该视频');
+            delete (this as any)[retryKey];
+            return false;
+          }
+          (this as any)[retryKey] = retryCount + 1;
+          // 继续下一次滚动尝试
+          continue;
+        }
         logger.info({ awemeId, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Drawer] 匹配成功');
         return true;
       }
@@ -2129,6 +2186,70 @@ export class KuaishouCrawler {
       }
     });
     await HumanActions.wait(page, 1500, 2500);
+  }
+
+  /**
+   * 从 photoList API 响应中提取视频评论数并更新数据库
+   * 打开"选择视频"抽屉后会触发 /rest/cp/creator/comment/photoList API，
+   * 该接口返回的 photoItems 中包含真实 commentCount。
+   */
+  private async updateCommentCountsFromPhotoList(page: Page, userId: number): Promise<Map<string, number>> {
+    const updatedCounts = new Map<string, number>();
+
+    // 轮询等待 photoList API 响应（最多 ~3 秒）
+    for (let w = 0; w < 6; w++) {
+      const check = this.interceptor.getResponses(PHOTO_LIST_PATTERN);
+      if (check.length > 0) break;
+      await HumanActions.wait(page, 500, 500);
+    }
+
+    const photoListResponses = this.interceptor.getResponses(PHOTO_LIST_PATTERN);
+    if (photoListResponses.length === 0) {
+      logger.info('[Kuaishou-PhotoList] No photoList responses found');
+      return updatedCounts;
+    }
+
+    logger.info({ responseCount: photoListResponses.length }, '[Kuaishou-PhotoList] Processing photoList responses for comment counts');
+
+    for (const resp of photoListResponses) {
+      const body = resp.body;
+      if (!body || typeof body !== 'object') continue;
+
+      // 尝试标准路径：data.photoList.photoItems[]
+      let photoItems: any[] = body.data?.photoList?.photoItems;
+      if (!Array.isArray(photoItems) || photoItems.length === 0) {
+        // 回退：尝试其他可能的路径
+        photoItems = body.items || body.data?.items || body.data?.list || body.data?.photoList || [];
+      }
+      if (!Array.isArray(photoItems) || photoItems.length === 0) continue;
+
+      for (const item of photoItems) {
+        const awemeId = String(item.workId || item.photoId || item.id || '');
+        // 尝试多个可能的字段名（快手 API 可能用不同字段）
+        const commentCount = item.commentCount ?? item.comment_count ?? item.totalComment ?? item.totalCommentCount ?? item.commentNum ?? -1;
+        if (awemeId && commentCount >= 0) {
+          updatedCounts.set(awemeId, Number(commentCount));
+        }
+      }
+    }
+
+    if (updatedCounts.size > 0) {
+      const sampleEntries = Array.from(updatedCounts.entries()).slice(0, 5);
+      logger.info(
+        { totalExtracted: updatedCounts.size, samples: sampleEntries },
+        '[Kuaishou-PhotoList] Extracted comment counts from photoList',
+      );
+
+      // 逐条更新数据库中的 commentCount
+      for (const [awemeId, commentCount] of updatedCounts) {
+        await db.updateVideoCommentCount(userId, awemeId, commentCount);
+        logger.debug({ awemeId, commentCount }, '[Kuaishou-PhotoList] Updated video comment count in DB');
+      }
+    } else {
+      logger.info('[Kuaishou-PhotoList] No comment counts extracted from photoList responses');
+    }
+
+    return updatedCounts;
   }
 
   private async waitForCommentResponse(page: Page): Promise<InterceptedResponse | null> {
