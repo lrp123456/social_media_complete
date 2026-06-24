@@ -1051,11 +1051,26 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 
   const queue = phase1Result.commentsQueue;
 
+  // 读取用户配置
+  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
+  const skipPinned = skipConfig[task.platform] !== false; // 默认 true
+
+  // 过滤置顶视频（在 Light 模式判断之前）
+  let filteredQueue = queue;
+  if (skipPinned) {
+    const pinnedVideos = queue.filter(q => q.isPinned);
+    if (pinnedVideos.length > 0) {
+      logger.info({ platform: task.platform, count: pinnedVideos.length }, '跳过置顶视频');
+      filteredQueue = queue.filter(q => !q.isPinned);
+    }
+  }
+
   // Light mode: 仅通知评论数变化，不获取具体内容
   if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Light 模式 — 跳过 Phase 2/3');
+    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '抖音 Light 模式 — 跳过 Phase 2/3');
     await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-    const updates = queue.map(q => ({
+    const updates = filteredQueue.map(q => ({
       awemeId: q.awemeId,
       description: q.description,
       oldCount: q.oldCount,
@@ -1075,8 +1090,8 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   }
 
   // Phase 2: 导航到评论管理页
-  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 2: 导航到评论管理');
+  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${filteredQueue.length} 个视频有新评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '抖音 Phase 2: 导航到评论管理');
   // 在导航到评论管理页面前注册评论API拦截器（页面加载时会触发初始API调用）
   await dy.registerCommentListener(page);
   const navSuccess = await dy.navigateToCommentManage(page);
@@ -1087,22 +1102,22 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   }
 
   // Phase 3: 逐视频打开抽屉 → 点击 → 拦截评论 API → 解析 + 存储
-  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '抖音 Phase 3: 处理评论队列');
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${filteredQueue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '抖音 Phase 3: 处理评论队列');
 
   let phase3Result;
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '抖音 Simple 模式 — 仅采集根评论');
-    await dy.processCommentsQueueSimple(page, queue, maxRootComments);
+    await dy.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
-    for (const q of queue) {
+    for (const q of filteredQueue) {
       await db.updateCommentCount(q.awemeId, q.newCount);
     }
-    phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+    phase3Result = { results: filteredQueue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
-    phase3Result = await dy.processCommentsQueue(page, queue);
+    phase3Result = await dy.processCommentsQueue(page, filteredQueue);
   }
 
   if (phase3Result.riskDetected) {
@@ -1118,7 +1133,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // 执行退出策略
   const successful = phase3Result.results.filter(r => r.success);
   const failed = phase3Result.results.filter(r => !r.success);
-  const updates = queue
+  const updates = filteredQueue
     .filter(q => successful.some(r => r.awemeId === q.awemeId))
     .map(q => ({
       awemeId: q.awemeId,
@@ -1130,13 +1145,13 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   logger.info({
     userId: task.userId,
     platform: 'douyin',
-    queueLength: queue.length,
+    queueLength: filteredQueue.length,
     successCount: successful.length,
     failCount: failed.length,
     failedDetails: failed.map(r => ({ awemeId: r.awemeId, error: r.error })),
-  }, '[Result] 抖音 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
+  }, '[Result] 抖音 Phase3 done: %d/%d succeeded, %d failed', successful.length, filteredQueue.length, failed.length);
 
-  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
+  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${filteredQueue.length} 个视频采集成功` });
   await dy.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
   dy.unregisterCommentListener();
 
@@ -1151,7 +1166,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     phase: 'Phase3',
     riskDetected: false,
     _phase3Result: phase3Result,
-    _queue: queue,
+    _queue: filteredQueue,
   };
 }
 
@@ -1214,10 +1229,25 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 
   const queue = phase1Result.commentsQueue;
 
+  // 读取用户配置
+  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
+  const skipPinned = skipConfig[task.platform] !== false; // 默认 true
+
+  // 过滤置顶视频（在 Light 模式判断之前）
+  let filteredQueue = queue;
+  if (skipPinned) {
+    const pinnedVideos = queue.filter(q => q.isPinned);
+    if (pinnedVideos.length > 0) {
+      logger.info({ platform: task.platform, count: pinnedVideos.length }, '跳过置顶视频');
+      filteredQueue = queue.filter(q => !q.isPinned);
+    }
+  }
+
   if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Light 模式 — 跳过 Phase 2/3');
+    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '快手 Light 模式 — 跳过 Phase 2/3');
     await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
-    const updates = queue.map(q => ({
+    const updates = filteredQueue.map(q => ({
       awemeId: q.awemeId,
       description: q.description,
       oldCount: q.oldCount,
@@ -1237,8 +1267,8 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   }
 
   // Phase 2
-  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Phase 2: 导航到评论管理');
+  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${filteredQueue.length} 个视频有新评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '快手 Phase 2: 导航到评论管理');
 
   // 在导航到评论管理页面前注册评论API拦截器（页面加载时会触发初始API调用，
   // 必须在 navigation 之前注册才能捕获该响应）
@@ -1251,22 +1281,22 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   }
 
   // Phase 3
-  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '快手 Phase 3: 处理评论队列');
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${filteredQueue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '快手 Phase 3: 处理评论队列');
 
   let phase3Result;
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '快手 Simple 模式 — 仅采集根评论');
-    await ks.processCommentsQueueSimple(page, queue, maxRootComments);
+    await ks.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
-    for (const q of queue) {
+    for (const q of filteredQueue) {
       await db.updateCommentCount(q.awemeId, q.newCount);
     }
-    phase3Result = { results: queue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+    phase3Result = { results: filteredQueue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
-    phase3Result = await ks.processCommentsQueue(page, queue);
+    phase3Result = await ks.processCommentsQueue(page, filteredQueue);
   }
 
   if (phase3Result.riskDetected) {
@@ -1281,7 +1311,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
 
   const successful = phase3Result.results.filter(r => r.success);
   const failed = phase3Result.results.filter(r => !r.success);
-  const updates = queue
+  const updates = filteredQueue
     .filter(q => successful.some(r => r.awemeId === q.awemeId))
     .map(q => ({
       awemeId: q.awemeId,
@@ -1290,19 +1320,19 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
       newCount: q.newCount,
     }));
 
-  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
+  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${filteredQueue.length} 个视频采集成功` });
   await ks.executeExitStrategy(page, 'other' as any, 'menu.interact.comment-manage');
   ks.unregisterCommentListener();
 
   logger.info({
     userId: task.userId,
     platform: 'kuaishou',
-    queueLength: queue.length,
+    queueLength: filteredQueue.length,
     successCount: successful.length,
     failCount: failed.length,
     failedDetails: failed.map(r => ({ awemeId: r.awemeId, error: r.error })),
     processed: phase3Result.results.length,
-  }, '[Result] 快手 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
+  }, '[Result] 快手 Phase3 done: %d/%d succeeded, %d failed', successful.length, filteredQueue.length, failed.length);
 
   releaseCrawler('kuaishou', task.windowId);
 
@@ -1313,7 +1343,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     phase: 'Phase3',
     riskDetected: false,
     _phase3Result: phase3Result,
-    _queue: queue,
+    _queue: filteredQueue,
   };
 }
 
@@ -1365,10 +1395,25 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   const queue = phase1Result.commentsQueue || [];
 
+  // 读取用户配置
+  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
+  const skipPinned = skipConfig[task.platform] !== false; // 默认 true
+
+  // 过滤置顶视频（在 Light 模式判断之前）
+  let filteredQueue = queue;
+  if (skipPinned) {
+    const pinnedVideos = queue.filter(q => q.isPinned);
+    if (pinnedVideos.length > 0) {
+      logger.info({ platform: task.platform, count: pinnedVideos.length }, '跳过置顶视频');
+      filteredQueue = queue.filter(q => !q.isPinned);
+    }
+  }
+
   // 无新评论或 Light 模式 → 正常退出
-  if (crawlMode === 'light' || queue.length === 0) {
+  if (crawlMode === 'light' || filteredQueue.length === 0) {
     // recheck 标记清理：无新评论说明登录态不影响，清除标记
-    if (needsLoginRecheck && queue.length === 0) {
+    if (needsLoginRecheck && filteredQueue.length === 0) {
       await redis.del(loginRecheckKey);
       logger.info({ userId: task.userId }, '[XHS-monitor] 无评论变化，清除登录态恢复标记');
     }
@@ -1399,22 +1444,22 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   // Phase 3: 评论树采集（有新评论 + Deep 模式）
   // 登录检测已内联到 processOneNoteComments（点击缩略图时）
-  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '[XHS-Phase3] Processing comments queue');
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${filteredQueue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '[XHS-Phase3] Processing comments queue');
 
   let phase3Result;
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '小红书 Simple 模式 — 仅采集根评论');
-    await xhs.processCommentsQueueSimple(page, queue as any, maxRootComments);
+    await xhs.processCommentsQueueSimple(page, filteredQueue as any, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
-    for (const q of queue) {
+    for (const q of filteredQueue) {
       await db.updateCommentCount(q.exportId, q.newCount);
     }
-    phase3Result = (queue as any[]).map((q: any) => ({ awemeId: q.exportId, success: true, error: undefined }));
+    phase3Result = (filteredQueue as any[]).map((q: any) => ({ awemeId: q.exportId, success: true, error: undefined }));
   } else {
     // 深度模式：完整评论树采集
-    phase3Result = await xhs.processCommentsQueue(page, queue, task.userId);
+    phase3Result = await xhs.processCommentsQueue(page, filteredQueue, task.userId);
   }
 
   // 退出策略
@@ -1454,7 +1499,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   const successful = phase3Result.filter((r: any) => r.success);
   const failed = phase3Result.filter((r: any) => !r.success);
-  const updates = queue
+  const updates = filteredQueue
     .filter((q: any) => successful.some((r: any) => r.awemeId === q.exportId))
     .map((q: any) => ({
       awemeId: q.exportId,
@@ -1471,7 +1516,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 
   // Phase3 失败的视频：如果 Phase3 没有成功采集评论树，仍然更新评论数（使用 API 返回的轻量计数）
   // 这样至少能保证数据库中的评论数是最新的，即使没有详细的评论树
-  const failedUpdates = queue
+  const failedUpdates = filteredQueue
     .filter((q: any) => failed.some((r: any) => r.awemeId === q.exportId))
     .map((q: any) => ({
       awemeId: q.exportId,
@@ -1495,7 +1540,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   logger.info({
     userId: task.userId,
     platform: 'xiaohongshu',
-    queueLength: queue.length,
+    queueLength: filteredQueue.length,
     successCount: successful.length,
     failCount: failed.length,
   }, '[Result] 小红书 Phase3 done');
@@ -1560,11 +1605,26 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
 
   const queue = phase1Result.commentsQueue;
 
+  // 读取用户配置
+  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
+  const skipPinned = skipConfig[task.platform] !== false; // 默认 true
+
+  // 过滤置顶视频（在 Light 模式判断之前）
+  let filteredQueue = queue;
+  if (skipPinned) {
+    const pinnedVideos = queue.filter(q => q.isPinned);
+    if (pinnedVideos.length > 0) {
+      logger.info({ platform: task.platform, count: pinnedVideos.length }, '跳过置顶视频');
+      filteredQueue = queue.filter(q => !q.isPinned);
+    }
+  }
+
   // Light 模式：仅通知评论数变化，不获取具体内容
   if (crawlMode === 'light') {
-    logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Light 模式 — 跳过 Phase 2/3');
+    logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '视频号 Light 模式 — 跳过 Phase 2/3');
     await tc.executeExitStrategy(page);
-    const updates = queue.map(q => ({
+    const updates = filteredQueue.map(q => ({
       awemeId: q.exportId,
       description: q.description,
       oldCount: q.oldCount,
@@ -1584,14 +1644,14 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   }
 
   // Phase 2: 导航评论管理
-  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${queue.length} 个视频有新评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 2: 导航到评论管理');
+  onProgress?.({ phase: 'Phase2', step: '导航到评论管理', percent: 40, detail: `发现 ${filteredQueue.length} 个视频有新评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '视频号 Phase 2: 导航到评论管理');
   const navSuccess = await tc.navigateToCommentManage(page);
   if (!navSuccess) {
     logger.warn({ userId: task.userId }, '视频号 Phase 2 失败（可能未实现）— 回退到 Light 模式');
     // Phase 2 未实现时回退到 Light 模式
     await tc.executeExitStrategy(page);
-    const updates = queue.map(q => ({
+    const updates = filteredQueue.map(q => ({
       awemeId: q.exportId,
       description: q.description,
       oldCount: q.oldCount,
@@ -1601,22 +1661,22 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   }
 
   // Phase 3: 逐视频采集评论详情
-  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${queue.length} 个视频的评论` });
-  logger.info({ userId: task.userId, queueLength: queue.length }, '视频号 Phase 3: 处理评论队列');
+  onProgress?.({ phase: 'Phase3', step: '采集评论详情', percent: 60, detail: `正在处理 ${filteredQueue.length} 个视频的评论` });
+  logger.info({ userId: task.userId, queueLength: filteredQueue.length }, '视频号 Phase 3: 处理评论队列');
 
   let phase3Result;
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '视频号 Simple 模式 — 仅采集根评论');
-    await tc.processCommentsQueueSimple(page, queue, maxRootComments);
+    await tc.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
-    for (const q of queue) {
+    for (const q of filteredQueue) {
       await db.updateCommentCount(q.exportId, q.newCount);
     }
-    phase3Result = queue.map((q: any) => ({ exportId: q.exportId, success: true, error: undefined }));
+    phase3Result = filteredQueue.map((q: any) => ({ exportId: q.exportId, success: true, error: undefined }));
   } else {
     // 深度模式：完整评论树采集
-    phase3Result = await tc.processCommentsQueue(page, queue, task.userId);
+    phase3Result = await tc.processCommentsQueue(page, filteredQueue, task.userId);
   }
 
   if (phase3Result.some(r => r.error?.includes('风险') || r.error?.includes('captcha') || r.error?.includes('Risk control'))) {
@@ -1631,7 +1691,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   // 执行退出策略
   const successful = phase3Result.filter(r => r.success);
   const failed = phase3Result.filter(r => !r.success);
-  const updates = queue
+  const updates = filteredQueue
     .filter(q => successful.some(r => r.exportId === q.exportId))
     .map(q => ({
       awemeId: q.exportId,
@@ -1643,12 +1703,12 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   logger.info({
     userId: task.userId,
     platform: 'tencent',
-    queueLength: queue.length,
+    queueLength: filteredQueue.length,
     successCount: successful.length,
     failCount: failed.length,
-  }, '[Result] 视频号 Phase3 done: %d/%d succeeded, %d failed', successful.length, queue.length, failed.length);
+  }, '[Result] 视频号 Phase3 done: %d/%d succeeded, %d failed', successful.length, filteredQueue.length, failed.length);
 
-  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${queue.length} 个视频采集成功` });
+  onProgress?.({ phase: '退出', step: '执行退出策略', percent: 90, detail: `${successful.length}/${filteredQueue.length} 个视频采集成功` });
   await tc.executeExitStrategy(page);
 
   logger.info({ userId: task.userId, processed: phase3Result.length, successful: successful.length }, '视频号 Phase 3 完成');
@@ -1662,7 +1722,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
     phase: 'Phase3',
     riskDetected: false,
     _phase3Result: { results: phase3Result },
-    _queue: queue.map(q => ({ awemeId: q.exportId, description: q.description })),
+    _queue: filteredQueue.map(q => ({ awemeId: q.exportId, description: q.description })),
   };
 }
 
