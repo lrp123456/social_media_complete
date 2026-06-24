@@ -504,7 +504,10 @@ export async function getCrawlMode(platform: string): Promise<string> {
     where: { platform },
     select: { mode: true },
   });
-  return setting?.mode || 'simple';
+  const mode = setting?.mode || 'simple';
+  // normalize legacy 'light' mode
+  if (mode === 'light') return 'simple';
+  return mode;
 }
 
 // ============================================================
