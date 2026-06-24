@@ -29,6 +29,7 @@ export interface VideoInfo {
   metrics: Record<string, number>;
   authorUid?: string;       // 快手 userId
   authorNickname?: string;  // 快手 userName
+  isPinned?: boolean;       // 置顶视频标记（photoTop）
 }
 
 export interface CommentInfo {
@@ -104,6 +105,7 @@ export interface KuaishouCommentQueueItem {
   newCount: number;
   isFirstCrawl: boolean;
   _userId: number;
+  isPinned?: boolean;       // 置顶视频标记
 }
 
 export interface KuaishouCommentProcessResult {
@@ -593,10 +595,11 @@ export class KuaishouCrawler {
     }));
     logger.info({ source, step: 'INITIAL_ITEMS', initialCount: initialItems.length, sampleItems }, 'Kuaishou video items parsed with comment diagnostics');
 
-    // 从 raw responses 中提取 authorUid 和 photoStatus（增量构建，供滚动循环和后处理共用）
+    // 从 raw responses 中提取 authorUid、photoStatus 和 isPinned（增量构建，供滚动循环和后处理共用）
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
     const awemeIdToPhotoStatus = new Map<string, number>();
     const privateAwemeIds = new Set<string>();
+    const awemeIdToIsPinned = new Map<string, boolean>();
 
     /** 从 raw responses 中增量更新 photoStatus map，返回当前公开视频数 */
     const updatePhotoStatusMapAndGetPublicCount = (): number => {
@@ -633,6 +636,10 @@ export class KuaishouCrawler {
               privateAwemeIds.add(String(id));
             }
           }
+          // 提取 photoTop 置顶标记（photoTop: true 表示置顶视频）
+          if (id) {
+            awemeIdToIsPinned.set(String(id), raw.photoTop === true);
+          }
         }
       }
       // 公开视频数 = 已收集总数 - 已知非公开数
@@ -664,6 +671,7 @@ export class KuaishouCrawler {
       ...item,
       authorUid: awemeIdToAuthor.get(String(item.aweme_id))?.uid || String(item.userId || item.authorId || ''),
       authorNickname: awemeIdToAuthor.get(String(item.aweme_id))?.nickname || item.userName || item.authorName || '',
+      isPinned: awemeIdToIsPinned.get(String(item.aweme_id)) || false,
     }));
 
     // 非公开视频过滤：photoStatus !== 0 视为非公开（必须先检查 undefined，photo_analysis 源无此字段）
@@ -1345,6 +1353,7 @@ export class KuaishouCrawler {
             newCount: video.comment_count,
             isFirstCrawl: true,
             _userId: userId,
+            isPinned: video.isPinned || false,
           });
         } else {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New kuaishou video with no comments — skipping');
@@ -1377,6 +1386,7 @@ export class KuaishouCrawler {
           newCount: video.comment_count,
           isFirstCrawl: false,
           _userId: userId,
+          isPinned: video.isPinned || false,
         });
       } else {
         // 评论数未变，但检查是否需要首次深度爬取（无 VideoRootCommentCount 记录）
@@ -1394,6 +1404,7 @@ export class KuaishouCrawler {
             newCount: video.comment_count,
             isFirstCrawl: true,
             _userId: userId,
+            isPinned: video.isPinned || false,
           });
         } else {
           logger.info({
