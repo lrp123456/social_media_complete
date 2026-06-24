@@ -189,6 +189,7 @@ export async function reconcileVideosForUser(
     create_time: number;
     comment_count: number;
     metrics?: any;
+    isPinned?: boolean;
   }>,
   maxVideos: number,
 ): Promise<{
@@ -243,6 +244,7 @@ export async function reconcileVideosForUser(
             description: v.description,
             metrics: JSON.stringify(v.metrics || {}),
             commentCount: v.comment_count ?? undefined,
+            isPinned: v.isPinned ?? false,
           },
           create: {
             id: v.aweme_id,
@@ -251,6 +253,7 @@ export async function reconcileVideosForUser(
             createTime: BigInt(v.create_time),
             commentCount: v.comment_count ?? 0,
             metrics: JSON.stringify(v.metrics || {}),
+            isPinned: v.isPinned ?? false,
           },
         }),
       ),
