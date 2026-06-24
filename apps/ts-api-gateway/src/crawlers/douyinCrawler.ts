@@ -26,6 +26,7 @@ export type VideoInfo = {
   metrics: Record<string, any>;
   authorUid?: string;       // 新增：作者抖音 uid
   authorNickname?: string;  // 新增：作者昵称
+  isPinned: boolean;        // 新增：是否置顶
 };
 
 export type CommentInfo = {
@@ -115,6 +116,7 @@ export interface CommentQueueItem {
   newCount: number;
   isFirstCrawl: boolean;  // true = 新视频首次采集（全量展开+建快照）
   _userId: number;        // 内部用，携带 userId
+  isPinned?: boolean;     // 是否置顶
 }
 
 export interface CommentProcessResult {
@@ -150,6 +152,7 @@ export class DouyinCrawler {
   private currentMenuSection: 'content' | 'data_center' | 'activity' | 'unknown' = 'unknown';
   private page?: Page;
   private awemeIdToViewCount: Map<string, number> = new Map();
+  private awemeIdToIsPinned: Map<string, boolean> = new Map();
 
   constructor(private maxMonitorVideos: number = 20) {
     this.interceptor = new RequestInterceptor();
@@ -336,6 +339,7 @@ export class DouyinCrawler {
     // 抖音 item_list 实际字段：item.user_id（字符串），不是嵌套的 author 对象
     // 抖音 work_list 字段可能不同（item.author?.uid），都做兼容
     const awemeIdToAuthor = new Map<string, { uid: string; nickname: string }>();
+    const awemeIdToIsPinned = new Map<string, boolean>();
     const awemeIdToViewCount = new Map<string, number>();
     const privateAwemeIds = new Set<string>();
 
@@ -363,6 +367,9 @@ export class DouyinCrawler {
               uid: String(uid),
               nickname: raw.author?.nickname || raw.user_name || raw.nickname || '',
             });
+          }
+          if (id) {
+            awemeIdToIsPinned.set(String(id), raw.is_pinned === true);
           }
           const viewCount = raw.metrics?.view_count;
           if (id && viewCount !== undefined) {
@@ -400,6 +407,7 @@ export class DouyinCrawler {
         ...item,
         authorUid: author?.uid || '',
         authorNickname: author?.nickname || '',
+        isPinned: awemeIdToIsPinned.get(String(item.aweme_id)) || false,
       };
     });
 
@@ -425,6 +433,7 @@ export class DouyinCrawler {
     }, 'Video list fetch completed');
 
     this.awemeIdToViewCount = awemeIdToViewCount;
+    this.awemeIdToIsPinned = awemeIdToIsPinned;
     return filtered;
   }
 
@@ -1460,6 +1469,7 @@ export class DouyinCrawler {
 
     // 动态剔除：已入库视频变为非公开（view_count=0）时从数据库删除
     const awemeIdToViewCount = this.awemeIdToViewCount;
+    const awemeIdToIsPinned = this.awemeIdToIsPinned;
     for (const dbVideo of dbVideos) {
       const freshItem = videos.find((f: any) => f.aweme_id === dbVideo.id);
       if (!freshItem) {
@@ -1503,6 +1513,7 @@ export class DouyinCrawler {
             newCount: video.comment_count,
             isFirstCrawl: true,
             _userId: userId,
+            isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
           });
         } else {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New video with no comments — skipping');
@@ -1534,6 +1545,7 @@ export class DouyinCrawler {
           newCount: video.comment_count,
           isFirstCrawl: false,
           _userId: userId,
+          isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
         });
       } else {
         // 评论数未变，但检查是否需要首次深度爬取（无 VideoRootCommentCount 记录）
@@ -1551,6 +1563,7 @@ export class DouyinCrawler {
             newCount: video.comment_count,
             isFirstCrawl: true,
             _userId: userId,
+            isPinned: awemeIdToIsPinned.get(video.aweme_id) || false,
           });
         } else {
           logger.info({
