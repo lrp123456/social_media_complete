@@ -12,6 +12,7 @@ import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnap
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import type { ReplyTarget } from './replyTypes';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
+import { getCommentCrawlDecision } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
 
@@ -1327,8 +1328,12 @@ export class KuaishouCrawler {
 
     for (const video of videos) {
       const dbVideo = dbVideos.find(v => v.id === video.aweme_id);
+      const decision = getCommentCrawlDecision({
+        currentCount: video.comment_count,
+        storedCount: dbVideo?.commentCount,
+      });
+
       if (!dbVideo) {
-        // 跨用户保护：视频可能已被其他用户首次爬取入库
         const existingVideo = await prisma.video.findUnique({ where: { id: video.aweme_id } });
         if (existingVideo && existingVideo.userId !== userId) {
           logger.warn({
@@ -1339,12 +1344,13 @@ export class KuaishouCrawler {
           }, '[Phase1] Video already exists under another user — skipping to prevent cross-user data leak');
           continue;
         }
-        // 新视频首次入库：如果有评论，入队获取
-        if (video.comment_count > 0) {
+
+        if (decision.shouldQueue) {
           logger.info({
             awemeId: video.aweme_id,
             description: video.description,
             commentCount: video.comment_count,
+            reason: decision.reason,
           }, '[Phase1] New kuaishou video with comments — enqueuing for initial fetch');
           commentsQueue.push({
             awemeId: video.aweme_id,
@@ -1352,24 +1358,22 @@ export class KuaishouCrawler {
             createTime: video.create_time,
             oldCount: 0,
             newCount: video.comment_count,
-            isFirstCrawl: true,
+            isFirstCrawl: decision.isFirstCrawl,
             _userId: userId,
             isPinned: video.isPinned || false,
           });
         } else {
-          logger.info({ awemeId: video.aweme_id, description: video.description }, '[Phase1] New kuaishou video with no comments — skipping');
+          logger.info({ awemeId: video.aweme_id, description: video.description, reason: decision.reason }, '[Phase1] New kuaishou video with no comments — skipping');
         }
 
-        // 同步作者 ID（首次绑定 + 自愈）
         if (video.authorUid) {
           await db.syncPlatformAuthorId(userId, video.authorUid, video.authorNickname);
           logger.info({ userId, authorUid: video.authorUid }, '[Kuaishou Phase1] Synced platform author ID');
         }
-
         continue;
       }
 
-      if (video.comment_count > dbVideo.commentCount) {
+      if (decision.shouldQueue) {
         const diff = video.comment_count - dbVideo.commentCount;
         logger.info({
           awemeId: video.aweme_id,
@@ -1377,7 +1381,8 @@ export class KuaishouCrawler {
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
           diff,
-        }, '[Phase1] Kuaishou comment count increased — enqueuing for comment fetch');
+          reason: decision.reason,
+        }, '[Phase1] Kuaishou comment count changed — enqueuing for comment fetch');
 
         commentsQueue.push({
           awemeId: video.aweme_id,
@@ -1385,35 +1390,17 @@ export class KuaishouCrawler {
           createTime: video.create_time,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
-          isFirstCrawl: false,
+          isFirstCrawl: decision.isFirstCrawl,
           _userId: userId,
           isPinned: video.isPinned || false,
         });
       } else {
-        // 评论数未变，但检查是否需要首次爬取（无评论记录）
-        const existingComments = await prisma.comment.count({ where: { videoId: video.aweme_id } });
-        if (existingComments === 0 && video.comment_count > 0) {
-          logger.info({
-            awemeId: video.aweme_id,
-            description: video.description,
-          }, '[Phase1] Existing kuaishou video without comments — enqueuing for initial fetch');
-          commentsQueue.push({
-            awemeId: video.aweme_id,
-            description: video.description,
-            createTime: video.create_time,
-            oldCount: dbVideo.commentCount,
-            newCount: video.comment_count,
-            isFirstCrawl: true,
-            _userId: userId,
-            isPinned: video.isPinned || false,
-          });
-        } else {
-          logger.info({
-            awemeId: video.aweme_id,
-            current: video.comment_count,
-            stored: dbVideo.commentCount,
-          }, '[Phase1] Kuaishou comment count unchanged');
-        }
+        logger.info({
+          awemeId: video.aweme_id,
+          current: video.comment_count,
+          stored: dbVideo.commentCount,
+          reason: decision.reason,
+        }, '[Phase1] Kuaishou comment count unchanged');
       }
     }
 
@@ -3227,9 +3214,6 @@ export class KuaishouCrawler {
             ],
           }));
 
-          // 6. 触发企微通知
-          await this.notifyNewComments(item.awemeId, commentsToStore);
-
           results.push({ awemeId: item.awemeId, success: true, commentGroups });
         } else {
           logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
@@ -3244,15 +3228,4 @@ export class KuaishouCrawler {
     return { results };
   }
 
-  /**
-   * 通知新评论（复用现有逻辑）
-   */
-  private async notifyNewComments(awemeId: string, comments: any[]): Promise<void> {
-    try {
-      const { monitorService } = await import('../services/monitorService');
-      await monitorService.notifyNewComments(awemeId, comments);
-    } catch (err: any) {
-      logger.error({ awemeId, err: err.message }, '[Simple] Failed to notify new comments');
-    }
-  }
 }

@@ -1086,12 +1086,12 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '抖音 Simple 模式 — 仅采集根评论');
-    await dy.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
+    const simpleResult = await dy.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
     for (const q of filteredQueue) {
       await db.updateCommentCount(q.awemeId, q.newCount);
     }
-    phase3Result = { results: filteredQueue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+    phase3Result = { ...simpleResult, riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
     phase3Result = await dy.processCommentsQueue(page, filteredQueue);
@@ -1243,12 +1243,12 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '快手 Simple 模式 — 仅采集根评论');
-    await ks.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
+    const simpleResult = await ks.processCommentsQueueSimple(page, filteredQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
     for (const q of filteredQueue) {
       await db.updateCommentCount(q.awemeId, q.newCount);
     }
-    phase3Result = { results: filteredQueue.map(q => ({ awemeId: q.awemeId, success: true, error: undefined })), riskDetected: false };
+    phase3Result = { ...simpleResult, riskDetected: false };
   } else {
     // 深度模式：完整评论树采集
     phase3Result = await ks.processCommentsQueue(page, filteredQueue);
@@ -1416,12 +1416,12 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
       _userId: task.userId,
       isPinned: q.isPinned,
     }));
-    await xhs.processCommentsQueueSimple(page, xhsQueue, maxRootComments);
+    const simpleResult = await xhs.processCommentsQueueSimple(page, xhsQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
     for (const q of filteredQueue) {
       await db.updateCommentCount(q.exportId, q.newCount);
     }
-    phase3Result = (filteredQueue as any[]).map((q: any) => ({ awemeId: q.exportId, success: true, error: undefined }));
+    phase3Result = simpleResult;
   } else {
     // 深度模式：完整评论树采集
     phase3Result = await xhs.processCommentsQueue(page, filteredQueue, task.userId);
