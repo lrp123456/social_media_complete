@@ -6,6 +6,7 @@ import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getSelectorReader } from '../lib/selectorStore';
+import { getCommentCrawlDecision } from '../services/commentCrawlRules';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
@@ -955,6 +956,10 @@ export class TencentCrawler {
       const encodedId = video.exportId.replace(/\//g, '_');
       const dbVideo = dbVideos.find(v => v.id === encodedId);
       const newCount = video.commentCount ?? 0;
+      const decision = getCommentCrawlDecision({
+        currentCount: newCount,
+        storedCount: dbVideo?.commentCount,
+      });
 
       if (!dbVideo) {
         // 跨用户保护：视频可能已被其他用户首次爬取入库
@@ -968,14 +973,14 @@ export class TencentCrawler {
           continue;
         }
         // 新视频
-        if (newCount > 0) {
+        if (decision.shouldQueue) {
           commentsQueue.push({
             exportId: video.exportId.replace(/\//g, '_'),
             description: video.desc?.description || '',
             createTime: video.createTime,
             oldCount: 0,
             newCount,
-            isFirstCrawl: true,
+            isFirstCrawl: decision.isFirstCrawl,
             _userId: userId,
             isPinned: video.isPinned,
           });
@@ -983,14 +988,14 @@ export class TencentCrawler {
         continue;
       }
 
-      if (newCount > dbVideo.commentCount) {
+      if (decision.shouldQueue) {
         commentsQueue.push({
           exportId: video.exportId.replace(/\//g, '_'),
           description: video.desc?.description || '',
           createTime: video.createTime,
           oldCount: dbVideo.commentCount,
           newCount,
-          isFirstCrawl: false,
+          isFirstCrawl: decision.isFirstCrawl,
           _userId: userId,
           isPinned: video.isPinned,
         });
@@ -1914,9 +1919,6 @@ export class TencentCrawler {
             ],
           }));
 
-          // 6. 触发企微通知
-          await this.notifyNewComments(item.exportId, commentsToStore);
-
           results.push({ awemeId: item.exportId, success: true, commentGroups });
         } else {
           logger.info({ exportId: item.exportId }, '[Simple] No new root comments found');
@@ -1929,18 +1931,6 @@ export class TencentCrawler {
     }
 
     return { results };
-  }
-
-  /**
-   * 通知新评论（复用现有逻辑）
-   */
-  private async notifyNewComments(exportId: string, comments: any[]): Promise<void> {
-    try {
-      const { monitorService } = await import('../services/monitorService');
-      await monitorService.notifyNewComments(exportId, comments);
-    } catch (err: any) {
-      logger.error({ exportId, err: err.message }, '[Simple] Failed to notify new comments');
-    }
   }
 
   async processCommentsQueue(

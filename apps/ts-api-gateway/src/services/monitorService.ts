@@ -1430,8 +1430,11 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   // 退出策略
   await xhs.executeExitStrategy(page);
 
+  // Normalize phase3Result: deep mode returns array, simple mode returns { results: [...] }
+  const phase3Items = Array.isArray(phase3Result) ? phase3Result : (phase3Result as any).results || [];
+
   // 处理登录失效（Phase 3 内联检测到的）
-  const hasLoginRequired = phase3Result.some((r: any) => r.loginRequired);
+  const hasLoginRequired = phase3Items.some((r: any) => r.loginRequired);
   if (hasLoginRequired) {
     logger.info({ userId: task.userId }, '[XHS-monitor] 主站未登录 — 暂停监控，等待扫码恢复');
     await db.updateUserStatus(task.userId, 'login_required');
@@ -1462,8 +1465,8 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     logger.info({ userId: task.userId }, '[XHS-monitor] 主站登录已恢复 — 清除恢复标记');
   }
 
-  const successful = phase3Result.filter((r: any) => r.success);
-  const failed = phase3Result.filter((r: any) => !r.success);
+  const successful = phase3Items.filter((r: any) => r.success);
+  const failed = phase3Items.filter((r: any) => !r.success);
   const updates = filteredQueue
     .filter((q: any) => successful.some((r: any) => r.awemeId === q.exportId))
     .map((q: any) => ({
@@ -1634,7 +1637,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   const successful = phase3Result.filter(r => r.success);
   const failed = phase3Result.filter(r => !r.success);
   const updates = filteredQueue
-    .filter(q => successful.some(r => r.exportId === q.exportId))
+    .filter(q => successful.some(r => (r as any).exportId === q.exportId || (r as any).awemeId === q.exportId))
     .map(q => ({
       awemeId: q.exportId,
       description: q.description,
