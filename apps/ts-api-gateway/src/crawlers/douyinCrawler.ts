@@ -2825,59 +2825,64 @@ export class DouyinCrawler {
 
     logger.info({ awemeId, descPrefix: description.substring(0, 30) }, '[Drawer] Searching for target video in drawer');
 
-    // 检查"没有更多视频"标记（避免无意义滚动）
-    const noMoreVideo = await page.evaluate(() => {
-      const els = document.querySelectorAll('[class*="loading"]');
-      for (const el of els) {
-        if (el.textContent?.includes('没有更多视频')) return true;
-      }
-      return false;
-    }).catch(() => false);
+    const maxScrolls = MAX_SCROLL_ATTEMPTS_DRAWER;
 
-    if (noMoreVideo) {
-      logger.info('[Drawer] 抽屉已无更多视频，跳过滚动');
-    }
-
-    const maxScrolls = noMoreVideo ? 0 : MAX_SCROLL_ATTEMPTS_DRAWER;
+    let lastContainerCount = -1;
+    let noGrowthRounds = 0;
 
     for (let scrollAttempt = 0; scrollAttempt <= maxScrolls; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
       const containerSelector = getSelector('drawer.video-item').css || '[class*="douyin-creator-interactive-list-items"] > div';
       const containerElements = await HumanActions.queryElementsWithInfo(page, containerSelector);
-      if (!containerElements || containerElements.length === 0) {
-        if (scrollAttempt < maxScrolls) await this.scrollDrawerForMore(page, scrollAttempt);
-        continue;
-      }
+      const count = containerElements?.length ?? 0;
 
-      logger.info({ count: containerElements.length, scrollAttempt }, '[Drawer] Found video containers');
+      if (containerElements && containerElements.length > 0) {
+        logger.info({ count, scrollAttempt }, '[Drawer] Found video containers');
 
-      for (const container of containerElements) {
-        const containerText = container.text || '';
+        for (const container of containerElements) {
+          const containerText = container.text || '';
 
-        // 纯描述前缀匹配（不依赖时间戳）
-        // API create_time（创建时间）与 DOM 发布时间差异可达 30 天，时间戳匹配不可靠
-        // 抽屉按发布时间倒序排列，第一个匹配的就是最新的同名视频
-        if (!isDescriptionMatch(containerText, description)) continue;
+          if (!isDescriptionMatch(containerText, description)) continue;
 
-        // 描述匹配，点击
-        const clicked = await HumanActions.cdpClickNode(page, container.nodeId);
-        if (clicked) {
-          logger.info({ awemeId, matchType: 'description' }, '[Drawer] 匹配成功（描述前缀）');
-          return true;
+          const clicked = await HumanActions.cdpClickNode(page, container.nodeId);
+          if (clicked) {
+            logger.info({ awemeId, matchType: 'description' }, '[Drawer] 匹配成功（描述前缀）');
+            return true;
+          }
+
+          const reClicked = await this.tryClickMatchedContainer(page, description.toLowerCase(), description.toLowerCase().substring(0, 25));
+          if (reClicked) return true;
+
+          logger.warn({ awemeId }, '[Drawer] Match found but click failed — giving up');
+          return false;
         }
-
-        // 点击失败，尝试重新查询
-        const reClicked = await this.tryClickMatchedContainer(page, description.toLowerCase(), description.toLowerCase().substring(0, 25));
-        if (reClicked) return true;
-
-        logger.warn({ awemeId }, '[Drawer] Match found but click failed — giving up');
-        return false;
       }
 
       if (scrollAttempt < maxScrolls) {
-        logger.info({ scrollAttempt, containerCount: containerElements.length }, '[Drawer] 未匹配，滚动加载更多');
+        logger.info({ scrollAttempt, containerCount: count }, '[Drawer] 未匹配，滚动加载更多');
         await this.scrollDrawerForMore(page, scrollAttempt);
+
+        // count 为本次滚动前的容器数；滚动后可能触发新数据加载，
+        // 但新数据要到下一轮 queryElementsWithInfo 才可见。
+        // 因此需要 2 次连续无增长 + 哨兵确认，才判定真正耗尽。
+        if (count === lastContainerCount) {
+          noGrowthRounds++;
+          const exhausted = await page.evaluate(() => {
+            const els = document.querySelectorAll('[class*="loading"]');
+            for (const el of els) {
+              if (el.textContent?.includes('没有更多视频')) return true;
+            }
+            return false;
+          }).catch(() => false);
+          if (noGrowthRounds >= 2 && exhausted) {
+            logger.info({ scrollAttempt, count }, '[Drawer] 滚动后无新视频且哨兵确认耗尽 — 停止');
+            break;
+          }
+        } else {
+          noGrowthRounds = 0;
+        }
+        lastContainerCount = count;
       }
     }
 
