@@ -1098,9 +1098,9 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   }
 
   if (phase3Result.riskDetected) {
-    const riskType = phase3Result.riskInfo?.type || 'unknown';
+    const riskType = (phase3Result as any).riskInfo?.type || 'unknown';
     logger.error({ userId: task.userId }, '抖音 Phase 3 风控触发');
-    await db.logRiskScene(task.userId, 'douyin', riskType, phase3Result.riskInfo?.evidence || '');
+    await db.logRiskScene(task.userId, 'douyin', riskType, (phase3Result as any).riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
     await sendLoginQR(page, task.userId, 'douyin');
     dy.unregisterCommentListener();
@@ -1255,9 +1255,9 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   }
 
   if (phase3Result.riskDetected) {
-    const riskType = phase3Result.riskInfo?.type || 'unknown';
+    const riskType = (phase3Result as any).riskInfo?.type || 'unknown';
     logger.error({ userId: task.userId }, '快手 Phase 3 风控触发');
-    await db.logRiskScene(task.userId, 'kuaishou', riskType, phase3Result.riskInfo?.evidence || '');
+    await db.logRiskScene(task.userId, 'kuaishou', riskType, (phase3Result as any).riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
     await sendLoginQR(page, task.userId, 'kuaishou');
     ks.unregisterCommentListener();
