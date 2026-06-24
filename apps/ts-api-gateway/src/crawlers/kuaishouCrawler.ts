@@ -1390,13 +1390,13 @@ export class KuaishouCrawler {
           isPinned: video.isPinned || false,
         });
       } else {
-        // 评论数未变，但检查是否需要首次深度爬取（无 VideoRootCommentCount 记录）
-        const snapshots = await db.getRootCommentCounts(video.aweme_id);
-        if (snapshots.size === 0 && video.comment_count > 0) {
+        // 评论数未变，但检查是否需要首次爬取（无评论记录）
+        const existingComments = await prisma.comment.count({ where: { videoId: video.aweme_id } });
+        if (existingComments === 0 && video.comment_count > 0) {
           logger.info({
             awemeId: video.aweme_id,
             description: video.description,
-          }, '[Phase1] Existing kuaishou video without snapshots — enqueuing for initial deep crawl');
+          }, '[Phase1] Existing kuaishou video without comments — enqueuing for initial fetch');
           commentsQueue.push({
             awemeId: video.aweme_id,
             description: video.description,
