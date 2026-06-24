@@ -12,7 +12,7 @@ import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnap
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import type { ReplyTarget } from './replyTypes';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
-import { getCommentCrawlDecision } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
 
@@ -686,7 +686,7 @@ export class KuaishouCrawler {
       return true;
     });
 
-    const sliced = filtered.slice(0, this.maxMonitorVideos);
+    const sliced = truncateToNewest(filtered, this.maxMonitorVideos);
 
     logger.info({
       source,
