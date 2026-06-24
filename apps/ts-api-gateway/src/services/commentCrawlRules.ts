@@ -47,3 +47,16 @@ export function getRootCidSetForIncremental(
   const currentRootCids = new Set(currentSnapshots.map((s) => s.cid));
   return new Set([...dbAllCids].filter((cid) => currentRootCids.has(cid)));
 }
+
+/**
+ * 按 create_time 倒序取最新 limit 条。
+ * create_time 缺失按 0 处理（排到末尾），不抛异常。不修改入参数组。
+ */
+export function truncateToNewest<T extends { create_time?: number }>(
+  items: T[],
+  limit: number,
+): T[] {
+  return [...items]
+    .sort((a, b) => (b.create_time ?? 0) - (a.create_time ?? 0))
+    .slice(0, limit);
+}
