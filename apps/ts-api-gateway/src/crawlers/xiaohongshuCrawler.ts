@@ -3,7 +3,7 @@ import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager } from '
 import { getSelector, getSelectorChain, getRandomExitSubmenuKeyForPlatform, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
-import { getCommentCrawlDecision } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import fs from 'fs';
@@ -258,7 +258,7 @@ export class XiaohongshuCrawler {
       }
       return true; // 没有 permission_code 的笔记默认为公开
     });
-    const sliced = filteredItems.slice(0, this.maxMonitorVideos);
+    const sliced = truncateToNewest(filteredItems, this.maxMonitorVideos);
 
     // 从 raw responses 中提取作者 ID
     let xhsAuthorId: string | undefined;
