@@ -3,6 +3,7 @@ import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager } from '
 import { getSelector, getSelectorChain, getRandomExitSubmenuKeyForPlatform, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
+import { getCommentCrawlDecision } from '../services/commentCrawlRules';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import fs from 'fs';
@@ -667,6 +668,7 @@ export class XiaohongshuCrawler {
       description: string;
       oldCount: number;
       newCount: number;
+      isFirstCrawl: boolean;
     }> = [];
 
     for (const video of videos) {
@@ -695,6 +697,7 @@ export class XiaohongshuCrawler {
             description: video.description,
             oldCount: 0,
             newCount: video.comment_count,
+            isFirstCrawl: true,
           });
         } else {
           logger.info({ awemeId: video.aweme_id, description: video.description }, '[XHS-Light] New note with no comments — skipping');
@@ -702,21 +705,25 @@ export class XiaohongshuCrawler {
         continue;
       }
 
-      if (video.comment_count > dbVideo.commentCount) {
-        const diff = video.comment_count - dbVideo.commentCount;
+      const decision = getCommentCrawlDecision({
+        currentCount: video.comment_count,
+        storedCount: dbVideo.commentCount,
+      });
+      if (decision.shouldQueue) {
         logger.info({
           awemeId: video.aweme_id,
           description: video.description,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
-          diff,
-        }, '[XHS-Light] Comment count increased — will notify (light mode)');
+          reason: decision.reason,
+        }, '[XHS-Light] Comment count changed — will notify (simple/deep mode)');
 
         updatedVideos.push({
           awemeId: video.aweme_id,
           description: video.description,
           oldCount: dbVideo.commentCount,
           newCount: video.comment_count,
+          isFirstCrawl: decision.isFirstCrawl,
         });
       } else {
         logger.info({
@@ -754,21 +761,15 @@ export class XiaohongshuCrawler {
 
     const commentsQueue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl: boolean; isPinned: boolean }> = [];
     for (const v of updatedVideos) {
-      // 检查该笔记是否已有评论快照记录（VideoRootCommentCount）
-      // 无记录 = 首次爬取（isFirstCrawl），有记录 = 增量更新
-      const existingSnapshot = await prisma.videoRootCommentCount.findFirst({
-        where: { videoId: v.awemeId },
-        select: { cid: true },
-      });
       commentsQueue.push({
         exportId: v.awemeId,
         description: v.description,
         oldCount: v.oldCount,
         newCount: v.newCount,
-        isFirstCrawl: !existingSnapshot,
+        isFirstCrawl: v.isFirstCrawl,
         isPinned: awemeIdToIsPinned.get(v.awemeId) || false,
       });
-      logger.info({ awemeId: v.awemeId, isFirstCrawl: !existingSnapshot }, '[XHS-Light] Queue item crawl mode');
+      logger.info({ awemeId: v.awemeId, isFirstCrawl: v.isFirstCrawl }, '[XHS-Light] Queue item crawl mode from Phase1 decision');
     }
 
     return {
@@ -1385,9 +1386,6 @@ export class XiaohongshuCrawler {
               ],
             }));
 
-            // 5. 触发企微通知
-            await this.notifyNewComments(item.awemeId, commentsToStore);
-
             results.push({ awemeId: item.awemeId, success: true, commentGroups });
           } else {
             logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
@@ -1405,18 +1403,6 @@ export class XiaohongshuCrawler {
     }
 
     return { results };
-  }
-
-  /**
-   * 通知新评论（复用现有逻辑）
-   */
-  private async notifyNewComments(awemeId: string, comments: any[]): Promise<void> {
-    try {
-      const { monitorService } = await import('../services/monitorService');
-      await monitorService.notifyNewComments(awemeId, comments);
-    } catch (err: any) {
-      logger.error({ awemeId, err: err.message }, '[Simple] Failed to notify new comments');
-    }
   }
 
   /**

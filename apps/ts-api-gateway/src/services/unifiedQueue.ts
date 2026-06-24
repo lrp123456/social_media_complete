@@ -323,6 +323,8 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
           r.success && r.commentGroups && r.commentGroups.length > 0
         ) ?? false;
 
+        const queueItemId = (q: any): string | undefined => q.awemeId ?? q.exportId;
+
         if (result.newComments > 0 || hasFirstCrawlGroups) {
           const commentGroups = phase3Result?.results
             ?.filter((r: any) => r.success && r.commentGroups)
@@ -351,7 +353,7 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
 
                   return {
                     awemeId: r.awemeId,
-                    description: queue.find((q: any) => q.awemeId === r.awemeId)?.description || '',
+                    description: queue.find((q: any) => queueItemId(q) === r.awemeId)?.description || '',
                     rootComment: g.rootComment,
                     subReplies: dedupedSubReplies,
                     newCids: new Set(
