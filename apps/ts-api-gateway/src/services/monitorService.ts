@@ -1451,7 +1451,17 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   if (isSimpleMode) {
     // 简单模式：仅采集根评论
     logger.info({ userId: task.userId, maxRootComments }, '小红书 Simple 模式 — 仅采集根评论');
-    await xhs.processCommentsQueueSimple(page, filteredQueue as any, maxRootComments);
+    const xhsQueue = filteredQueue.map(q => ({
+      awemeId: q.exportId,
+      description: q.description,
+      createTime: 0,
+      oldCount: q.oldCount,
+      newCount: q.newCount,
+      isFirstCrawl: q.isFirstCrawl,
+      _userId: task.userId,
+      isPinned: q.isPinned,
+    }));
+    await xhs.processCommentsQueueSimple(page, xhsQueue, maxRootComments);
     // Phase3 结束后更新 Video.commentCount
     for (const q of filteredQueue) {
       await db.updateCommentCount(q.exportId, q.newCount);
