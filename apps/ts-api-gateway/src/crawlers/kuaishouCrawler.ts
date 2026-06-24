@@ -1634,25 +1634,6 @@ export class KuaishouCrawler {
             continue;
           }
 
-          // 抽屉打开后，photoList API 被调用，从中提取视频真实评论数
-          const photoListCounts = await this.updateCommentCountsFromPhotoList(page, item._userId);
-          if (photoListCounts.size > 0) {
-            // 如果当前视频的评论数在 photoList 响应中，更新到 item 用于后续流程
-            const photoListCount = photoListCounts.get(item.awemeId);
-            if (photoListCount !== undefined && photoListCount !== item.newCount) {
-              logger.info({
-                awemeId: item.awemeId,
-                oldCount: item.newCount,
-                photoListCount,
-              }, '[Phase3] PhotoList comment count differs from work_list — using photoList value');
-              item.newCount = photoListCount;
-            }
-            logger.info({
-              awemeId: item.awemeId,
-              photoListCounts: Array.from(photoListCounts.entries()),
-            }, '[Phase3] Extracted photoList comment counts');
-          }
-
           const clickT0 = Date.now();
           const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
           logger.info({ awemeId: item.awemeId, clickMs: Date.now() - clickT0, clicked }, '[Phase3] Drawer click completed');
@@ -1844,7 +1825,7 @@ export class KuaishouCrawler {
         });
 
         await db.batchUpsertComments('kuaishou', dbComments, item._userId);
-        await db.updateCommentCount(item.awemeId, item.newCount);
+        // commentCount 已在 Phase 1 由 reconcileVideosForUser 存储 API 真实值，此处不再覆盖
 
         // 保存根评论快照
         const snapshots = rootComments.map((c: any) => ({

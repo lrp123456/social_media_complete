@@ -2010,7 +2010,7 @@ export class DouyinCrawler {
           const dbStart = Date.now();
           await db.upsertCommentTree(item.awemeId, allFlat);
           await prisma.comment.updateMany({ where: { videoId: item.awemeId }, data: { isNew: 0 } });
-          await db.updateCommentCount(item.awemeId, item.newCount);
+          // commentCount 已在 Phase 1 由 reconcileVideosForUser 存储 API 真实值，此处不再覆盖
           const dbMs = Date.now() - dbStart;
 
           logger.info({ awemeId: item.awemeId, totalComments: allFlat.length, roots: rootComments.length, subs: subReplies.length, isFirstCrawl: true, dbWriteMs: dbMs }, '[Tree] Phase3c: first crawl DB write complete — all comments saved as isNew=0 (%dms)', dbMs);
@@ -2292,8 +2292,7 @@ export class DouyinCrawler {
             await db.upsertCommentTree(item.awemeId, newCommentsToUpsert);
           }
 
-          // ── 3f. 更新 commentCount ──
-          await db.updateCommentCount(item.awemeId, item.newCount);
+          // ── 3f. commentCount 已在 Phase 1 由 reconcileVideosForUser 存储 API 真实值，此处不再覆盖 ──
           const dbMs = Date.now() - dbStart;
 
           logger.info({
@@ -2471,8 +2470,24 @@ export class DouyinCrawler {
           }
 
           // 提取根评论
-          const newComments = responses.flatMap(r => r.body?.comments || [])
-            .filter(c => !existingCidSet.has(c.cid));
+          // 诊断日志：检查响应格式
+          if (responses.length > 0) {
+            const firstResp = responses[0];
+            const bodyStr = firstResp.body ? JSON.stringify(firstResp.body).substring(0, 1000) : 'null';
+            logger.info({ awemeId: item.awemeId, responseCount: responses.length, bodyPreview: bodyStr }, '[Simple] Comment response body preview');
+          }
+
+          const newComments = responses.flatMap(r => {
+            const body = r.body || {};
+            // 兼容多种响应格式
+            // 格式1: { comments: [...] } - /aweme/v1/web/comment/list/select
+            // 格式2: { comment_info_list: [...] } - /aweme/v1/creator/comment/list
+            const comments = body.comments || body.comment_info_list || body.comment_list || body.data?.comments || body.data?.comment_list || [];
+            return Array.isArray(comments) ? comments : [];
+          }).filter(c => {
+            const cid = c.cid || c.comment_id || c.id || c.commentId;
+            return cid && !existingCidSet.has(String(cid));
+          });
 
           if (newComments.length === 0) {
             consecutiveNoNew++;
@@ -2495,18 +2510,26 @@ export class DouyinCrawler {
         // 3. 限制到 maxRootComments
         const commentsToStore = allComments.slice(0, maxRootComments);
 
-        // 4. 存储新评论
+        // 4. 存储新评论（兼容两种API格式）
         if (commentsToStore.length > 0) {
           for (const comment of commentsToStore) {
+            // 格式1: { cid, text, user: { nickname, uid }, digg_count, create_time }
+            // 格式2: { comment_id, text, user_info: { screen_name, user_id }, digg_count, create_time }
+            const cid = comment.cid || comment.comment_id || '';
+            const nickname = comment.user?.nickname || comment.user_info?.screen_name || '';
+            const uid = comment.user?.uid || comment.user_info?.user_id || '';
+            const diggCount = typeof comment.digg_count === 'string' ? parseInt(comment.digg_count, 10) || 0 : (comment.digg_count || 0);
+            const createTime = typeof comment.create_time === 'string' ? parseInt(comment.create_time, 10) || 0 : (comment.create_time || 0);
+
             await db.upsertComment(item.awemeId, {
-              cid: comment.cid,
+              cid,
               text: comment.text || '',
-              user_nickname: comment.user?.nickname || '',
-              user_uid: comment.user?.uid || '',
-              digg_count: comment.digg_count || 0,
-              create_time: comment.create_time || 0,
+              user_nickname: nickname,
+              user_uid: uid,
+              digg_count: diggCount,
+              create_time: createTime,
               reply_id: '0',
-              is_author: false,
+              is_author: comment.is_author || false,
             });
           }
 
@@ -2516,38 +2539,46 @@ export class DouyinCrawler {
             totalCollected: allComments.length,
           }, '[Simple] Stored new root comments');
 
-          // 5. 构建 commentGroups（与 unifiedQueue 兼容）
-          const commentGroups = commentsToStore.map(comment => ({
-            rootComment: {
-              cid: comment.cid,
-              text: comment.text || '',
-              userNickname: comment.user?.nickname || '',
-              userUid: comment.user?.uid || '',
-              createTime: comment.create_time || 0,
-              diggCount: comment.digg_count || 0,
-              level: 1 as const,
-              replyId: '0',
-              isAuthor: false,
-              subComments: [],
-              imageUrls: comment.imageUrls,
-            },
-            subReplies: [],
-            newInGroup: [
-              {
-                cid: comment.cid,
+          // 5. 构建 commentGroups（与 unifiedQueue 兼容，兼容两种API格式）
+          const commentGroups = commentsToStore.map(comment => {
+            const cid = comment.cid || comment.comment_id || '';
+            const nickname = comment.user?.nickname || comment.user_info?.screen_name || '';
+            const uid = comment.user?.uid || comment.user_info?.user_id || '';
+            const diggCount = typeof comment.digg_count === 'string' ? parseInt(comment.digg_count, 10) || 0 : (comment.digg_count || 0);
+            const createTime = typeof comment.create_time === 'string' ? parseInt(comment.create_time, 10) || 0 : (comment.create_time || 0);
+
+            return {
+              rootComment: {
+                cid,
                 text: comment.text || '',
-                userNickname: comment.user?.nickname || '',
-                userUid: comment.user?.uid || '',
-                createTime: comment.create_time || 0,
-                diggCount: comment.digg_count || 0,
+                userNickname: nickname,
+                userUid: uid,
+                createTime,
+                diggCount,
                 level: 1 as const,
                 replyId: '0',
-                isAuthor: false,
+                isAuthor: comment.is_author || false,
                 subComments: [],
                 imageUrls: comment.imageUrls,
               },
-            ],
-          }));
+              subReplies: [],
+              newInGroup: [
+                {
+                  cid,
+                  text: comment.text || '',
+                  userNickname: nickname,
+                  userUid: uid,
+                  createTime,
+                  diggCount,
+                  level: 1 as const,
+                  replyId: '0',
+                  isAuthor: comment.is_author || false,
+                  subComments: [],
+                  imageUrls: comment.imageUrls,
+                },
+              ],
+            };
+          });
 
           // 6. 触发企微通知
           await this.notifyNewComments(item.awemeId, commentsToStore);
@@ -2915,6 +2946,83 @@ export class DouyinCrawler {
     }
 
     return false;
+  }
+
+  /**
+   * 从抽屉 DOM 中提取所有视频的评论数，更新数据库
+   * 抽屉显示"评论数: N"格式的文本
+   */
+  private async updateCommentCountsFromDrawer(page: Page, userId: number): Promise<Map<string, number>> {
+    const updatedCounts = new Map<string, number>();
+
+    try {
+      // 等待抽屉内容加载
+      await HumanActions.wait(page, 500, 1000);
+
+      // 从 DOM 中提取所有视频的评论数
+      const videoItems = await page.evaluate(() => {
+        const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
+        const results: Array<{ id: string; commentCount: number }> = [];
+
+        for (const item of items) {
+          const text = item.textContent || '';
+
+          // 提取评论数：匹配"评论数: 123"或"评论数123"格式
+          const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
+          if (!commentMatch) continue;
+
+          const commentCount = parseInt(commentMatch[1], 10);
+
+          // 尝试从链接或属性中提取视频 ID
+          const link = item.querySelector('a[href*="aweme_id"]') as HTMLAnchorElement;
+          let awemeId = '';
+
+          if (link) {
+            const hrefMatch = link.href.match(/aweme_id=(\d+)/);
+            if (hrefMatch) awemeId = hrefMatch[1];
+          }
+
+          // 回退：从 data 属性中提取
+          if (!awemeId) {
+            awemeId = item.getAttribute('data-aweme-id') || item.getAttribute('data-id') || '';
+          }
+
+          // 回退：从文本中提取（某些情况下 ID 可能在文本中）
+          if (!awemeId) {
+            const idMatch = text.match(/(\d{19})/); // 抖音 ID 通常是 19 位
+            if (idMatch) awemeId = idMatch[1];
+          }
+
+          if (awemeId && commentCount >= 0) {
+            results.push({ id: awemeId, commentCount });
+          }
+        }
+
+        return results;
+      });
+
+      if (videoItems && videoItems.length > 0) {
+        logger.info({ count: videoItems.length }, '[Douyin-Drawer] Extracted comment counts from drawer DOM');
+
+        for (const { id, commentCount } of videoItems) {
+          updatedCounts.set(id, commentCount);
+          await db.updateVideoCommentCount(userId, id, commentCount);
+          logger.debug({ awemeId: id, commentCount }, '[Douyin-Drawer] Updated video comment count in DB');
+        }
+
+        const sampleEntries = Array.from(updatedCounts.entries()).slice(0, 5);
+        logger.info(
+          { totalExtracted: updatedCounts.size, samples: sampleEntries },
+          '[Douyin-Drawer] Comment counts extracted from drawer',
+        );
+      } else {
+        logger.info('[Douyin-Drawer] No comment counts found in drawer DOM');
+      }
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[Douyin-Drawer] Error extracting comment counts from drawer');
+    }
+
+    return updatedCounts;
   }
 
   /**
