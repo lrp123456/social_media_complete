@@ -29,6 +29,7 @@ interface VideoInfo {
   create_time: number;
   comment_count: number;
   metrics: Record<string, any>;
+  isPinned: boolean;
 }
 
 interface RiskControlDetection {
@@ -51,6 +52,7 @@ export interface XiaohongshuCheckResult {
     oldCount: number;
     newCount: number;
     isFirstCrawl: boolean;
+    isPinned: boolean;
   }>;
   riskControlDetected: boolean;
   riskControlInfo?: RiskControlDetection;
@@ -64,6 +66,7 @@ export interface XhsCommentQueueItem {
   newCount: number;
   isFirstCrawl: boolean;
   _userId: number;
+  isPinned: boolean;
 }
 
 export class XiaohongshuCrawler {
@@ -279,6 +282,23 @@ export class XiaohongshuCrawler {
     }
     (sliced as any)._xhsAuthorId = xhsAuthorId;
     (sliced as any)._xhsAuthorName = xhsAuthorName;
+
+    // 构建置顶视频映射（sticky: true → isPinned）
+    const awemeIdToIsPinned = new Map<string, boolean>();
+    for (const item of allItems) {
+      const noteId = item.id || item.note_id;
+      if (noteId) {
+        awemeIdToIsPinned.set(String(noteId), item.sticky === true);
+      }
+    }
+    for (const item of sliced) {
+      const noteId = item.id || item.note_id;
+      if (noteId) {
+        item.isPinned = awemeIdToIsPinned.get(String(noteId)) || false;
+      }
+    }
+    // 向下游传递映射（checkForUpdates 中需要使用）
+    (sliced as any)._awemeIdToIsPinned = awemeIdToIsPinned;
 
     logger.info({
       step: 'FETCH_COMPLETE',
@@ -617,6 +637,7 @@ export class XiaohongshuCrawler {
 
     logger.info({ userId }, '[XHS-Light] Fetching note list');
     const videos = await this.fetchNoteListFromSource(page);
+    const awemeIdToIsPinned = (videos as any)._awemeIdToIsPinned || new Map<string, boolean>();
 
     // 同步作者 ID
     const xhsAuthorId = (videos as any)._xhsAuthorId;
@@ -731,7 +752,7 @@ export class XiaohongshuCrawler {
       };
     }
 
-    const commentsQueue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl: boolean }> = [];
+    const commentsQueue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl: boolean; isPinned: boolean }> = [];
     for (const v of updatedVideos) {
       // 检查该笔记是否已有评论快照记录（VideoRootCommentCount）
       // 无记录 = 首次爬取（isFirstCrawl），有记录 = 增量更新
@@ -745,6 +766,7 @@ export class XiaohongshuCrawler {
         oldCount: v.oldCount,
         newCount: v.newCount,
         isFirstCrawl: !existingSnapshot,
+        isPinned: awemeIdToIsPinned.get(v.awemeId) || false,
       });
       logger.info({ awemeId: v.awemeId, isFirstCrawl: !existingSnapshot }, '[XHS-Light] Queue item crawl mode');
     }
@@ -1221,7 +1243,7 @@ export class XiaohongshuCrawler {
 
   async processCommentsQueue(
     page: Page,
-    queue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl?: boolean }>,
+    queue: Array<{ exportId: string; description: string; oldCount: number; newCount: number; isFirstCrawl?: boolean; isPinned?: boolean }>,
     userId: number,
   ): Promise<Array<{ success: boolean; awemeId: string; error?: string }>> {
     logger.info({ queueLength: queue.length, userId }, '[XHS-Phase3] Processing comments queue');
