@@ -1117,6 +1117,7 @@ router.get('/monitor/accounts/:userId', async (req: Request, res: Response) => {
       commentCount: v._count?.comments ?? 0,
       newCommentCount: v.comments.length,
       metrics: v.metrics ? JSON.parse(v.metrics) : null,
+      isPinned: v.isPinned,
       updatedAt: v.updatedAt,
     }));
 
@@ -1138,6 +1139,34 @@ router.get('/monitor/accounts/:userId', async (req: Request, res: Response) => {
     });
   } catch (err) {
     handleError(res, logger, err, '获取用户监控详情失败');
+  }
+});
+
+/** PATCH /api/v1/matrix/monitor/accounts/:userId/skip-pinned — 更新置顶视频跳过设置 */
+router.patch('/monitor/accounts/:userId/skip-pinned', async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(req.params.userId, 10);
+    const { skipPinnedVideos } = req.body;
+
+    if (!skipPinnedVideos || typeof skipPinnedVideos !== 'object') {
+      return res.status(400).json({ success: false, error: 'Invalid skipPinnedVideos format' });
+    }
+
+    const validPlatforms = ['douyin', 'kuaishou', 'xiaohongshu', 'tencent'];
+    for (const [k, v] of Object.entries(skipPinnedVideos)) {
+      if (!validPlatforms.includes(k) || typeof v !== 'boolean') {
+        return res.status(400).json({ success: false, error: `Invalid platform or value: ${k}` });
+      }
+    }
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { skipPinnedVideos },
+    });
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
   }
 });
 
