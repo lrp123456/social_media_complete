@@ -1,7 +1,7 @@
 # 视频采集截断与抽屉滚动加载修复设计规格
 
 **日期**: 2026-06-24
-**状态**: 待用户复审
+**状态**: 已审查，已更新
 **范围**: 修复抖音 Phase1 超额采集未截断、Phase3 选择作品抽屉滚动加载过早门控两个 bug；并把"截断前显式按时间倒序"统一到快手、小红书、腾讯
 
 ---
@@ -97,11 +97,13 @@ export function truncateToNewest<T extends { create_time?: number }>(
 
 **文件**：`apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`（`checkForUpdates`，约 1437 行）
 
-在 `const videos = await this.fetchVideoListFromSource(page, source);` 之后、DB 对比/入队循环之前插入：
+将 `const videos = await this.fetchVideoListFromSource(page, source);` 改为 `let`，然后在之后、DB 对比/入队循环之前插入截断：
 
 ```ts
+let videos = await this.fetchVideoListFromSource(page, source);
+// ... 诊断日志保持不变 ...
 const fetchedCount = videos.length;
-const videos = truncateToNewest(videos, this.maxMonitorVideos);
+videos = truncateToNewest(videos, this.maxMonitorVideos);
 logger.info({ userId, fetched: fetchedCount, monitored: videos.length, cap: this.maxMonitorVideos }, '[Phase1] Truncated to newest N videos');
 ```
 
@@ -153,6 +155,9 @@ for (let scrollAttempt = 0; scrollAttempt <= maxScrolls; scrollAttempt++) {
     logger.info({ scrollAttempt, containerCount: count }, '[Drawer] 未匹配，滚动加载更多');
     await this.scrollDrawerForMore(page, scrollAttempt);
 
+    // count 为本次滚动前的容器数；滚动后可能触发新数据加载，
+    // 但新数据要到下一轮 queryElementsWithInfo 才可见。
+    // 因此需要 2 次连续无增长 + 哨兵确认，才判定真正耗尽。
     if (count === lastContainerCount) {
       noGrowthRounds++;
       const exhausted = await page.evaluate(() => {
@@ -199,7 +204,11 @@ const sliced = truncateToNewest(filteredItems, this.maxMonitorVideos);
 }).slice(0, this.maxMonitorVideos);
 // 改为
 const filteredVideos = truncateToNewest(
-  enriched.filter(video => { /* 过滤非公开和评论关闭 */ }),
+  enriched.filter(video => {
+    if (video.commentClose === 1) return false;
+    if (video.visibleType !== undefined && video.visibleType !== 1) return false;
+    return true;
+  }),
   this.maxMonitorVideos,
 );
 ```
@@ -232,6 +241,7 @@ Phase3 findAndClickVideoInDrawer
 2. **`create_time` 缺失** —— `(b.create_time ?? 0) - (a.create_time ?? 0)`，缺字段按 0 排到末尾，不抛异常。
 3. **置顶视频** —— 含置顶取最新 20 条；`skipPinnedVideos` 时仅不爬置顶项，不补位，与 `monitorService` 现有 skipPinned 过滤一致。
 4. **抽屉连续滚动无新数据但哨兵未显示** —— `noGrowthRounds` 仅在 `exhausted` 同时为真时才退出；否则继续直到 `MAX_SCROLL_ATTEMPTS_DRAWER` 兜底。
+5. **`noGrowthRounds` 滞后检测** —— `count` 取自滚动前的容器数，新数据要到下一轮才可见。这是保守设计：需要 2 次连续无增长才判定耗尽，避免因单次延迟加载误退出。`MAX_SCROLL_ATTEMPTS_DRAWER = 25` 作为硬兜底足够安全。
 5. **截断后某旧视频之前已入库但本轮掉出前 20** —— `reconcileVideosForUser` 视为“已消失”删除（非保护模式），保持 DB 与监控范围一致。这是预期行为（只监控最新 20 条）。
 6. **cursor 翻页鉴权** —— 现有页面会话已带 cookie/token，`scrollDrawerForMore` 模拟真实滚动即可复用。
 
@@ -245,7 +255,8 @@ Phase3 findAndClickVideoInDrawer
 - 25 条乱序视频 → 返回最新 20 条，且按时间倒序；
 - 不足 20 条 → 原样返回（倒序）；
 - `create_time` 缺失项按 0 排到末尾，不抛异常；
-- 空数组 → 返回空数组。
+- 空数组 → 返回空数组；
+- 所有 `create_time` 相等 → 稳定排序保持原序。
 
 ### 6.2 静态验证
 
