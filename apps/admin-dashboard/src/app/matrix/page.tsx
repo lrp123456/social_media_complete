@@ -42,6 +42,7 @@ import {
   useGenerateAiReply,
   useRegenerateAiReply,
   useAcceptAiReply,
+  useUpdateSkipPinnedVideos,
 } from '@/hooks/useApi';
 import { MaterialIcon, PlatformIcon, Avatar, type MaterialIconName } from '@/components/ui/MaterialIcon';
 import { BentoCard } from '@/components/ui/Bento';
@@ -807,6 +808,8 @@ function MonitorTab() {
   const [monitorTaskIds, setMonitorTaskIds] = useState<string[]>([]);
   const [showQueue, setShowQueue] = useState(false);
   const [platformFilter, setPlatformFilter] = useState<string>('all');
+  const [showPinnedSettings, setShowPinnedSettings] = useState<number | null>(null);
+  const [pinnedSettings, setPinnedSettings] = useState<Record<string, boolean>>({});
   const { toasts, addToast, dismiss } = useMonitorToast();
 
   // ── Crawl Config ──
@@ -859,6 +862,21 @@ function MonitorTab() {
   const { data: debugModeData } = useDebugMode();
   const updateDebugMode = useUpdateDebugMode();
   const isDebugMode = debugModeData?.enabled ?? false;
+  const updateSkipPinned = useUpdateSkipPinnedVideos();
+
+  const savePinnedSettings = async () => {
+    if (showPinnedSettings === null) return;
+    try {
+      await updateSkipPinned.mutateAsync({
+        userId: showPinnedSettings,
+        skipPinnedVideos: pinnedSettings,
+      });
+      addToast('置顶视频设置已保存', 'success');
+      setShowPinnedSettings(null);
+    } catch (e: any) {
+      addToast(e?.response?.data?.error || '保存置顶视频设置失败', 'error');
+    }
+  };
 
   const accounts: MonitorAccount[] = useMemo(() => {
     if (Array.isArray(accountsData)) return accountsData;
@@ -1480,6 +1498,12 @@ function MonitorTab() {
                           {restoreAllPlatforms.isPending ? '恢复中...' : '恢复所有平台'}
                         </button>
                         <button
+                          onClick={() => setShowPinnedSettings(group.accounts[0]?.id ?? 0)}
+                          className="px-3 py-1.5 text-sm bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                        >
+                          置顶视频设置
+                        </button>
+                        <button
                           onClick={() => setShowClearConfirm(group.accounts[0]?.id ?? 0)}
                           className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
                         >
@@ -2015,6 +2039,7 @@ function MonitorTab() {
 
                               <div className="flex-1 min-w-0">
                                 <h4 className="text-label-lg text-on-surface font-medium line-clamp-2 leading-snug">
+                                  {video.isPinned && <span className="text-yellow-500 mr-1">📌</span>}
                                   {video.description || '无标题视频'}
                                 </h4>
                                 <div className="flex items-center gap-4 mt-2 flex-wrap">
@@ -2153,6 +2178,50 @@ function MonitorTab() {
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* ── 置顶视频设置面板 ── */}
+      {showPinnedSettings !== null && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-2xl">
+            <h3 className="text-lg font-bold mb-4">置顶视频采集设置</h3>
+            <p className="mb-4 text-gray-600">控制是否跳过置顶视频的评论采集</p>
+
+            {['douyin', 'kuaishou', 'xiaohongshu', 'tencent'].map(platform => (
+              <div key={platform} className="flex items-center justify-between mb-3">
+                <span>{PLATFORM_LABELS[platform] || platform}</span>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={pinnedSettings[platform] !== false}
+                    onChange={(e) => setPinnedSettings(prev => ({
+                      ...prev,
+                      [platform]: e.target.checked,
+                    }))}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-sm">跳过置顶</span>
+                </label>
+              </div>
+            ))}
+
+            <div className="flex gap-4 mt-4">
+              <button
+                onClick={() => savePinnedSettings()}
+                disabled={updateSkipPinned.isPending}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors flex-1"
+              >
+                {updateSkipPinned.isPending ? '保存中...' : '保存设置'}
+              </button>
+              <button
+                onClick={() => setShowPinnedSettings(null)}
+                className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors flex-1"
+              >
+                取消
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
