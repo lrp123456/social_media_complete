@@ -11,6 +11,7 @@ import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
 import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
 import { enqueueReply, enqueueMonitor, getAllJobs, findJobByTaskId, getWindowQueue, getAllWindowQueues } from '../services/unifiedQueue';
+import { getMonitorAccountCommentStats } from './monitorAccountStats';
 
 const router = Router();
 const logger = createLogger('routes:matrix');
@@ -659,9 +660,8 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
     // For each user, get total comment count (sum of video.commentCount) and new comment count
     const enriched = await Promise.all(
       users.map(async (user) => {
-        const [totalComments, newComments, lastMonitorTime] = await Promise.all([
-          prisma.comment.count({ where: { video: { userId: user.id } } }),
-          prisma.comment.count({ where: { video: { userId: user.id }, isNew: 1 } }),
+        const [commentStats, lastMonitorTime] = await Promise.all([
+          getMonitorAccountCommentStats(prisma, user.id),
           prisma.monitorStatus.findFirst({
             where: { accountId: String(user.id), platform: user.platform },
             select: { lastCheckTime: true },
@@ -683,8 +683,8 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
           status: user.status,
           monitoringEnabled: user.monitoringEnabled,
           videoCount: user._count.videos,
-          totalComments,
-          newComments,
+          totalComments: commentStats.totalComments,
+          newComments: commentStats.newComments,
           lastCheckTime: lastMonitorTime?.lastCheckTime || null,
           cooldownUntil: user.cooldownUntil ? Number(user.cooldownUntil) : 0,
           createdAt: user.createdAt,
