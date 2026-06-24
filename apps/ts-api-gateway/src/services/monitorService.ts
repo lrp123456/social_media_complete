@@ -1000,8 +1000,8 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   const isSimpleMode = crawlConfig.mode === 'simple';
   const maxRootComments = crawlConfig.maxRootComments;
 
-  // 注册 API 拦截器
-  await dy.registerListener(page, ['/work_list', '/item/list', '/comment/list/select']);
+  // 注册 API 拦截器（item_list 已屏蔽，只用 work_list）
+  await dy.registerListener(page, ['/work_list', '/comment/list/select']);
 
   const currentUrl = page.url();
   if (!currentUrl.includes('creator.douyin.com')) {
