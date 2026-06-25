@@ -23,7 +23,7 @@ describe('taskExecutionRecorder', () => {
 
   const mockTask: ReplyTaskData = {
     taskType: 'reply', taskId: 'task-123', userId: 1, platform: 'douyin',
-    windowId: 'win-1', fingerprintWindowId: 'fp-1',
+    windowId: 'win-1', windowExternalId: 'fp-1',
     replyData: { videoId: 'v1', commentCid: 'c1', text: 'hi' },
   };
   const mockJob = { updateProgress: jest.fn() };

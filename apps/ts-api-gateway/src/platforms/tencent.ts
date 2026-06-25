@@ -56,7 +56,7 @@ export class TencentPublisher extends BasePublisher {
     if (accountId) {
       try {
         const { botManager } = await import('../services/wechatBotService');
-        const user = await prisma.user.findUnique({
+        const user = await prisma.platformAccount.findUnique({
           where: { id: Number(accountId) },
           select: { wechatUserid: true },
         });

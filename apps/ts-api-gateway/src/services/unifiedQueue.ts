@@ -22,7 +22,7 @@ export interface MonitorTaskData {
   userId: number;
   platform: PlatformName;
   windowId: string;
-  fingerprintWindowId: string;
+  windowExternalId: string;
 }
 
 export interface PublishTaskData {
@@ -39,7 +39,7 @@ export interface ReplyTaskData {
   userId: number;
   platform: PlatformName;
   windowId: string;
-  fingerprintWindowId: string;
+  windowExternalId: string;
   replyData: { videoId: string; commentCid: string; text: string };
 }
 
@@ -501,7 +501,7 @@ export async function enqueueMonitor(task: {
   userId: number;
   platform: PlatformName;
   windowId: string;
-  fingerprintWindowId: string;
+  windowExternalId: string;
 }, options?: { jobId?: string }): Promise<Job> {
   const q = await getWindowQueue(task.windowId);
   return q.add('monitor', {
@@ -536,7 +536,7 @@ export async function enqueueReply(task: {
   userId: number;
   platform: PlatformName;
   windowId: string;
-  fingerprintWindowId: string;
+  windowExternalId: string;
   replyData: { videoId: string; commentCid: string; text: string };
 }): Promise<Job> {
   const q = await getWindowQueue(task.windowId);

@@ -448,7 +448,7 @@ export type MonitorAccount = {
   id: number;
   platform: string;
   platformName: string;
-  fingerprintWindowId: string;
+  windowId: string;
   windowName: string;
   operatorId: number | null;
   operatorName: string;
@@ -486,7 +486,7 @@ export type MonitorAccountDetail = {
   id: number;
   platform: string;
   platformName: string;
-  fingerprintWindowId: string;
+  windowId: string;
   status: string;
   monitoringEnabled: boolean;
   cooldownUntil: number;

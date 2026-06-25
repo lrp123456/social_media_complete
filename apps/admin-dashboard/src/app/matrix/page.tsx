@@ -895,16 +895,16 @@ function MonitorTab() {
     return accounts.filter((a) => a.platform === platformFilter);
   }, [accounts, platformFilter]);
 
-  // 按用户分组（按 operatorId 或 fingerprintWindowId）
+  // 按用户分组（按 operatorId 或 windowId）
   const groupedByUser = useMemo(() => {
     const groups = new Map<string, { operatorName: string; windowId: string; windowName: string; wechatUserId: string; accounts: MonitorAccount[] }>();
     for (const account of filteredAccounts) {
-      const groupKey = account.operatorId ? `op_${account.operatorId}` : `win_${account.fingerprintWindowId}`;
+      const groupKey = account.operatorId ? `op_${account.operatorId}` : `win_${account.windowId}`;
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
           operatorName: account.operatorName || '未知用户',
-          windowId: account.fingerprintWindowId,
-          windowName: account.windowName || account.fingerprintWindowId,
+          windowId: account.windowId,
+          windowName: account.windowName || account.windowId,
           wechatUserId: account.wechatUserId,
           accounts: [],
         });
@@ -938,7 +938,7 @@ function MonitorTab() {
     // 按 (windowId, platform) 分组
     const groups = new Map<string, MonitorAccount[]>();
     for (const a of accounts) {
-      const k = `${a.fingerprintWindowId}_${a.platform}`;
+      const k = `${a.windowId}_${a.platform}`;
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k)!.push(a);
     }
@@ -1595,7 +1595,7 @@ function MonitorTab() {
                                   <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
                                     <span className="text-[10px] text-indigo-400">⏱</span>
                                     <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
-                                      {countdownMap.get(`${account.fingerprintWindowId}_${account.platform}`) || '--'}
+                                      {countdownMap.get(`${account.windowId}_${account.platform}`) || '--'}
                                     </span>
                                   </div>
                                 )}
@@ -1884,7 +1884,7 @@ function MonitorTab() {
                             <h2 className="text-title-lg text-on-surface font-bold">{detail.platformName}</h2>
                             <div className="flex items-center gap-3 mt-1">
                               <span className="text-label-sm text-on-surface-variant font-mono">
-                                {detail.fingerprintWindowId}
+                                {detail.windowId}
                               </span>
                               {isActive && (
                                 <span className="flex items-center gap-1.5">
