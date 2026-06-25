@@ -2,8 +2,10 @@
 // Prisma 数据库服务 — 封装视频评论监控需要的所有 DB 操作
 // 供 crawler / scheduler 模块调用
 
+import type { PlatformName } from '@social-media/shared-config';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { normalizeVideoId } from './videoIdUtils';
 
 const logger = createLogger('monitor-db');
 
@@ -29,6 +31,7 @@ export function getVideosByUserId(userId: number) {
  */
 export async function upsertVideosBatch(
   userId: number,
+  platform: PlatformName,
   videos: Array<{
     aweme_id: string;
     description: string;
@@ -42,14 +45,14 @@ export async function upsertVideosBatch(
   await prisma.$transaction(
     videos.map((v) =>
       prisma.video.upsert({
-        where: { id: v.aweme_id },
+        where: { id: normalizeVideoId(platform as any, v.aweme_id) },
         update: {
           description: v.description,
           // 不更新 commentCount — 仅在 Phase3 成功后更新
           metrics: JSON.stringify(v.metrics || {}),
         },
         create: {
-          id: v.aweme_id,
+          id: normalizeVideoId(platform as any, v.aweme_id),
           userId,
           description: v.description,
           createTime: BigInt(v.create_time),
@@ -183,6 +186,7 @@ export async function truncateVideosByUser(userId: number, maxVideos: number): P
  */
 export async function reconcileVideosForUser(
   userId: number,
+  platform: PlatformName,
   visibleVideos: Array<{
     aweme_id: string;
     description: string;
@@ -209,7 +213,7 @@ export async function reconcileVideosForUser(
   const dbIds = new Set(dbVideos.map((v) => v.id));
 
   // 2) 保护机制：源为空且 DB 有数据 → 跳过删除
-  const sourceIds = new Set(visibleVideos.slice(0, maxVideos).map((v) => v.aweme_id));
+  const sourceIds = new Set(visibleVideos.slice(0, maxVideos).map((v) => normalizeVideoId(platform as any, v.aweme_id)));
   if (sourceIds.size === 0 && dbIds.size > 0) {
     logger.warn(
       { userId, dbCount: dbIds.size },
@@ -239,7 +243,7 @@ export async function reconcileVideosForUser(
     await prisma.$transaction(
       upsertVideos.map((v) =>
         prisma.video.upsert({
-          where: { id: v.aweme_id },
+          where: { id: normalizeVideoId(platform as any, v.aweme_id) },
           update: {
             description: v.description,
             metrics: JSON.stringify(v.metrics || {}),
@@ -247,7 +251,7 @@ export async function reconcileVideosForUser(
             isPinned: v.isPinned ?? false,
           },
           create: {
-            id: v.aweme_id,
+            id: normalizeVideoId(platform as any, v.aweme_id),
             userId,
             description: v.description,
             createTime: BigInt(v.create_time),
@@ -261,8 +265,8 @@ export async function reconcileVideosForUser(
 
     // 标记新增/不变
     for (const v of upsertVideos) {
-      if (!dbIds.has(v.aweme_id)) {
-        newVideoIds.push(v.aweme_id);
+      if (!dbIds.has(normalizeVideoId(platform as any, v.aweme_id))) {
+        newVideoIds.push(normalizeVideoId(platform as any, v.aweme_id));
       } else {
         unchangedCount++;
       }
@@ -322,7 +326,7 @@ export async function upsertLightModeComment(
  * 设置用户冷却时间
  */
 export async function setUserCooldown(userId: number, cooldownUntil: number): Promise<void> {
-  await prisma.user.update({
+  await prisma.platformAccount.update({
     where: { id: userId },
     data: {
       cooldownUntil: BigInt(cooldownUntil),
@@ -334,7 +338,7 @@ export async function setUserCooldown(userId: number, cooldownUntil: number): Pr
  * 更新用户状态
  */
 export async function updateUserStatus(userId: number, status: string): Promise<void> {
-  await prisma.user.update({
+  await prisma.platformAccount.update({
     where: { id: userId },
     data: { status },
   });
@@ -344,7 +348,7 @@ export async function updateUserStatus(userId: number, status: string): Promise<
  * 更新用户连续无更新次数
  */
 export async function updateConsecutiveNoUpdate(userId: number, count: number): Promise<void> {
-  await prisma.user.update({
+  await prisma.platformAccount.update({
     where: { id: userId },
     data: { consecutiveNoUpdate: count },
   });
@@ -354,7 +358,7 @@ export async function updateConsecutiveNoUpdate(userId: number, count: number): 
  * 判断用户是否被屏蔽
  */
 export async function isUserBlocked(userId: number): Promise<boolean> {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.platformAccount.findUnique({
     where: { id: userId },
     select: { status: true },
   });
@@ -365,7 +369,7 @@ export async function isUserBlocked(userId: number): Promise<boolean> {
  * 判断用户是否在冷却期内
  */
 export async function isUserInCooldown(userId: number): Promise<boolean> {
-  const user = await prisma.user.findUnique({
+  const user = await prisma.platformAccount.findUnique({
     where: { id: userId },
     select: { cooldownUntil: true },
   });
@@ -383,7 +387,7 @@ export async function getAllActiveUsers() {
 
   // 恢复过期的 risk_control 状态
   const riskControlThreshold = new Date(Date.now() - RISK_CONTROL_COOLDOWN_MS);
-  const staleRiskControl = await prisma.user.findMany({
+  const staleRiskControl = await prisma.platformAccount.findMany({
     where: {
       status: 'risk_control',
       monitoringEnabled: true,
@@ -394,7 +398,7 @@ export async function getAllActiveUsers() {
   if (staleRiskControl.length > 0) {
     const ids = staleRiskControl.map(u => u.id);
     logger.info({ ids, platforms: staleRiskControl.map(u => u.platform) }, '[MonitorDB] 自动恢复 risk_control 状态');
-    await prisma.user.updateMany({
+    await prisma.platformAccount.updateMany({
       where: { id: { in: ids } },
       data: { status: 'active' },
     });
@@ -402,23 +406,23 @@ export async function getAllActiveUsers() {
 
   // ★ 过期 login_required/login_probe 用户触发 probe（数据库驱动恢复）
   const staleThreshold = new Date(Date.now() - 30 * 60 * 1000);
-  const staleLoginRequired = await prisma.user.findMany({
+  const staleLoginRequired = await prisma.platformAccount.findMany({
     where: {
       status: { in: ['login_required', 'login_probe'] },
       monitoringEnabled: true,
       updatedAt: { lt: staleThreshold },
     },
-    select: { id: true, platform: true, fingerprintWindowId: true },
+    select: { id: true, platform: true, windowId: true },
   });
   if (staleLoginRequired.length > 0) {
     for (const user of staleLoginRequired) {
       const { triggerLoginProbe } = await import('../services/monitorService');
-      triggerLoginProbe(user.id, user.platform, String(user.fingerprintWindowId)).catch(() => {});
+      triggerLoginProbe(user.id, user.platform, String(user.windowId)).catch(() => {});
     }
   }
-  // 不再执行 prisma.user.updateMany 自动恢复为 init
+  // 不再执行 prisma.platformAccount.updateMany 自动恢复为 init
 
-  const users = await prisma.user.findMany({
+  const users = await prisma.platformAccount.findMany({
     where: {
       status: { notIn: ['blocked', 'login_required', 'risk_control', 'login_probe'] },
       monitoringEnabled: true,
@@ -428,7 +432,7 @@ export async function getAllActiveUsers() {
   if (users.length === 0) return [];
 
   // 过滤：只保留 BrowserWindow 仍存在的用户（窗口解绑/删除后不再监控）
-  const windowExternalIds = [...new Set(users.map(u => u.fingerprintWindowId))];
+  const windowExternalIds = [...new Set(users.map(u => u.windowId))];
   const activeWindows = await prisma.browserWindow.findMany({
     where: {
       externalId: { in: windowExternalIds },
@@ -438,14 +442,14 @@ export async function getAllActiveUsers() {
   });
   const activeIds = new Set(activeWindows.map((w: any) => w.externalId));
 
-  return users.filter(u => activeIds.has(u.fingerprintWindowId));
+  return users.filter(u => activeIds.has(u.windowId));
 }
 
 /**
  * 根据 ID 获取用户
  */
 export function getUserById(userId: number) {
-  return prisma.user.findUnique({ where: { id: userId } });
+  return prisma.platformAccount.findUnique({ where: { id: userId } });
 }
 
 // ============================================================
@@ -914,7 +918,7 @@ export async function syncPlatformAuthorId(
 
   const newAuthorIdStr = String(newAuthorId);
 
-  const user = await prisma.user.findUnique({
+  const user = await prisma.platformAccount.findUnique({
     where: { id: userId },
     select: { platformAuthorId: true, platform: true },
   });
@@ -923,7 +927,7 @@ export async function syncPlatformAuthorId(
   const currentId = user.platformAuthorId ?? null;
 
   if (currentId === null) {
-    await prisma.user.update({
+    await prisma.platformAccount.update({
       where: { id: userId },
       data: {
         platformAuthorId: newAuthorIdStr,
@@ -938,7 +942,7 @@ export async function syncPlatformAuthorId(
   }
 
   if (currentId !== newAuthorIdStr) {
-    await prisma.user.update({
+    await prisma.platformAccount.update({
       where: { id: userId },
       data: {
         platformAuthorId: newAuthorIdStr,
