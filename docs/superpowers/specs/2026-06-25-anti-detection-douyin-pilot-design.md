@@ -82,7 +82,7 @@ Patchright Page            CDP Session（WeakMap 长连接，铁律 4）
 | 5 边界唯一性 | 抖音所有操作经 HumanActions（含任何穿透逻辑），所有请求可被 Interceptor 观测 |
 
 **范围边界（抖音试点）：**
-- **改**：`douyinCrawler.ts`（43 evaluate + locator/click/fill/keyboard）、`platforms/douyin.ts`（发布 DOM 轮询→拦截器）、`loginFlowHelpers.ts` 抖音登录流程。
+- **改**：`douyinCrawler.ts`（43 evaluate + locator/click/fill/keyboard）、`platforms/douyin.ts`（发布 DOM 轮询→拦截器）、`loginFlowHelpers.ts` 抖音登录流程、`LoginTabRegistry` 中抖音相关的直接 page 操作（需审计收口）。
 - **锁定契约**：`HumanActions` 终态公开 API、`safeEvaluate` 签名、`RequestInterceptor` 抖音用方法（`waitForResponse`/`collectResponses`/`pollStatus`）。
 - **不改**：其余 4 平台代码、调度/队列逻辑、数据库（纯浏览器层重构）。
 - **不在试点**：`browserApiService.ts` 裸 CDP WebSocket 收口、Interceptor 全局注册化——属跨平台基础设施，列入第 5 批 rollout，不塞进单平台试点。
@@ -119,15 +119,44 @@ Patchright Page            CDP Session（WeakMap 长连接，铁律 4）
 ```typescript
 static async safeEvaluate(
   page: Page,
-  fn: () => unknown,           // 必须无参闭包，禁止访问外层 humanActions 变量
-  opts?: { world?: 'isolated' | 'main'; reason: string }  // reason 强制，便于审计
+  fn: string | ((...args: any[]) => unknown),  // 函数或函数字符串
+  opts?: {
+    world?: 'isolated' | 'main';
+    reason: string;                              // reason 强制，便于审计
+    args?: any[];                                // 序列化参数，通过 CDP arguments 传入
+  }
 ): Promise<unknown>
 ```
 
+**实现路径（CDP Runtime.evaluate）**：
+
+Patchright 的 `page.evaluate()` 不支持 `world` 参数。`safeEvaluate` 必须通过 CDP `Runtime.evaluate` 实现：
+
+1. **隔离世界 contextId 预创建**：在 `HumanActions` 初始化时（首次获取 CDP session 后），调用 `Page.createIsolatedWorld()` 创建隔离世界并缓存 `contextId`（WeakMap 按 page 缓存）。后续所有 `safeEvaluate(world:'isolated')` 复用此 contextId，避免每次 CDP 往返（~100-200ms）。
+2. **函数序列化**：`fn` 为函数时，`fn.toString()` 序列化为字符串；`fn` 为字符串时直接使用。CDP `Runtime.evaluate({ expression, contextId, returnByValue: true })` 执行。
+3. **参数传递**：`opts.args` 通过 CDP `Runtime.evaluate` 的 `arguments` 机制传入（将 args JSON 序列化后拼接到 expression 前缀），**替代"禁止闭包捕获"约束**。
+
+```typescript
+// safeEvaluate 内部实现伪代码
+static async safeEvaluate(page, fn, opts) {
+  const ctx = await this.getCDPContext(page);
+  const contextId = await this.getIsolatedWorldId(page, ctx);  // 预创建+缓存
+  const fnStr = typeof fn === 'string' ? fn : fn.toString();
+  const argsStr = opts.args ? JSON.stringify(opts.args) : '[]';
+  const expression = `(function() { return (${fnStr}).apply(null, ${argsStr}); })()`;
+  const result = await ctx.cdp.send('Runtime.evaluate', {
+    expression,
+    contextId: opts.world === 'main' ? undefined : contextId,
+    returnByValue: true,
+  });
+  return result.result.value;
+}
+```
+
 - **默认 `world: 'isolated'`**：CDP `Runtime.evaluate` 在隔离世界执行，函数源码不进主世界，风控在主世界看不到注入函数源码、抓不到调用栈。
-- **`world: 'main'`**：仅当必须访问页面 JS 上下文（如读 `window.xxx`）时，需在调用处注释说明为何无法用 DOM 域替代，且 reason 标记 `main-world-required`。
-- **`reason` 强制**：每次调用记录原因，运行时埋点统计 main-world 使用率（写入 `TaskExecutionStep.extra.antiDetection`）。
-- **禁止闭包捕获**：`fn` 不能引用外层变量（隔离世界无法访问），参数经序列化传入。
+- **`world: 'main'`**：仅当必须访问页面 JS 上下文（如读 `window.xxx`）时，需在调用处注释说明为何无法用 DOM 域替代，且 reason 标记 `main-world-required`。**ESLint 限制**：单文件 `world:'main'` 调用不超过 3 处，超出则 CI 失败。
+- **`reason` 强制**：每次调用记录原因，运行时埋点统计 main-world 使用率（写入 `TaskExecutionStep.extra.antiDetection.safeEvaluateReason`）。
+- **参数序列化**：`opts.args` 必须是可 JSON 序列化的值（string/number/boolean/object/array），不可传函数或 DOM 引用。TypeScript 类型系统约束参数类型，运行时 `JSON.stringify` 校验。
 
 ### 4.4 物理类（CDP，铁律 2）
 
@@ -136,6 +165,48 @@ static async safeEvaluate(
 ### 4.5 不再公开的旧入口（对抖音禁用）
 
 抖音试点期间，`HumanActions` 旧 CDP 中心方法（`cdpFindElement` 等）暂保留供其他平台用，但抖音业务代码**不得直接调用**——抖音一律走 4.1-4.3 的新 API。最终全平台收口后再统一删除旧方法。
+
+### 4.6 HumanActions 迁移路径（过渡方案）
+
+当前 `HumanActions`（1715 行）是深度 CDP 中心的（`cdpClick`/`cdpFindElement`/`cdpIsElementVisible`/`cdpSmartScroll` 等）。从 CDP 中心到原生优先的迁移**不是一步到位**，而是四阶段过渡：
+
+| 阶段 | 动作 | 影响 |
+|------|------|------|
+| ① 新增原生 API | 添加 `readText`/`readAttribute`/`readAll`/`exists`/`click`/`fill`/`press`/`safeEvaluate` | 纯增量，不破坏现有代码 |
+| ② 标记旧方法 `@deprecated` | `cdpClick`/`cdpFindElement`/`cdpIsElementVisible` 等标记废弃 | 编译器警告，不阻断 |
+| ③ 抖音试点只用新 API | 抖音范围文件禁止调用旧 CDP 方法（静态守卫） | 其他平台不受影响 |
+| ④ 全平台后删除旧方法 | 所有平台迁移完成后，删除 `@deprecated` 方法 | 最终清理 |
+
+**关键约束**：阶段 ①② 可并行开发（新增方法是幂等扩展），阶段 ③ 依赖 ① 完成，阶段 ④ 依赖所有平台完成。
+
+### 4.7 CDP 辅助方法迁移分类
+
+当前抖音业务代码大量使用以下 CDP 辅助方法，需按类别处理：
+
+| 方法 | 类别 | 处理方式 | 替代方案 |
+|------|------|----------|----------|
+| `cdpClickByText` | 交互 | **提供原生替代** | `click(page, getByText(text))` — 原生 Locator + 拟人化前置 |
+| `cdpFindElement` | 查找 | **提供原生替代** | `exists(page, locator)` + 原生 Locator 定位 |
+| `cdpIsElementVisible` | 读取 | **提供原生替代** | `exists(page, locator)` + DOM 域 `getBoxModel` |
+| `queryElementsWithInfo` | 批量读取 | **提供原生替代** | `readAll(page, selectors, {text,attr})` |
+| `cdpSmartScroll` | 物理滚动 | **保留**（铁律 2） | 仅物理惯性场景使用 |
+| `cdpKeyboard` | 键盘扫描码 | **保留**（铁律 2） | 仅扫描码场景使用 |
+| `humanMove` | 贝塞尔移动 | **保留** | 空闲移动场景使用 |
+| `cdpPierceShadow` | 穿透 | **保留+扩展**（腾讯批次） | wujie ShadowDOM 穿透专用 |
+
+**抖音试点规则**：抖音业务代码只用"提供原生替代"列的新 API 和"保留"列的内部方法，不得直接调用"提供原生替代"列的旧 CDP 方法。
+
+### 4.8 HumanActions 新 API 的 fallback 策略
+
+`readText`/`readAttribute`/`exists` 等原生 Locator 方法，当元素不可访问（ShadowDOM 包裹、动态创建、DOM 脏状态）时的处理：
+
+| 场景 | 策略 |
+|------|------|
+| 元素不存在（`locator.count() === 0`） | 返回 `null`（`readText`/`readAttribute`）或 `false`（`exists`），不抛错 |
+| 元素存在但不可交互（被遮挡/动画中） | `click`/`fill` 等待可交互状态（`locator.waitFor({ state: 'visible' })`），超时后抛错 |
+| 原生 Locator 完全找不到（ShadowDOM 边界） | **不自动 fallback 到 CDP**——业务层决定是否改用 `safeEvaluate`（需提供 reason）。避免隐式 CDP 降级绕过审计 |
+
+**关键边界**：原生 Locator 失败时不静默降级到 CDP，而是显式上报，由业务层审计决定。
 
 ---
 
@@ -174,6 +245,7 @@ static async safeEvaluate(
 
 - `waitForResponse` 超时未拦截到响应 → 不直接判失败，回退 DOM 兜底判定（保留现有 toast 逻辑为 fallback），记录埋点 `interceptor-fallback-to-dom`。
 - 网络监听注册失败 → 降级 DOM 轮询，不阻断流程。
+- **拦截器可靠性采样**：每 100 次 `waitForResponse` 调用，强制执行 1 次**无兜底模式**（sampling 1%），专门验证拦截器自身的可靠性。埋点中增加 `interceptorOnlySuccess` 指标。若采样失败率 > 10%，触发告警。
 
 **关键边界**：发布结果判定主用拦截器、DOM 兜底，而非完全弃用 DOM——风控拦截 API 响应时仍有出路，且埋点能暴露"拦截器命中率"。
 
@@ -267,7 +339,7 @@ extra: {
 
 新增 ESLint 自定义规则或 grep 脚本，禁止抖音范围文件出现裸调用：
 - **抖音范围文件**：`apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`、`apps/ts-api-gateway/src/crawlers/douyin*.ts`、`apps/ts-api-gateway/src/platforms/douyin.ts`、`apps/ts-api-gateway/src/services/loginFlowHelpers.ts`（抖音相关部分）。
-- **禁用模式**：`page.evaluate(`、`frame.evaluate(`、`page.locator(`、`page.$(`、`page.keyboard.`、`createCDPSession`、`page.click`、`.fill(`、`page.mouse`。
+- **禁用模式**：`page.evaluate(`、`frame.evaluate(`、`page.$eval(`、`page.$$eval(`、`page.evaluateHandle(`、`page.locator(`、`page.$(`、`page.keyboard.`、`createCDPSession`、`page.click`、`.fill(`、`page.mouse`、`page.waitForSelector(`、`page.waitForFunction(`。
 - 作为 CI 检查项，保证"静态零直接调用"判据可自动化验证。运行时 `rawPageCallAttempted` 是双保险。
 
 ---
@@ -291,6 +363,7 @@ extra: {
 - **设计文档可并行**：腾讯/快手/小红书 spec 可同时写（只读探索，互不干扰）。
 - **编码不可并行改核心类**：`humanActions.ts`/`interceptor.ts` 是共享单文件，多平台同时改必冲突。编码顺序严格按 8.1 批次串行，每批完成后核心类契约已稳定，下一批只加平台特有方法。
 - **铁律 5 的穿透封装**：腾讯批次的 `cdpPierceShadow` 方法加入 HumanActions 后，快手/小红书若需穿透复用，不得再自造。
+- **平台扩展机制**：当多个平台都需要独特的穿透逻辑时，HumanActions 应支持平台扩展模式（如 `HumanActions.registerPlatformPierce(platform, method)` 或插件模式），避免所有穿透硬编码进核心类导致膨胀。抖音试点不实现此机制，但腾讯批次 spec 应包含设计。
 
 ### 8.3 与监控系统的衔接
 
@@ -316,10 +389,48 @@ extra: {
 4. **静态守卫误报**：若某处确需裸调用（极少数基础设施场景），需在守卫配置中显式白名单 + 注释说明，不得全局关闭。
 5. **行为不回归**：拟人化前置的停顿范围必须与改造前一致（6.4 第 4 条），改造前后对同一流程的时序保持一致，避免引入新指纹。
 6. **抖音试点不破坏其他平台**：旧 CDP 中心方法（`cdpFindElement` 等）保留供其他平台用，仅对抖音禁用（4.5），不删旧方法。
+7. **回滚策略（双路径共存）**：新增环境变量 `ANTI_DETECTION_MODE=legacy|v2`：
+   - `legacy`（默认）：抖音业务代码走旧 CDP 路径（现有行为）
+   - `v2`：抖音业务代码走新原生 Locator + safeEvaluate 路径
+   - 试点期双路径共存至少 2 周，通过运行时埋点对比风控触发率、拦截器命中率
+   - 回滚只需将环境变量改回 `legacy`，无需代码回滚
+   - 全量切换 `v2` 的判定标准：连续 7 天 `v2` 模式风控触发率不高于 `legacy`
 
 ---
 
 ## 10. 测试与验证
+
+### 10.0 前置验证（Phase 0，阻塞项）
+
+在开始改造前，必须完成以下前置验证：
+
+**Patchright 原生 Locator 反检测盲测**：
+
+spec 假定"原生 Locator 由 Patchright 内部注入框架代码（已做反检测处理）"——此假设需实际验证。盲测方案：
+
+| 维度 | 方案 |
+|------|------|
+| 测试对象 | 同一批 10 个抖音视频，各跑 50 次监控采集 |
+| A 组（对照） | 旧 CDP 路径（现有 `cdpClick`/`page.evaluate`） |
+| B 组（实验） | 新原生 Locator 路径（`locator.click()`/`locator.textContent()`） |
+| 对比指标 | `risk_control`/`login_required` 状态出现频率、验证码触发率、采集成功率 |
+| 判定标准 | B 组风控触发率不高于 A 组 5% → 通过；超出 → 需评估 Patchright 注入是否被 webmssdk 检测 |
+
+盲测在独立测试环境执行，不改动生产代码。**盲测未通过前不得开始大规模改造**。
+
+**CDP 隔离世界 POC**：
+
+验证 `Page.createIsolatedWorld()` + `Runtime.evaluate({ contextId })` 在 Patchright 中的可行性：
+- 隔离世界 contextId 能否正确创建和缓存
+- 隔离世界中执行的函数是否在主世界不可见（`window` 对象无污染）
+- 性能开销（首次创建 vs 缓存命中）
+
+**静态审计补全**：
+
+扩展盲区计数，覆盖 spec 遗漏的变体：
+- `page.evaluateHandle(`、`page.$eval(`、`page.$$eval(`、`frame.$eval(`
+- `page.waitForSelector(`、`page.waitForFunction(`
+- `HumanActions.cdpClickByText(`、`HumanActions.queryElementsWithInfo(`（CDP 辅助方法）
 
 ### 10.1 单元测试
 
@@ -352,11 +463,13 @@ extra: {
 
 ## 11. 成功标准
 
-1. **静态零直接调用**：抖音范围文件 `page.evaluate`/`frame.evaluate`/`page.locator`/`page.$`/`page.keyboard`/`createCDPSession`/`page.click`/`.fill`/`page.mouse` 直接调用数 = 0（grep 可验证，CI 守卫）。
+1. **静态零直接调用**：抖音范围文件 `page.evaluate`/`frame.evaluate`/`page.$eval`/`page.$$eval`/`page.evaluateHandle`/`page.locator`/`page.$`/`page.keyboard`/`createCDPSession`/`page.click`/`.fill`/`page.mouse`/`page.waitForSelector`/`page.waitForFunction` 直接调用数 = 0（grep 可验证，CI 守卫）。
 2. **运行时指标埋点**：`TaskExecutionStep.extra.antiDetection` 写入，`actionPath` native/dom 占绝大多数，`cdpSessionCreated`≈1/page，`safeEvaluate-main` 趋近 0，`interceptor-hit` 高。
 3. **功能不回归**：抖音三功能（发布/监控/回复）端到端走通，现有 + 新增单测全绿。
 4. **契约锁定**：`HumanActions` 终态 API（readText/readAttribute/readAll/exists/click/fill/press/safeEvaluate）、`safeEvaluate` 签名、`RequestInterceptor` 三方法（waitForResponse/collectResponses/pollStatus）定义完成，供后续 4 平台 rollout 复用。
 5. **5 条铁律落地**：抖音范围内铁律 1-5 全部可验证满足。
+6. **前置盲测通过**：Patchright 原生 Locator 反检测盲测结果——B 组风控触发率不高于 A 组 5%。
+7. **双路径共存**：`ANTI_DETECTION_MODE=legacy|v2` 环境变量可切换，回滚无需代码变更。
 
 ---
 
