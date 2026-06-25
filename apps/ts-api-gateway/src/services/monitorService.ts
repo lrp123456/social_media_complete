@@ -155,7 +155,7 @@ export async function sendMonitorNotification(
       return;
     }
 
-    const user = await prisma.user.findFirst({
+    const user = await prisma.platformAccount.findFirst({
       where: { id: userId },
       select: { wechatUserid: true },
     }).catch(() => null);
@@ -366,7 +366,6 @@ interface MonitorTask {
   userId: number;
   platform: PlatformName;
   windowId: string;
-  fingerprintWindowId: string;
 }
 
 // ============================================================
@@ -415,9 +414,9 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
  */
 async function sendLoginQR(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
   try {
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: userId },
-      select: { wechatUserid: true, fingerprintWindowId: true },
+      select: { wechatUserid: true, windowId: true },
     });
     if (!user?.wechatUserid) {
       logger.warn({ userId }, `[${platform}] 用户无 wechatUserid，无法发送登录二维码`);
@@ -427,9 +426,9 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
     const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
     const config = getLoginFlowConfig(platform, flowId);
 
-    if (!config || !user.fingerprintWindowId) {
+    if (!config || !user.windowId) {
       // 无配置或无 windowId → 使用当前页面截图
-      logger.info({ userId, platform }, `[${platform}] 无 loginFlow 配置或 fingerprintWindowId，使用 fallback`);
+      logger.info({ userId, platform }, `[${platform}] 无 loginFlow 配置或 windowId，使用 fallback`);
       await captureAndSendQR(page, userId, platform, user.wechatUserid);
       return;
     }
@@ -449,7 +448,7 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
       logger.warn({ userId, platform }, `[${platform}] 当前页面 captureQR 失败，尝试 openLoginTab`);
     }
 
-    const windowId = String(user.fingerprintWindowId);
+    const windowId = String(user.windowId);
     const { ensureLoginTab } = await import('./loginFlowHelpers');
     const record = await ensureLoginTab(windowId, userId, platform, flowId);
     if (!record) {
@@ -474,7 +473,7 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
     logger.error({ userId, platform, err: err.message }, `[${platform}] sendLoginQR 异常`);
     // 最终 fallback：当前页面截图
     try {
-      const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
+      const user = await prisma.platformAccount.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
       if (user?.wechatUserid) await captureAndSendQR(page, userId, platform, user.wechatUserid);
     } catch { /* give up */ }
   }
@@ -797,7 +796,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
           const allStates = await getAllFlowStates(userId, platform);
           if (allStates.size === 0) {
             const { prisma } = await import('../lib/prisma');
-            await prisma.user.update({
+            await prisma.platformAccount.update({
               where: { id: userId },
               data: { status: 'active', cooldownUntil: BigInt(0) },
             });
@@ -1026,7 +1025,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
     if (isSecondVerify) {
       logger.info({ userId: task.userId }, '抖音二次验证面板检测到');
       const smsSent = await dy.triggerSmsVerify(page);
-      const user = await prisma.user.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
+      const user = await prisma.platformAccount.findUnique({ where: { id: task.userId }, select: { wechatUserid: true } });
       if (user?.wechatUserid) {
         const { botManager } = await import('./wechatBotService');
         botManager.setPendingVerify(user.wechatUserid, task.userId, 'douyin', task.windowId);
@@ -1052,7 +1051,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   const queue = phase1Result.commentsQueue;
 
   // 读取用户配置
-  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const user = await prisma.platformAccount.findUnique({ where: { id: task.userId } });
   const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
   const skipPinned = skipConfig[task.platform] !== false; // 默认 true
 
@@ -1207,7 +1206,7 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
   const queue = phase1Result.commentsQueue;
 
   // 读取用户配置
-  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const user = await prisma.platformAccount.findUnique({ where: { id: task.userId } });
   const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
   const skipPinned = skipConfig[task.platform] !== false; // 默认 true
 
@@ -1351,7 +1350,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
   const queue = phase1Result.commentsQueue || [];
 
   // 读取用户配置
-  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const user = await prisma.platformAccount.findUnique({ where: { id: task.userId } });
   const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
   const skipPinned = skipConfig[task.platform] !== false; // 默认 true
 
@@ -1574,7 +1573,7 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   const queue = phase1Result.commentsQueue;
 
   // 读取用户配置
-  const user = await prisma.user.findUnique({ where: { id: task.userId } });
+  const user = await prisma.platformAccount.findUnique({ where: { id: task.userId } });
   const skipConfig = (user?.skipPinnedVideos as Record<string, boolean>) || {};
   const skipPinned = skipConfig[task.platform] !== false; // 默认 true
 
@@ -1686,29 +1685,34 @@ interface SchedulerState {
   scheduleAfterCompletion: boolean;
 }
 
-/** key = `${windowId}_${platform}`，每 (窗口, 平台) 独立调度 */
+/** key = `${browserVendor}:${windowExternalId}_${platform}`，每 (窗口, 平台) 独立调度 */
 const schedulerStates = new Map<string, SchedulerState>();
 
-function stateKey(windowId: string, platform: string): string {
-  return `${windowId}_${platform}`;
+function stateKey(browserVendor: string, windowExternalId: string, platform: string): string {
+  return `${browserVendor}:${windowExternalId}_${platform}`;
 }
 
-function getOrCreateSchedulerState(windowId: string, platform: string): SchedulerState {
-  const key = stateKey(windowId, platform);
-  let st = schedulerStates.get(key);
-  if (!st) {
-    st = {
-      timer: null,
-      intervalMs: getRandomIntervalForMode('active', platform),
-      nextRunAt: Date.now() + 10000,  // 新账号初始化 10s 倒计时
-      lastRunAt: 0,
-      mode: 'active',
-      consecutiveNoUpdates: 0,
-      pendingTaskCount: 0,
-      scheduleAfterCompletion: false,
-    };
-    schedulerStates.set(key, st);
+function getOrCreateSchedulerState(windowExternalId: string, platform: string, browserVendor?: string): SchedulerState {
+  const suffix = `${windowExternalId}_${platform}`;
+  // 遍历查找已存在的状态（新 key 格式: `${browserVendor}:${windowExternalId}_${platform}`）
+  for (const [key, st] of schedulerStates.entries()) {
+    if (key.endsWith(suffix)) return st;
   }
+
+  // 不存在则创建
+  const vendor = browserVendor || 'unknown';
+  const key = stateKey(vendor, windowExternalId, platform);
+  const st: SchedulerState = {
+    timer: null,
+    intervalMs: getRandomIntervalForMode('active', platform),
+    nextRunAt: Date.now() + 10000,  // 新账号初始化 10s 倒计时
+    lastRunAt: 0,
+    mode: 'active',
+    consecutiveNoUpdates: 0,
+    pendingTaskCount: 0,
+    scheduleAfterCompletion: false,
+  };
+  schedulerStates.set(key, st);
   return st;
 }
 
@@ -1765,12 +1769,14 @@ export function getAllSchedulerStatuses(): PlatformSchedulerStatus[] {
   const now = Date.now();
   const results: PlatformSchedulerStatus[] = [];
   for (const [key, st] of schedulerStates.entries()) {
-    // key = "windowId_platform"，platform 是最后一节（may contain underscores in windowId）
+    // key = "browserVendor:windowExternalId_platform"
+    const colonIdx = key.indexOf(':');
     const lastUnderscore = key.lastIndexOf('_');
-    const windowId = key.substring(0, lastUnderscore);
+    const browserVendor = key.substring(0, colonIdx);
+    const windowExternalId = key.substring(colonIdx + 1, lastUnderscore);
     const platform = key.substring(lastUnderscore + 1);
     results.push({
-      windowId,
+      windowId: windowExternalId,
       platform,
       intervalMs: st.intervalMs,
       lastRunAt: st.lastRunAt,
@@ -1803,9 +1809,9 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
 
     const users = await db.getAllActiveUsers();
 
-    // 只保留匹配该 (windowId, platform) 的用户
+    // 只保留匹配该 (windowExternalId, platform) 的用户
     const matched = users.filter(
-      (u: any) => u.fingerprintWindowId === windowId && u.platform === platform,
+      (u: any) => u.windowExternalId === windowId && u.platform === platform,
     );
 
     if (matched.length === 0) {
@@ -1842,8 +1848,7 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
         taskId: `mon_${Date.now()}_${u.id}`,
         userId: u.id,
         platform: u.platform as PlatformName,
-        windowId: u.fingerprintWindowId,
-        fingerprintWindowId: u.fingerprintWindowId,
+        windowId: u.windowExternalId,
       });
       queued++;
     }
@@ -2352,12 +2357,14 @@ function startSchedulerWatchdog(): void {
       if (!st.timer) continue;
       // 定时器已过期超过 30 秒，说明 timer 回调丢失
       if (st.nextRunAt > 0 && now > st.nextRunAt + 30_000) {
-        // key = "windowId_platform"，platform 是最后一节（may contain underscores in windowId）
+        // key = "browserVendor:windowExternalId_platform"
+        const colonIdx = key.indexOf(':');
         const lastUnderscore = key.lastIndexOf('_');
-        const windowId = key.substring(0, lastUnderscore);
+        const browserVendor = key.substring(0, colonIdx);
+        const windowExternalId = key.substring(colonIdx + 1, lastUnderscore);
         const platform = key.substring(lastUnderscore + 1);
-        logger.warn({ windowId, platform, nextRunAt: st.nextRunAt, now, deadSeconds: Math.round((now - st.nextRunAt) / 1000) }, '🐕 调度器看门狗：检测到定时器丢失，自动重新调度');
-        scheduleNext(windowId, platform, 5000); // 5 秒后立即重试
+        logger.warn({ windowId: windowExternalId, platform, nextRunAt: st.nextRunAt, now, deadSeconds: Math.round((now - st.nextRunAt) / 1000) }, '🐕 调度器看门狗：检测到定时器丢失，自动重新调度');
+        scheduleNext(windowExternalId, platform, 5000); // 5 秒后立即重试
       }
     }
   }, 30_000);
@@ -2368,23 +2375,36 @@ export function startMonitorScheduler(): void {
   startSchedulerWatchdog();
 
   // 扫描所有活跃用户，为每个 (windowId, platform) 创建独立定时器
-  db.getAllActiveUsers().then((users: any[]) => {
+  db.getAllActiveUsers().then(async (users: any[]) => {
+    // 收集所有 windowExternalId，查询对应的 browserVendor
+    const windowExtIds = [...new Set(users.map((u: any) => u.windowExternalId))];
+    const windows = await prisma.browserWindow.findMany({
+      where: { externalId: { in: windowExtIds } },
+      select: { externalId: true, browserVendor: true },
+    });
+    const vendorMap = new Map<string, string>();
+    for (const w of windows) {
+      vendorMap.set(w.externalId, w.browserVendor);
+    }
+
     const pairs = new Set<string>();
     for (const u of users) {
-      const key = stateKey(u.fingerprintWindowId, u.platform);
+      const windowExtId = u.windowExternalId;
+      const browserVendor = vendorMap.get(windowExtId) || 'unknown';
+      const key = stateKey(browserVendor, windowExtId, u.platform);
       if (pairs.has(key)) continue;
       pairs.add(key);
 
       // 立即创建状态（让 countdown 立即可见）
-      const st = getOrCreateSchedulerState(u.fingerprintWindowId, u.platform);
+      const st = getOrCreateSchedulerState(windowExtId, u.platform, browserVendor);
       // 错开启动：每个 pair 随机延迟 5-30 秒后执行首次 runOneSchedule
       const stagger = 5000 + Math.floor(Math.random() * 25000);
       st.intervalMs = stagger;
       st.nextRunAt = Date.now() + stagger;
       st.timer = setTimeout(() => {
-        runOneSchedule(u.fingerprintWindowId, u.platform);
+        runOneSchedule(windowExtId, u.platform);
       }, stagger);
-      logger.info({ windowId: u.fingerprintWindowId, platform: u.platform, stagger }, '⏰ 调度器注册');
+      logger.info({ windowId: windowExtId, platform: u.platform, stagger }, '⏰ 调度器注册');
     }
     logger.info({ pairs: pairs.size, totalUsers: users.length }, '⏰ 调度器启动完成');
   }).catch((err: Error) => {
