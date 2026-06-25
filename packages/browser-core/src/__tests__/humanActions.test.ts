@@ -91,3 +91,48 @@ describe('HumanActions.fill 逐字延迟', () => {
     expect(locatorMock.press).toHaveBeenCalledTimes(2); // 逐字
   });
 });
+
+describe('HumanActions.safeEvaluate', () => {
+  it('默认隔离世界，序列化参数，调 Runtime.evaluate', async () => {
+    const send = jest.fn().mockImplementation((method: string, params: any) => {
+      if (method === 'Page.getFrameTree') return { frameTree: { frame: { id: 'f1' } } };
+      if (method === 'Page.createIsolatedWorld') return { executionContextId: 42 };
+      if (method === 'Runtime.evaluate') return { result: { value: 'ok' } };
+      return {};
+    });
+    const cdpCtx: any = { cdp: { send }, dom: {}, mouse: {}, scroller: {}, noise: {} };
+    jest.spyOn(HumanActions as any, 'getCDPContext').mockResolvedValue(cdpCtx);
+    const page: any = { context: () => ({ newCDPSession: jest.fn() }) };
+
+    const result = await HumanActions.safeEvaluate(page, (a: number) => a + 1, { reason: 'test', args: [1] });
+
+    expect(result).toBe('ok');
+    const evalCall = send.mock.calls.find((c: any[]) => c[0] === 'Runtime.evaluate');
+    expect(evalCall).toBeDefined();
+    expect(evalCall![1].contextId).toBe(42); // 隔离世界
+    expect(evalCall![1].expression).toContain('a + 1'); // 函数序列化
+    expect(evalCall![1].expression).toContain('[1]'); // 参数序列化
+    jest.restoreAllMocks();
+  });
+
+  it('world main 不传 contextId', async () => {
+    const send = jest.fn().mockImplementation((method: string) => {
+      if (method === 'Runtime.evaluate') return { result: { value: 'main' } };
+      return {};
+    });
+    const cdpCtx: any = { cdp: { send }, dom: {}, mouse: {}, scroller: {}, noise: {} };
+    jest.spyOn(HumanActions as any, 'getCDPContext').mockResolvedValue(cdpCtx);
+    const page: any = { context: () => ({ newCDPSession: jest.fn() }) };
+
+    const result = await HumanActions.safeEvaluate(page, () => 'x', { reason: 'main-world-required', world: 'main' });
+    const evalCall = send.mock.calls.find((c: any[]) => c[0] === 'Runtime.evaluate');
+    expect(evalCall![1].contextId).toBeUndefined();
+    expect(result).toBe('main');
+    jest.restoreAllMocks();
+  });
+
+  it('reason 缺失抛错', async () => {
+    const page: any = { context: () => ({ newCDPSession: jest.fn() }) };
+    await expect(HumanActions.safeEvaluate(page, () => 1, {} as any)).rejects.toThrow(/reason/);
+  });
+});

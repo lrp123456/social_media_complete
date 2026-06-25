@@ -63,6 +63,7 @@ export type FallbackConfig = {
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
+  private static isolatedWorldIds = new WeakMap<Page, number>();
 
   static setTraceCollector(collector: { recordMouseTrace: (point: any) => void } | null): void {
     HumanActions.traceCollector = collector;
@@ -144,6 +145,41 @@ export class HumanActions {
     const locator = page.locator(selector);
     await locator.waitFor({ state: 'visible' });
     await locator.press(key);
+  }
+
+  // ===== 反检测收口：safeEvaluate（方案 C，CDP 隔离世界） =====
+
+  private static async getIsolatedWorldId(page: Page, ctx: any): Promise<number> {
+    let contextId = HumanActions.isolatedWorldIds.get(page);
+    if (contextId !== undefined) return contextId;
+    const frameTree = await ctx.cdp.send('Page.getFrameTree');
+    const iso = await ctx.cdp.send('Page.createIsolatedWorld', {
+      frameId: frameTree.frameTree.frame.id,
+      worldName: 'humanactions_isolated',
+    }) as { executionContextId: number };
+    contextId = iso.executionContextId;
+    HumanActions.isolatedWorldIds.set(page, contextId);
+    return contextId;
+  }
+
+  static async safeEvaluate(
+    page: Page,
+    fn: string | ((...args: any[]) => unknown),
+    opts: { world?: 'isolated' | 'main'; reason: string; args?: any[] },
+  ): Promise<unknown> {
+    if (!opts || !opts.reason) throw new Error('safeEvaluate: reason is required');
+    const ctx = await (HumanActions as any).getCDPContext(page);
+    const contextId = opts.world === 'main' ? undefined : await HumanActions.getIsolatedWorldId(page, ctx);
+    const fnStr = typeof fn === 'string' ? fn : fn.toString();
+    const argsStr = opts.args ? JSON.stringify(opts.args) : '[]';
+    const expression = `(function() { return (${fnStr}).apply(null, ${argsStr}); })()`;
+    const result = await ctx.cdp.send('Runtime.evaluate', {
+      expression,
+      contextId,
+      returnByValue: true,
+    });
+    if (result?.exceptionDetails) throw new Error(`safeEvaluate failed: ${result.exceptionDetails.text}`);
+    return result?.result?.value;
   }
 
   private static async getCDPContext(page: Page): Promise<CDPContext> {
