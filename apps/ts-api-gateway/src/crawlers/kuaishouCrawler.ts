@@ -12,7 +12,7 @@ import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnap
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import type { ReplyTarget } from './replyTypes';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
-import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import { isKuaishouDrawerVideoTextMatch, shouldStopKuaishouDrawerSearch } from './kuaishouDrawerUtils';
 import fs from 'fs';
 import path from 'path';
@@ -1391,6 +1391,15 @@ export class KuaishouCrawler {
 
       if (decision.shouldQueue) {
         const diff = video.comment_count - dbVideo.commentCount;
+        if (decision.reason === 'root_comments_missing') {
+          logger.info({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            currentCount: video.comment_count,
+            rootCommentCount: rootCountMap.get(dbVideo?.id || '') ?? 0,
+            retryCount: dbVideo?.rootCommentRetryCount ?? 0,
+          }, '[Phase1] Root comments missing — enqueuing for retry');
+        }
         logger.info({
           awemeId: video.aweme_id,
           description: video.description,
@@ -1417,6 +1426,16 @@ export class KuaishouCrawler {
           stored: dbVideo.commentCount,
           reason: decision.reason,
         }, '[Phase1] Kuaishou comment count unchanged');
+        // 评论数未变但根评论缺失且已达到重试上限 → 放弃
+        const rootCommentCount = rootCountMap.get(dbVideo?.id || '') ?? 0;
+        const retryCount = dbVideo?.rootCommentRetryCount ?? 0;
+        if (video.comment_count > 0 && rootCommentCount === 0 && retryCount >= ROOT_COMMENT_RETRY_LIMIT) {
+          logger.info({
+            awemeId: video.aweme_id,
+            retryCount,
+            limit: ROOT_COMMENT_RETRY_LIMIT,
+          }, '[Phase1] Root comments missing but retry limit reached — giving up');
+        }
       }
     }
 
@@ -1843,6 +1862,21 @@ export class KuaishouCrawler {
           roots: rootComments.length,
           videoMs: Date.now() - videoT0,
         }, '[Phase3] Video comment collection complete');
+
+        // 更新根评论重试计数
+        if (rootComments.length > 0) {
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: 0 },
+          });
+          logger.info({ awemeId: item.awemeId, rootCount: rootComments.length }, '[Phase3] Root comment retry count reset to 0');
+        } else {
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: { increment: 1 } },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Phase3] Root comment retry count incremented');
+        }
 
         results.push({ awemeId: item.awemeId, success: true, comments: dbComments as any });
 
@@ -3140,6 +3174,18 @@ export class KuaishouCrawler {
       try {
         logger.info({ awemeId: item.awemeId, maxRootComments }, '[Simple] Starting simple mode comment collection');
 
+        // ── 查询数据库获取根评论数和重试次数（用于诊断日志）──
+        const [dbRootCommentCount, dbVideoInfo] = await Promise.all([
+          prisma.comment.count({ where: { videoId: item.awemeId, level: 1 } }),
+          prisma.video.findUnique({ where: { id: item.awemeId }, select: { rootCommentRetryCount: true } }),
+        ]);
+        logger.info({
+          awemeId: item.awemeId,
+          apiCommentCount: item.newCount,
+          dbRootCommentCount,
+          retryCount: dbVideoInfo?.rootCommentRetryCount ?? 0,
+        }, '[Simple] Phase3 start');
+
         // ── 清空拦截器中旧的评论响应 ──
         for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
           this.interceptor.clear(p);
@@ -3152,6 +3198,10 @@ export class KuaishouCrawler {
           results.push({ awemeId: item.awemeId, success: false, error: 'Failed to open drawer' });
           continue;
         }
+        logger.info({
+          awemeId: item.awemeId,
+          visible: true,
+        }, '[Simple] Drawer opened');
 
         // ── 点击视频 ──
         const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
@@ -3160,6 +3210,11 @@ export class KuaishouCrawler {
           results.push({ awemeId: item.awemeId, success: false, error: 'Failed to click video' });
           continue;
         }
+        logger.info({
+          awemeId: item.awemeId,
+          matched: true,
+          matchType: 'exact',
+        }, '[Simple] Video clicked');
 
         // ── 等待 API 响应 ──
         await HumanActions.wait(page, 3000, 5000);
@@ -3171,6 +3226,20 @@ export class KuaishouCrawler {
           results.push({ awemeId: item.awemeId, success: false, error: 'No commentList after selecting video' });
           continue;
         }
+        {
+          const bodyKeys = Object.keys(firstCommentResponse.body || {});
+          const dataKeys = Object.keys(firstCommentResponse.body?.data || {});
+          const firstComment = JSON.stringify(firstCommentResponse.body?.data?.list?.[0] || {}).slice(0, 500);
+          logger.info({
+            awemeId: item.awemeId,
+            responseCount: 1,
+            firstPageListLen: firstCommentResponse.body?.data?.list?.length || 0,
+            pcursor: firstCommentResponse.body?.data?.pcursor,
+            bodyKeys,
+            dataKeys,
+            firstComment,
+          }, '[Simple] CommentList captured');
+        }
 
         // 2. 获取已有的根评论 CID 集合
         const existingCids = await prisma.comment.findMany({
@@ -3181,8 +3250,9 @@ export class KuaishouCrawler {
 
         // 3. 滚动加载根评论
         const responses = await this.collectAllCommentResponses(page, firstCommentResponse);
-        const allComments = responses.flatMap(r => r.body?.data?.list || [])
-          .filter(c => !existingCidSet.has(String(c.commentId)));
+        const totalRaw = responses.flatMap(r => r.body?.data?.list || []);
+        const allComments = totalRaw.filter(c => !existingCidSet.has(String(c.commentId)));
+        const filteredOut = totalRaw.length - allComments.length;
 
         if (allComments.length > maxRootComments) {
           allComments.length = maxRootComments;
@@ -3191,7 +3261,14 @@ export class KuaishouCrawler {
         // 4. 限制到 maxRootComments
         const commentsToStore = allComments.slice(0, maxRootComments);
 
-        // 4. 存储新评论
+        logger.info({
+          awemeId: item.awemeId,
+          parsedRootCount: allComments.length,
+          filteredOut,
+          storedNewCount: commentsToStore.length,
+        }, '[Simple] Parse result');
+
+        // 5. 存储新评论
         if (commentsToStore.length > 0) {
           for (const comment of commentsToStore) {
             // timestamp 归一化：>1e12 视为毫秒，转换为秒
@@ -3254,6 +3331,12 @@ export class KuaishouCrawler {
           }));
 
           results.push({ awemeId: item.awemeId, success: true, commentGroups });
+          logger.info({
+            awemeId: item.awemeId,
+            success: true,
+            storedCount: commentsToStore.length,
+            retryCountUpdated: 'reset',
+          }, '[Simple] Phase3 done');
         } else {
           logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
           // 采空，retryCount +1
@@ -3263,6 +3346,12 @@ export class KuaishouCrawler {
           });
           logger.info({ awemeId: item.awemeId }, '[Simple] Root comment retry count incremented');
           results.push({ awemeId: item.awemeId, success: true, commentGroups: [] });
+          logger.info({
+            awemeId: item.awemeId,
+            success: true,
+            storedCount: 0,
+            retryCountUpdated: 'incremented',
+          }, '[Simple] Phase3 done');
         }
       } catch (err) {
         logger.error({ awemeId: item.awemeId, err: (err as Error).message }, '[Simple] Error processing comment queue item');

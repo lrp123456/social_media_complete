@@ -9,7 +9,7 @@ import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import { isDescriptionMatch } from './timeParser';
-import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts, truncateToNewest } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
 
@@ -1550,6 +1550,15 @@ export class DouyinCrawler {
 
       if (decision.shouldQueue) {
         const diff = video.comment_count - dbVideo.commentCount;
+        if (decision.reason === 'root_comments_missing') {
+          logger.info({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            currentCount: video.comment_count,
+            rootCommentCount: rootCountMap.get(dbVideo?.id || '') ?? 0,
+            retryCount: dbVideo?.rootCommentRetryCount ?? 0,
+          }, '[Phase1] Root comments missing — enqueuing for retry');
+        }
         logger.info({
           awemeId: video.aweme_id,
           description: video.description,
@@ -1576,6 +1585,16 @@ export class DouyinCrawler {
           stored: dbVideo.commentCount,
           reason: decision.reason,
         }, '[Phase1] Comment count unchanged');
+        // 评论数未变但根评论缺失且已达到重试上限 → 放弃
+        const rootCommentCount = rootCountMap.get(dbVideo?.id || '') ?? 0;
+        const retryCount = dbVideo?.rootCommentRetryCount ?? 0;
+        if (video.comment_count > 0 && rootCommentCount === 0 && retryCount >= ROOT_COMMENT_RETRY_LIMIT) {
+          logger.info({
+            awemeId: video.aweme_id,
+            retryCount,
+            limit: ROOT_COMMENT_RETRY_LIMIT,
+          }, '[Phase1] Root comments missing but retry limit reached — giving up');
+        }
       }
     }
 
@@ -2023,6 +2042,13 @@ export class DouyinCrawler {
 
           logger.info({ awemeId: item.awemeId, totalComments: allFlat.length, roots: rootComments.length, subs: subReplies.length, isFirstCrawl: true, dbWriteMs: dbMs }, '[Tree] Phase3c: first crawl DB write complete — all comments saved as isNew=0 (%dms)', dbMs);
 
+          // 首次爬取成功，重置根评论重试计数
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: 0 },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Phase3] Root comment retry count reset to 0 (first crawl)');
+
           // 首次爬取也构建 commentGroups，用于发送摘要通知
           // 将每个根评论及其子回复组成一个 group，newInGroup 包含该组全部评论
           const firstCrawlGroups: Array<{
@@ -2314,6 +2340,21 @@ export class DouyinCrawler {
             dbWriteMs: dbMs,
           }, '[Tree] Incremental complete: %d new roots + %d new subs (%d from API + %d from expand) = %d total, DB write %dms', newRootsFrom3a, newSubsFromTrulyNew + newSubsFrom3b, newSubsFromTrulyNew, newSubsFrom3b, newCommentsToUpsert.length, dbMs);
 
+          // 更新根评论重试计数
+          if (newRootsFrom3a > 0) {
+            await prisma.video.update({
+              where: { id: item.awemeId },
+              data: { rootCommentRetryCount: 0 },
+            });
+            logger.info({ awemeId: item.awemeId }, '[Phase3] Root comment retry count reset to 0');
+          } else {
+            await prisma.video.update({
+              where: { id: item.awemeId },
+              data: { rootCommentRetryCount: { increment: 1 } },
+            });
+            logger.info({ awemeId: item.awemeId }, '[Phase3] Root comment retry count incremented');
+          }
+
           // 构建 commentGroups 用于返回（只包含有新增的组）
           const involvedRootCids = new Set<string>();
           for (const n of newCommentsToUpsert) {
@@ -2588,9 +2629,22 @@ export class DouyinCrawler {
             };
           });
 
+          // 采到新根评论，重置 retryCount
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: 0 },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Simple] Root comment retry count reset to 0');
+
           results.push({ awemeId: item.awemeId, success: true, commentGroups });
         } else {
           logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+          // 采空，retryCount +1
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: { increment: 1 } },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Simple] Root comment retry count incremented');
           results.push({ awemeId: item.awemeId, success: true, commentGroups: [] });
         }
       } catch (err) {

@@ -6,7 +6,7 @@ import { createLogger } from '../lib/logger';
 import { getSelector, getRandomExitSubmenuKey, getSubmenuKeyForPageType } from './menuSelectors';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getSelectorReader } from '../lib/selectorStore';
-import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
@@ -1005,6 +1005,15 @@ export class TencentCrawler {
       }
 
       if (decision.shouldQueue) {
+        if (decision.reason === 'root_comments_missing') {
+          logger.info({
+            awemeId: video.exportId,
+            description: video.desc?.description?.slice(0, 30),
+            currentCount: newCount,
+            rootCommentCount: rootCountMap.get(dbVideo.id) ?? 0,
+            retryCount: dbVideo.rootCommentRetryCount ?? 0,
+          }, '[Phase1] Root comments missing — enqueuing for retry');
+        }
         commentsQueue.push({
           exportId: video.exportId.replace(/\//g, '_'),
           description: video.desc?.description || '',
@@ -1015,6 +1024,17 @@ export class TencentCrawler {
           _userId: userId,
           isPinned: video.isPinned,
         });
+      } else {
+        // 评论数未变但根评论缺失且已达到重试上限 → 放弃
+        const rootCommentCount = rootCountMap.get(dbVideo.id) ?? 0;
+        const retryCount = dbVideo.rootCommentRetryCount ?? 0;
+        if (newCount > 0 && rootCommentCount === 0 && retryCount >= ROOT_COMMENT_RETRY_LIMIT) {
+          logger.info({
+            awemeId: video.exportId,
+            retryCount,
+            limit: ROOT_COMMENT_RETRY_LIMIT,
+          }, '[Phase1] Root comments missing but retry limit reached — giving up');
+        }
       }
     }
 

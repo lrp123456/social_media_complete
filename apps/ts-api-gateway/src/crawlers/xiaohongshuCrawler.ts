@@ -3,7 +3,7 @@ import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager } from '
 import { getSelector, getSelectorChain, getRandomExitSubmenuKeyForPlatform, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
-import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
+import { getCommentCrawlDecision, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import fs from 'fs';
@@ -725,6 +725,15 @@ export class XiaohongshuCrawler {
         retryCount: dbVideo.rootCommentRetryCount ?? 0,
       });
       if (decision.shouldQueue) {
+        if (decision.reason === 'root_comments_missing') {
+          logger.info({
+            awemeId: video.aweme_id,
+            description: video.description?.slice(0, 30),
+            currentCount: video.comment_count,
+            rootCommentCount: rootCountMap.get(dbVideo.id) ?? 0,
+            retryCount: dbVideo.rootCommentRetryCount ?? 0,
+          }, '[Phase1] Root comments missing — enqueuing for retry');
+        }
         logger.info({
           awemeId: video.aweme_id,
           description: video.description,
@@ -746,6 +755,16 @@ export class XiaohongshuCrawler {
           current: video.comment_count,
           stored: dbVideo.commentCount,
         }, '[XHS-Light] Comment count unchanged');
+        // 评论数未变但根评论缺失且已达到重试上限 → 放弃
+        const rootCommentCount = rootCountMap.get(dbVideo.id) ?? 0;
+        const retryCount = dbVideo.rootCommentRetryCount ?? 0;
+        if (video.comment_count > 0 && rootCommentCount === 0 && retryCount >= ROOT_COMMENT_RETRY_LIMIT) {
+          logger.info({
+            awemeId: video.aweme_id,
+            retryCount,
+            limit: ROOT_COMMENT_RETRY_LIMIT,
+          }, '[Phase1] Root comments missing but retry limit reached — giving up');
+        }
       }
     }
 
