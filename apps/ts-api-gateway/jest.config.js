@@ -1,6 +1,6 @@
 module.exports = {
   testEnvironment: 'node',
-  roots: ['<rootDir>/src'],
+  roots: ['<rootDir>/src', '<rootDir>/../../packages/browser-core/src'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
       isolatedModules: true,
