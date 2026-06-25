@@ -56,7 +56,7 @@ router.post('/generate', async (req: Request, res: Response) => {
     }
 
     // 获取平台信息
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
       select: { platform: true },
     });
@@ -149,7 +149,7 @@ router.post('/regenerate', async (req: Request, res: Response) => {
       rootCommentText = root?.text;
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
       select: { platform: true },
     });

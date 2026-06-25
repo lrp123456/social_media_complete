@@ -229,7 +229,7 @@ export class KuaishouCrawler {
     }
 
     const { botManager } = await import('../services/wechatBotService');
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: userId }, select: { wechatUserid: true, windowId: true } });
     if (!user?.wechatUserid) {
       logger.error({ userId }, '[Login] No WeChat Work user ID found');
       return false;

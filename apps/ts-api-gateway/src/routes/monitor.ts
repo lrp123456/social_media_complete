@@ -21,7 +21,7 @@ const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
 /** GET /api/v1/monitor/targets - 监控目标列表（按 platform 聚合） */
 router.get('/targets', async (_req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany();
+    const users = await prisma.platformAccount.findMany();
 
     // 按 platform 分组聚合
     const grouped = new Map<
@@ -99,7 +99,7 @@ router.get('/videos', async (req: Request, res: Response) => {
       orderBy: { createTime: 'desc' },
       take: limit,
       include: {
-        user: { select: { platform: true, fingerprintWindowId: true } },
+        user: { select: { platform: true, windowId: true } },
         _count: { select: { comments: true } },
       },
     });
@@ -113,7 +113,7 @@ router.get('/videos', async (req: Request, res: Response) => {
         createTime: v.createTime,
         commentCount: v.commentCount,
         platform: v.user.platform,
-        windowId: v.user.fingerprintWindowId,
+        windowId: v.user.windowId,
         metrics: v.metrics ? JSON.parse(v.metrics) : null,
       })),
     });

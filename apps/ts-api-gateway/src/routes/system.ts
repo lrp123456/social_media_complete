@@ -15,7 +15,7 @@ router.get('/overview', async (_req: Request, res: Response) => {
 
     const [monitorUsers, todayNewComments, pendingPublishTasks, systemStatus, recentActivities] =
       await Promise.all([
-        prisma.user.count(),
+        prisma.platformAccount.count(),
         prisma.comment.count({ where: { createdAt: { gte: todayStart } } }),
         prisma.taskRecord.count({ where: { status: { in: ['pending', 'running'] } } }),
         prisma.systemStatus.findFirst({ orderBy: { id: 'desc' } }),

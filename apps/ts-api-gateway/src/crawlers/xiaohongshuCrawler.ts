@@ -1194,11 +1194,11 @@ export class XiaohongshuCrawler {
         try {
           const { loginTabRegistry, getLoginFlowConfig } = await import('../services/loginFlowHelpers');
           const { prisma: prismaXhs } = await import('../lib/prisma');
-          const xhsUser = await prismaXhs.user.findUnique({ where: { id: userId }, select: { fingerprintWindowId: true } });
-          const xhsWindowId = xhsUser?.fingerprintWindowId ? String(xhsUser.fingerprintWindowId) : 'unknown';
+          const xhsUser = await prismaXhs.platformAccount.findUnique({ where: { id: userId }, select: { windowId: true } });
+          const xhsWindowId = xhsUser?.windowId ? String(xhsUser.fingerprintWindowId) : 'unknown';
 
           const mainsiteConfig = getLoginFlowConfig('xiaohongshu', 'mainsite');
-          if (mainsiteConfig && xhsUser?.fingerprintWindowId) {
+          if (mainsiteConfig && xhsUser?.windowId) {
             // 标记标签页 + 注册（不关闭！）
             const markData = JSON.stringify({ flowId: 'mainsite', userId, openedAt: Date.now() });
             await newPage.evaluate((data: string) => {

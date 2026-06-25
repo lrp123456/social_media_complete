@@ -181,7 +181,7 @@ export class TencentCrawler {
    */
   private async handleQRLogin(page: Page, userId: number): Promise<boolean> {
     const { botManager } = await import('../services/wechatBotService');
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { wechatUserid: true, fingerprintWindowId: true } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: userId }, select: { wechatUserid: true, windowId: true } });
 
     // 使用主页面直接截取 QR（captureQR 支持 iframe）
     const { loginTabRegistry, getLoginFlowConfig } = await import('../services/loginFlowHelpers');

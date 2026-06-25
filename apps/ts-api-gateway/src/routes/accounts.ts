@@ -40,7 +40,7 @@ function computeCookieStatus(
 /** GET /api/v1/accounts/hosted - 托管账号列表 */
 router.get('/hosted', async (_req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
+    const users = await prisma.platformAccount.findMany({
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -50,7 +50,7 @@ router.get('/hosted', async (_req: Request, res: Response) => {
         id: user.id,
         platform: user.platform,
         accountName: user.wechatUserid,
-        windowId: user.fingerprintWindowId,
+        windowId: user.windowId,
         cookieStatus,
         cookieValidDays,
       };
