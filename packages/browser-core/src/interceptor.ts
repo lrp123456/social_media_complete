@@ -552,6 +552,26 @@ export class RequestInterceptor {
     return responses.length > 0 ? responses[responses.length - 1] : null;
   }
 
+  async collectResponses(
+    pattern: string,
+    opts: { until?: (r: InterceptedResponse) => boolean; maxItems: number; pollMs: number; timeoutMs: number },
+  ): Promise<InterceptedResponse[]> {
+    const collected: InterceptedResponse[] = [];
+    const deadline = Date.now() + opts.timeoutMs;
+    let seenIndex = 0;
+    while (Date.now() < deadline && collected.length < opts.maxItems) {
+      const all = this.getResponses(pattern);
+      while (seenIndex < all.length && collected.length < opts.maxItems) {
+        const r = all[seenIndex++];
+        collected.push(r);
+        if (opts.until && opts.until(r)) return collected;
+      }
+      if (collected.length >= opts.maxItems) break;
+      await new Promise(resolve => setTimeout(resolve, opts.pollMs));
+    }
+    return collected;
+  }
+
   clear(pattern: string): void {
     this.interceptedData.delete(pattern);
     this.capturedUrls.delete(pattern);
