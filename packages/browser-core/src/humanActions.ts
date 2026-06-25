@@ -64,6 +64,17 @@ export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
   private static isolatedWorldIds = new WeakMap<Page, number>();
+  private static stepMetricsCollector: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null = null;
+
+  static setStepMetricsCollector(c: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null): void {
+    HumanActions.stepMetricsCollector = c;
+  }
+
+  private static recordActionPath(actionPath: string, extra?: Record<string, any>): void {
+    if (HumanActions.stepMetricsCollector) {
+      HumanActions.stepMetricsCollector.collect({ actionPath, extra });
+    }
+  }
 
   static setTraceCollector(collector: { recordMouseTrace: (point: any) => void } | null): void {
     HumanActions.traceCollector = collector;
@@ -98,14 +109,24 @@ export class HumanActions {
 
   static async readText(page: Page, selector: string): Promise<string | null> {
     const locator = page.locator(selector);
-    if ((await locator.count()) === 0) return null;
-    return locator.textContent();
+    if ((await locator.count()) === 0) {
+      HumanActions.recordActionPath('native-locator');
+      return null;
+    }
+    const text = await locator.textContent();
+    HumanActions.recordActionPath('native-locator');
+    return text;
   }
 
   static async readAttribute(page: Page, selector: string, attr: string): Promise<string | null> {
     const locator = page.locator(selector);
-    if ((await locator.count()) === 0) return null;
-    return locator.getAttribute(attr);
+    if ((await locator.count()) === 0) {
+      HumanActions.recordActionPath('native-locator');
+      return null;
+    }
+    const val = await locator.getAttribute(attr);
+    HumanActions.recordActionPath('native-locator');
+    return val;
   }
 
   static async exists(page: Page, selector: string, timeoutMs: number = 0): Promise<boolean> {
@@ -114,10 +135,13 @@ export class HumanActions {
       try {
         await locator.waitFor({ state: 'attached', timeout: timeoutMs });
       } catch {
+        HumanActions.recordActionPath('native-locator');
         return false;
       }
     }
-    return (await locator.count()) > 0;
+    const result = (await locator.count()) > 0;
+    HumanActions.recordActionPath('native-locator');
+    return result;
   }
 
   // ===== 反检测收口：交互类（原生 Locator + 拟人化前置） =====
@@ -128,6 +152,7 @@ export class HumanActions {
     await locator.hover();
     await HumanActions.wait(page, 80, 200); // 随机停顿
     await locator.click({ delay: HumanActions.randomDelay(30, 90) });
+    HumanActions.recordActionPath('native-locator');
   }
 
   static async fill(page: Page, selector: string, text: string): Promise<void> {
@@ -139,12 +164,14 @@ export class HumanActions {
       await locator.press(ch);
       await page.waitForTimeout(HumanActions.randomDelay(60, 160));
     }
+    HumanActions.recordActionPath('native-locator');
   }
 
   static async press(page: Page, selector: string, key: string): Promise<void> {
     const locator = page.locator(selector);
     await locator.waitFor({ state: 'visible' });
     await locator.press(key);
+    HumanActions.recordActionPath('native-locator');
   }
 
   // ===== 反检测收口：safeEvaluate（方案 C，CDP 隔离世界） =====
@@ -179,6 +206,7 @@ export class HumanActions {
       returnByValue: true,
     });
     if (result?.exceptionDetails) throw new Error(`safeEvaluate failed: ${result.exceptionDetails.text}`);
+    HumanActions.recordActionPath(opts.world === 'main' ? 'safeEvaluate-main' : 'safeEvaluate-isolated', { reason: opts.reason });
     return result?.result?.value;
   }
 

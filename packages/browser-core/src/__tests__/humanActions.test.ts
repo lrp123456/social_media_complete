@@ -136,3 +136,15 @@ describe('HumanActions.safeEvaluate', () => {
     await expect(HumanActions.safeEvaluate(page, () => 1, {} as any)).rejects.toThrow(/reason/);
   });
 });
+
+describe('HumanActions stepMetricsCollector', () => {
+  it('记录 actionPath 到当前活跃 step', async () => {
+    const collector = { collect: jest.fn() };
+    HumanActions.setStepMetricsCollector(collector as any);
+    const locatorMock = { count: jest.fn().mockResolvedValue(1), textContent: jest.fn().mockResolvedValue('x') };
+    const page = makeMockPage(locatorMock);
+    await HumanActions.readText(page, 'div');
+    expect(collector.collect).toHaveBeenCalledWith(expect.objectContaining({ actionPath: 'native-locator' }));
+    HumanActions.setStepMetricsCollector(null);
+  });
+});
