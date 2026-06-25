@@ -51,3 +51,43 @@ describe('HumanActions.exists', () => {
     expect(await HumanActions.exists(page, 'div')).toBe(false);
   });
 });
+
+describe('HumanActions.click 拟人化前置', () => {
+  it('先 hover 再 click，带 delay', async () => {
+    const calls: string[] = [];
+    const locatorMock = {
+      count: jest.fn().mockResolvedValue(1),
+      hover: jest.fn().mockResolvedValue(undefined),
+      click: jest.fn().mockResolvedValue(undefined),
+      waitFor: jest.fn().mockResolvedValue(undefined),
+    };
+    const page: any = {
+      locator: jest.fn().mockReturnValue(locatorMock),
+      waitForTimeout: jest.fn(() => { calls.push('wait'); return Promise.resolve(); }),
+      context: () => ({ newCDPSession: jest.fn() }),
+    };
+    await HumanActions.click(page, 'button.submit');
+    expect(calls.length).toBeGreaterThan(0); // 有停顿
+    expect(locatorMock.hover).toHaveBeenCalled(); // hover 前置
+    expect(locatorMock.click).toHaveBeenCalled();
+  });
+});
+
+describe('HumanActions.fill 逐字延迟', () => {
+  it('点击聚焦后逐字输入', async () => {
+    const locatorMock = {
+      count: jest.fn().mockResolvedValue(1),
+      click: jest.fn().mockResolvedValue(undefined),
+      press: jest.fn().mockResolvedValue(undefined),
+      waitFor: jest.fn().mockResolvedValue(undefined),
+    };
+    const page: any = {
+      locator: jest.fn().mockReturnValue(locatorMock),
+      waitForTimeout: jest.fn().mockResolvedValue(undefined),
+      context: () => ({ newCDPSession: jest.fn() }),
+    };
+    await HumanActions.fill(page, 'textarea', 'ab');
+    expect(locatorMock.click).toHaveBeenCalled(); // 聚焦
+    expect(locatorMock.press).toHaveBeenCalledTimes(2); // 逐字
+  });
+});

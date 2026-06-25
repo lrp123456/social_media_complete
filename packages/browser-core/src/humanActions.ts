@@ -119,6 +119,33 @@ export class HumanActions {
     return (await locator.count()) > 0;
   }
 
+  // ===== 反检测收口：交互类（原生 Locator + 拟人化前置） =====
+
+  static async click(page: Page, selector: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.hover();
+    await HumanActions.wait(page, 80, 200); // 随机停顿
+    await locator.click({ delay: HumanActions.randomDelay(30, 90) });
+  }
+
+  static async fill(page: Page, selector: string, text: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.click(); // 聚焦
+    await HumanActions.wait(page, 100, 250);
+    for (const ch of text) {
+      await locator.press(ch);
+      await page.waitForTimeout(HumanActions.randomDelay(60, 160));
+    }
+  }
+
+  static async press(page: Page, selector: string, key: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.press(key);
+  }
+
   private static async getCDPContext(page: Page): Promise<CDPContext> {
     let ctx = HumanActions.cdpContexts.get(page);
     if (ctx) {
