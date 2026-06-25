@@ -1932,12 +1932,13 @@ export class KuaishouCrawler {
           return true;
         }
 
-        logger.warn({ attempt }, '[Drawer] Click succeeded but drawer not detected, proceeding anyway');
-        return true;
-      } else {
-        logger.warn({ attempt }, '[Drawer] All click methods failed');
+        logger.warn({ attempt }, '[Drawer] Click succeeded but drawer not visible, retrying');
         await HumanActions.wait(page, 1000, 2000);
+        continue;
       }
+
+      logger.warn({ attempt }, '[Drawer] All click methods failed');
+      await HumanActions.wait(page, 1000, 2000);
     }
 
     logger.error('[Drawer] Failed to open kuaishou drawer after all retries');
