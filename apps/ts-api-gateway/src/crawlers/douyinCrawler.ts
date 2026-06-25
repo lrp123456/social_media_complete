@@ -9,6 +9,7 @@ import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import { isDescriptionMatch } from './timeParser';
+import { isAntiDetectionV2 } from '../lib/antiDetectionMode';
 import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import fs from 'fs';
 import path from 'path';
@@ -1115,11 +1116,20 @@ export class DouyinCrawler {
       if (!isRootComment) continue;
 
       // 从容器 DOM 获取真实的 data-cid（而非文本截断的假 cid）
-      let rootCid = await page.evaluate((idx: number) => {
-        const containers = document.querySelectorAll('[data-cid]');
-        const el = containers[idx] as HTMLElement;
-        return el?.dataset?.cid || '';
-      }, containerIdx);
+      let rootCid: string;
+      if (isAntiDetectionV2()) {
+        rootCid = await HumanActions.safeEvaluate(page, (idx: number) => {
+          const containers = document.querySelectorAll('[data-cid]');
+          const el = containers[idx] as HTMLElement;
+          return el?.dataset?.cid || '';
+        }, { reason: '读取根评论 data-cid', world: 'main', args: [containerIdx] });
+      } else {
+        rootCid = await page.evaluate((idx: number) => {
+          const containers = document.querySelectorAll('[data-cid]');
+          const el = containers[idx] as HTMLElement;
+          return el?.dataset?.cid || '';
+        }, containerIdx);
+      }
       if (!rootCid) {
         // data-cid 不可用（抖音前端可能更新），用文本片段作为 fallback 标识
         rootCid = containerText.slice(0, 25).replace(/\s+/g, '').toLowerCase() || `fallback-${containerIdx}`;
@@ -1160,14 +1170,26 @@ export class DouyinCrawler {
           const MAX_LOAD_MORE = 10;
           while (loadMoreRounds < MAX_LOAD_MORE) {
             // 先将"查看N条回复"按钮滚动到视口内
-            const btnFound = await page.evaluate(() => {
-              const all = Array.from(document.querySelectorAll('*'));
-              const btn = all.find((el) => {
-                const t = (el.textContent || '').trim();
-                return /^查看\d+条回复$/.test(t) && el instanceof HTMLElement && el.children.length === 0;
+            let btnFound: boolean;
+            if (isAntiDetectionV2()) {
+              btnFound = await HumanActions.safeEvaluate(page, () => {
+                const all = Array.from(document.querySelectorAll('*'));
+                const btn = all.find((el) => {
+                  const t = (el.textContent || '').trim();
+                  return /^查看\d+条回复$/.test(t) && el instanceof HTMLElement && el.children.length === 0;
+                });
+                return !!btn;
+              }, { reason: '检查展开按钮是否存在', world: 'main' });
+            } else {
+              btnFound = await page.evaluate(() => {
+                const all = Array.from(document.querySelectorAll('*'));
+                const btn = all.find((el) => {
+                  const t = (el.textContent || '').trim();
+                  return /^查看\d+条回复$/.test(t) && el instanceof HTMLElement && el.children.length === 0;
+                });
+                return !!btn;
               });
-              return !!btn;
-            });
+            }
             if (!btnFound) break;
             await this.scrollCommentArea(page, 150);
             await HumanActions.wait(page, 300, 600);
@@ -1302,79 +1324,156 @@ export class DouyinCrawler {
     const containerDef = getSelector('comment.container');
     const containerCss = containerDef.css || '[data-cid]';
 
-    const result = await page.evaluate((sel: string) => {
-      const containers = document.querySelectorAll(sel);
-      const comments: any[] = [];
-      const seenCids = new Set<string>();
+    let result;
+    if (isAntiDetectionV2()) {
+      result = await HumanActions.safeEvaluate(page, (sel: string) => {
+        const containers = document.querySelectorAll(sel);
+        const comments: any[] = [];
+        const seenCids = new Set<string>();
 
-      containers.forEach((c: Element) => {
-        const cid = (c as HTMLElement).dataset.cid || '';
-        if (!cid || seenCids.has(cid)) return;
-        seenCids.add(cid);
+        containers.forEach((c: Element) => {
+          const cid = (c as HTMLElement).dataset.cid || '';
+          if (!cid || seenCids.has(cid)) return;
+          seenCids.add(cid);
 
-        const textEl = c.querySelector('[class*="comment-content-text"]');
-        const text = textEl?.textContent?.trim() || '';
+          const textEl = c.querySelector('[class*="comment-content-text"]');
+          const text = textEl?.textContent?.trim() || '';
 
-        const replyToEl = c.querySelector('[class*="reply-to"]');
-        const isSub = !!replyToEl;
-        const replyToName = replyToEl?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+          const replyToEl = c.querySelector('[class*="reply-to"]');
+          const isSub = !!replyToEl;
+          const replyToName = replyToEl?.textContent?.replace(/^回复\s*@/, '').trim() || '';
 
-        const nicknameEl = c.querySelector('[class*="user-name"], [class*="nickname"], [class*="author-name"]');
-        const userNickname = nicknameEl?.textContent?.trim() || '';
+          const nicknameEl = c.querySelector('[class*="user-name"], [class*="nickname"], [class*="author-name"]');
+          const userNickname = nicknameEl?.textContent?.trim() || '';
 
-        const comment: any = {
-          cid,
-          text,
-          userNickname,
-          userUid: '',
-          createTime: 0,
-          diggCount: 0,
-          level: isSub ? 2 : 1,
-          replyToName,
-          replyId: '0',
-          subComments: [],
-        };
+          const comment: any = {
+            cid,
+            text,
+            userNickname,
+            userUid: '',
+            createTime: 0,
+            diggCount: 0,
+            level: isSub ? 2 : 1,
+            replyToName,
+            replyId: '0',
+            subComments: [],
+          };
 
-        if (isSub) {
-          const replyList = c.closest('[class*="reply-list"]');
-          if (replyList) {
-            const rootContainer = replyList.closest(sel);
-            if (rootContainer) {
-              comment.rootId = (rootContainer as HTMLElement).dataset.cid || '';
+          if (isSub) {
+            const replyList = c.closest('[class*="reply-list"]');
+            if (replyList) {
+              const rootContainer = replyList.closest(sel);
+              if (rootContainer) {
+                comment.rootId = (rootContainer as HTMLElement).dataset.cid || '';
+              }
+            }
+          } else {
+            const replyList = c.querySelector('[class*="reply-list"]');
+            if (replyList) {
+              const subContainers = replyList.querySelectorAll(sel);
+              subContainers.forEach((sub: Element) => {
+                const subCid = (sub as HTMLElement).dataset.cid || '';
+                if (!subCid) return;
+                const subText = sub.querySelector('[class*="comment-content-text"]')?.textContent?.trim() || '';
+                const subReplyTo = sub.querySelector('[class*="reply-to"]')?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+                const subNick = sub.querySelector('[class*="user-name"], [class*="nickname"]')?.textContent?.trim() || '';
+                comment.subComments.push({
+                  cid: subCid,
+                  text: subText,
+                  userNickname: subNick,
+                  userUid: '',
+                  createTime: 0,
+                  diggCount: 0,
+                  level: 2,
+                  rootId: cid,
+                  parentId: '',
+                  replyToName: subReplyTo,
+                  replyId: '0',
+                });
+              });
             }
           }
-        } else {
-          const replyList = c.querySelector('[class*="reply-list"]');
-          if (replyList) {
-            const subContainers = replyList.querySelectorAll(sel);
-            subContainers.forEach((sub: Element) => {
-              const subCid = (sub as HTMLElement).dataset.cid || '';
-              if (!subCid) return;
-              const subText = sub.querySelector('[class*="comment-content-text"]')?.textContent?.trim() || '';
-              const subReplyTo = sub.querySelector('[class*="reply-to"]')?.textContent?.replace(/^回复\s*@/, '').trim() || '';
-              const subNick = sub.querySelector('[class*="user-name"], [class*="nickname"]')?.textContent?.trim() || '';
-              comment.subComments.push({
-                cid: subCid,
-                text: subText,
-                userNickname: subNick,
-                userUid: '',
-                createTime: 0,
-                diggCount: 0,
-                level: 2,
-                rootId: cid,
-                parentId: '',
-                replyToName: subReplyTo,
-                replyId: '0',
+
+          comments.push(comment);
+        });
+
+        return comments;
+      }, { reason: '解析评论 DOM 树', world: 'main', args: [containerCss] });
+    } else {
+      result = await page.evaluate((sel: string) => {
+        const containers = document.querySelectorAll(sel);
+        const comments: any[] = [];
+        const seenCids = new Set<string>();
+
+        containers.forEach((c: Element) => {
+          const cid = (c as HTMLElement).dataset.cid || '';
+          if (!cid || seenCids.has(cid)) return;
+          seenCids.add(cid);
+
+          const textEl = c.querySelector('[class*="comment-content-text"]');
+          const text = textEl?.textContent?.trim() || '';
+
+          const replyToEl = c.querySelector('[class*="reply-to"]');
+          const isSub = !!replyToEl;
+          const replyToName = replyToEl?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+
+          const nicknameEl = c.querySelector('[class*="user-name"], [class*="nickname"], [class*="author-name"]');
+          const userNickname = nicknameEl?.textContent?.trim() || '';
+
+          const comment: any = {
+            cid,
+            text,
+            userNickname,
+            userUid: '',
+            createTime: 0,
+            diggCount: 0,
+            level: isSub ? 2 : 1,
+            replyToName,
+            replyId: '0',
+            subComments: [],
+          };
+
+          if (isSub) {
+            const replyList = c.closest('[class*="reply-list"]');
+            if (replyList) {
+              const rootContainer = replyList.closest(sel);
+              if (rootContainer) {
+                comment.rootId = (rootContainer as HTMLElement).dataset.cid || '';
+              }
+            }
+          } else {
+            const replyList = c.querySelector('[class*="reply-list"]');
+            if (replyList) {
+              const subContainers = replyList.querySelectorAll(sel);
+              subContainers.forEach((sub: Element) => {
+                const subCid = (sub as HTMLElement).dataset.cid || '';
+                if (!subCid) return;
+                const subText = sub.querySelector('[class*="comment-content-text"]')?.textContent?.trim() || '';
+                const subReplyTo = sub.querySelector('[class*="reply-to"]')?.textContent?.replace(/^回复\s*@/, '').trim() || '';
+                const subNick = sub.querySelector('[class*="user-name"], [class*="nickname"]')?.textContent?.trim() || '';
+                comment.subComments.push({
+                  cid: subCid,
+                  text: subText,
+                  userNickname: subNick,
+                  userUid: '',
+                  createTime: 0,
+                  diggCount: 0,
+                  level: 2,
+                  rootId: cid,
+                  parentId: '',
+                  replyToName: subReplyTo,
+                  replyId: '0',
+                });
               });
-            });
+            }
           }
-        }
 
-        comments.push(comment);
-      });
+          comments.push(comment);
+        });
 
-      return comments;
-    }, containerCss);
+        return comments;
+      }, containerCss);
+    }
 
     return result;
   }
@@ -1794,11 +1893,21 @@ export class DouyinCrawler {
 
           if (allResponses.length === 0) {
             // 无匹配的缓存响应，检查页面 DOM
-            const commentInfo = await page.evaluate(() => {
-              const commentEls = document.querySelectorAll('[data-cid]');
-              const textEls = document.querySelectorAll('[class*="comment-content-text"]');
-              return { cidCount: commentEls.length, textCount: textEls.length };
-            });
+            const commentInfo: { cidCount: number; textCount: number } = await (async () => {
+              if (isAntiDetectionV2()) {
+                return HumanActions.safeEvaluate(page, () => {
+                  const commentEls = document.querySelectorAll('[data-cid]');
+                  const textEls = document.querySelectorAll('[class*="comment-content-text"]');
+                  return { cidCount: commentEls.length, textCount: textEls.length };
+                }, { reason: '检查页面评论 DOM 内容', world: 'main' });
+              } else {
+                return page.evaluate(() => {
+                  const commentEls = document.querySelectorAll('[data-cid]');
+                  const textEls = document.querySelectorAll('[class*="comment-content-text"]');
+                  return { cidCount: commentEls.length, textCount: textEls.length };
+                });
+              }
+            })();
             const hasCommentContent = commentInfo.cidCount > 0 || commentInfo.textCount > 0;
             logger.info({
               awemeId: item.awemeId,
@@ -1916,26 +2025,51 @@ export class DouyinCrawler {
         const rootsWithReplies = currentSnapshots.filter(s => s.replyCount > 0).length;
         logger.info({ awemeId: item.awemeId, rootsWithReplies, snapshotCount: currentSnapshots.length }, '[Tree] SmartScroll check: %d roots have replies out of %d snapshots', rootsWithReplies, currentSnapshots.length);
           // 诊断：检查展开按钮是否已渲染到 DOM
-          const btnDiagnostic = await page.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            let totalMatches = 0;
-            let leafMatches = 0;
-            const positions: Array<{ text: string; top: number; visible: boolean }> = [];
-            const viewportH = window.innerHeight;
-            for (const el of all) {
-              const t = (el.textContent || '').trim();
-              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-              totalMatches++;
-              const isLeaf = !Array.from(el.children).some(child =>
-                /^查看\d+条回复$/.test((child.textContent || '').trim())
-              );
-              if (!isLeaf) continue;
-              leafMatches++;
-              const rect = el.getBoundingClientRect();
-              positions.push({ text: t, top: Math.round(rect.top), visible: rect.top >= 0 && rect.bottom <= viewportH });
+          const btnDiagnostic = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, () => {
+                const all = Array.from(document.querySelectorAll('*'));
+                let totalMatches = 0;
+                let leafMatches = 0;
+                const positions: Array<{ text: string; top: number; visible: boolean }> = [];
+                const viewportH = window.innerHeight;
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                  totalMatches++;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  if (!isLeaf) continue;
+                  leafMatches++;
+                  const rect = el.getBoundingClientRect();
+                  positions.push({ text: t, top: Math.round(rect.top), visible: rect.top >= 0 && rect.bottom <= viewportH });
+                }
+                return { totalMatches, leafMatches, positions };
+              }, { reason: '诊断展开按钮 DOM 状态', world: 'main' });
+            } else {
+              return page.evaluate(() => {
+                const all = Array.from(document.querySelectorAll('*'));
+                let totalMatches = 0;
+                let leafMatches = 0;
+                const positions: Array<{ text: string; top: number; visible: boolean }> = [];
+                const viewportH = window.innerHeight;
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                  totalMatches++;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  if (!isLeaf) continue;
+                  leafMatches++;
+                  const rect = el.getBoundingClientRect();
+                  positions.push({ text: t, top: Math.round(rect.top), visible: rect.top >= 0 && rect.bottom <= viewportH });
+                }
+                return { totalMatches, leafMatches, positions };
+              });
             }
-            return { totalMatches, leafMatches, positions };
-          });
+          })();
           logger.info({ awemeId: item.awemeId, rootsWithReplies, btnTotalMatches: btnDiagnostic.totalMatches, btnLeafMatches: btnDiagnostic.leafMatches, btnPositions: btnDiagnostic.positions }, '[Phase3] Pre-SmartScroll expand button diagnostic');
 
           logger.info({ awemeId: item.awemeId, rootsWithReplies }, '[Phase3] Starting smart scroll and expand');
@@ -2723,24 +2857,47 @@ export class DouyinCrawler {
   private async isDrawerVisible(page: Page): Promise<boolean> {
     try {
       // 检测抽屉遮罩层：通过 evaluate 判断元素是否存在且宽高 > 0
-      const hasMask = await page.evaluate(() => {
-        const maskSelectors = [
-          '.douyin-creator-interactive-sidesheet-mask',
-          '[class*="semi-sidesheet-mask"]',
-          '[class*="drawer-mask"]',
-          '[class*="sidesheet-mask"]',
-        ];
-        for (const sel of maskSelectors) {
-          const el = document.querySelector(sel) as HTMLElement | null;
-          if (el) {
-            const rect = el.getBoundingClientRect();
-            if (rect.width > 50 && rect.height > 50) {
-              return true;
+      const hasMask = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const maskSelectors = [
+              '.douyin-creator-interactive-sidesheet-mask',
+              '[class*="semi-sidesheet-mask"]',
+              '[class*="drawer-mask"]',
+              '[class*="sidesheet-mask"]',
+            ];
+            for (const sel of maskSelectors) {
+              const el = document.querySelector(sel) as HTMLElement | null;
+              if (el) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 50 && rect.height > 50) {
+                  return true;
+                }
+              }
             }
-          }
+            return false;
+          }, { reason: '检测抽屉遮罩层', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const maskSelectors = [
+              '.douyin-creator-interactive-sidesheet-mask',
+              '[class*="semi-sidesheet-mask"]',
+              '[class*="drawer-mask"]',
+              '[class*="sidesheet-mask"]',
+            ];
+            for (const sel of maskSelectors) {
+              const el = document.querySelector(sel) as HTMLElement | null;
+              if (el) {
+                const rect = el.getBoundingClientRect();
+                if (rect.width > 50 && rect.height > 50) {
+                  return true;
+                }
+              }
+            }
+            return false;
+          });
         }
-        return false;
-      });
+      })();
       if (hasMask) {
         logger.info('Drawer detected: mask element visible');
         return true;
@@ -2762,17 +2919,33 @@ export class DouyinCrawler {
       }
 
       // 最终回退：检查 body 是否有 overflow:hidden（抽屉打开时 body 会被锁定）
-      const bodyOverflow = await page.evaluate(() => {
-        const body = document.body;
-        const style = body?.getAttribute('style') || '';
-        return style.includes('overflow: hidden') || style.includes('overflow:hidden');
-      });
+      const bodyOverflow = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const body = document.body;
+            const style = body?.getAttribute('style') || '';
+            return style.includes('overflow: hidden') || style.includes('overflow:hidden');
+          }, { reason: '检查 body overflow 状态', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const body = document.body;
+            const style = body?.getAttribute('style') || '';
+            return style.includes('overflow: hidden') || style.includes('overflow:hidden');
+          });
+        }
+      })();
       if (bodyOverflow) {
         // body 被锁定但需要排除正常页面滚动锁定
         // 检查是否有 video-info 元素（抽屉内特有）
-        const hasVideoInfo = await page.evaluate(() => {
-          return document.querySelectorAll('.video-info, [class*="douyin-creator-interactive-list-items"] > div').length > 0;
-        });
+        const hasVideoInfo = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.exists(page, '.video-info, [class*="douyin-creator-interactive-list-items"] > div');
+          } else {
+            return page.evaluate(() => {
+              return document.querySelectorAll('.video-info, [class*="douyin-creator-interactive-list-items"] > div').length > 0;
+            });
+          }
+        })();
         if (hasVideoInfo) {
           logger.info('Drawer detected: body locked + video items present');
           return true;
@@ -2785,11 +2958,16 @@ export class DouyinCrawler {
         // 改用抽屉内特有的视频条目文本（"发布于" + "评论数" 同时出现说明是抽屉视频列表）
         if (bodyText.includes('发布于') && bodyText.includes('评论数') && bodyText.includes('选择作品')) {
           // 额外检查：主页面评论区通常不会有"发布于"文字，只有抽屉视频列表才有
-          const hasDrawerVideoItems = await page.evaluate(() => {
-            // 检查是否有抽屉特有的视频条目（非主页面内容）
-            const items = document.querySelectorAll('[class*="video-item"], [class*="douyin-creator-interactive-list-items"] > div, [class*="work-item"]');
-            return items.length > 0;
-          });
+          const hasDrawerVideoItems = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.exists(page, '[class*="video-item"], [class*="douyin-creator-interactive-list-items"] > div, [class*="work-item"]');
+            } else {
+              return page.evaluate(() => {
+                const items = document.querySelectorAll('[class*="video-item"], [class*="douyin-creator-interactive-list-items"] > div, [class*="work-item"]');
+                return items.length > 0;
+              });
+            }
+          })();
           if (hasDrawerVideoItems) {
             logger.info('Drawer content detected via body text + video items');
             return true;
@@ -2813,21 +2991,39 @@ export class DouyinCrawler {
     const start = Date.now();
 
     while (Date.now() - start < maxWait) {
-      const hasContent = await page.evaluate(() => {
-        // Check for any video item containers in the drawer
-        const selectors = [
-          '[class*="douyin-creator-interactive-list-items"] > div',
-          '[class*="video-item"]',
-          '[class*="work-item"]',
-          '[class*="content-item"]',
-          '.video-info',
-        ];
-        for (const sel of selectors) {
-          const els = document.querySelectorAll(sel);
-          if (els.length > 0) return true;
+      const hasContent = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const selectors = [
+              '[class*="douyin-creator-interactive-list-items"] > div',
+              '[class*="video-item"]',
+              '[class*="work-item"]',
+              '[class*="content-item"]',
+              '.video-info',
+            ];
+            for (const sel of selectors) {
+              const els = document.querySelectorAll(sel);
+              if (els.length > 0) return true;
+            }
+            return false;
+          }, { reason: '等待抽屉内容加载', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const selectors = [
+              '[class*="douyin-creator-interactive-list-items"] > div',
+              '[class*="video-item"]',
+              '[class*="work-item"]',
+              '[class*="content-item"]',
+              '.video-info',
+            ];
+            for (const sel of selectors) {
+              const els = document.querySelectorAll(sel);
+              if (els.length > 0) return true;
+            }
+            return false;
+          });
         }
-        return false;
-      });
+      })();
 
       if (hasContent) {
         logger.info({ elapsed: Date.now() - start }, '[Drawer] Video items detected in drawer');
@@ -2937,13 +3133,25 @@ export class DouyinCrawler {
         // 因此需要 2 次连续无增长 + 哨兵确认，才判定真正耗尽。
         if (count === lastContainerCount) {
           noGrowthRounds++;
-          const exhausted = await page.evaluate(() => {
-            const els = document.querySelectorAll('[class*="loading"]');
-            for (const el of els) {
-              if (el.textContent?.includes('没有更多视频')) return true;
+          const exhausted = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, () => {
+                const els = document.querySelectorAll('[class*="loading"]');
+                for (const el of els) {
+                  if (el.textContent?.includes('没有更多视频')) return true;
+                }
+                return false;
+              }, { reason: '检测是否已无更多视频', world: 'main' }).catch(() => false);
+            } else {
+              return page.evaluate(() => {
+                const els = document.querySelectorAll('[class*="loading"]');
+                for (const el of els) {
+                  if (el.textContent?.includes('没有更多视频')) return true;
+                }
+                return false;
+              }).catch(() => false);
             }
-            return false;
-          }).catch(() => false);
+          })();
           if (noGrowthRounds >= 2 && exhausted) {
             logger.info({ scrollAttempt, count }, '[Drawer] 滚动后无新视频且哨兵确认耗尽 — 停止');
             break;
@@ -3011,46 +3219,83 @@ export class DouyinCrawler {
       await HumanActions.wait(page, 500, 1000);
 
       // 从 DOM 中提取所有视频的评论数
-      const videoItems = await page.evaluate(() => {
-        const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
-        const results: Array<{ id: string; commentCount: number }> = [];
+      const videoItems = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
+            const results: Array<{ id: string; commentCount: number }> = [];
 
-        for (const item of items) {
-          const text = item.textContent || '';
+            for (const item of items) {
+              const text = item.textContent || '';
 
-          // 提取评论数：匹配"评论数: 123"或"评论数123"格式
-          const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
-          if (!commentMatch) continue;
+              const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
+              if (!commentMatch) continue;
 
-          const commentCount = parseInt(commentMatch[1], 10);
+              const commentCount = parseInt(commentMatch[1], 10);
 
-          // 尝试从链接或属性中提取视频 ID
-          const link = item.querySelector('a[href*="aweme_id"]') as HTMLAnchorElement;
-          let awemeId = '';
+              const link = item.querySelector('a[href*="aweme_id"]') as HTMLAnchorElement;
+              let awemeId = '';
 
-          if (link) {
-            const hrefMatch = link.href.match(/aweme_id=(\d+)/);
-            if (hrefMatch) awemeId = hrefMatch[1];
-          }
+              if (link) {
+                const hrefMatch = link.href.match(/aweme_id=(\d+)/);
+                if (hrefMatch) awemeId = hrefMatch[1];
+              }
 
-          // 回退：从 data 属性中提取
-          if (!awemeId) {
-            awemeId = item.getAttribute('data-aweme-id') || item.getAttribute('data-id') || '';
-          }
+              if (!awemeId) {
+                awemeId = item.getAttribute('data-aweme-id') || item.getAttribute('data-id') || '';
+              }
 
-          // 回退：从文本中提取（某些情况下 ID 可能在文本中）
-          if (!awemeId) {
-            const idMatch = text.match(/(\d{19})/); // 抖音 ID 通常是 19 位
-            if (idMatch) awemeId = idMatch[1];
-          }
+              if (!awemeId) {
+                const idMatch = text.match(/(\d{19})/);
+                if (idMatch) awemeId = idMatch[1];
+              }
 
-          if (awemeId && commentCount >= 0) {
-            results.push({ id: awemeId, commentCount });
-          }
+              if (awemeId && commentCount >= 0) {
+                results.push({ id: awemeId, commentCount });
+              }
+            }
+
+            return results;
+          }, { reason: '从抽屉 DOM 提取视频评论数', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
+            const results: Array<{ id: string; commentCount: number }> = [];
+
+            for (const item of items) {
+              const text = item.textContent || '';
+
+              const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
+              if (!commentMatch) continue;
+
+              const commentCount = parseInt(commentMatch[1], 10);
+
+              const link = item.querySelector('a[href*="aweme_id"]') as HTMLAnchorElement;
+              let awemeId = '';
+
+              if (link) {
+                const hrefMatch = link.href.match(/aweme_id=(\d+)/);
+                if (hrefMatch) awemeId = hrefMatch[1];
+              }
+
+              if (!awemeId) {
+                awemeId = item.getAttribute('data-aweme-id') || item.getAttribute('data-id') || '';
+              }
+
+              if (!awemeId) {
+                const idMatch = text.match(/(\d{19})/);
+                if (idMatch) awemeId = idMatch[1];
+              }
+
+              if (awemeId && commentCount >= 0) {
+                results.push({ id: awemeId, commentCount });
+              }
+            }
+
+            return results;
+          });
         }
-
-        return results;
-      });
+      })();
 
       if (videoItems && videoItems.length > 0) {
         logger.info({ count: videoItems.length }, '[Douyin-Drawer] Extracted comment counts from drawer DOM');
@@ -3157,13 +3402,23 @@ export class DouyinCrawler {
    */
   private async injectEsbuildPolyfill(page: Page): Promise<void> {
     try {
-      await page.evaluate(() => {
-        // @ts-ignore: 故意挂在 window 上
-        if (typeof (window as any).__name === 'undefined') {
-          (window as any).__name = (target: any, value: string) =>
-            Object.defineProperty(target, 'name', { value, configurable: true });
-        }
-      });
+      if (isAntiDetectionV2()) {
+        await HumanActions.safeEvaluate(page, () => {
+          // @ts-ignore: 故意挂在 window 上
+          if (typeof (window as any).__name === 'undefined') {
+            (window as any).__name = (target: any, value: string) =>
+              Object.defineProperty(target, 'name', { value, configurable: true });
+          }
+        }, { reason: '注入 esbuild __name polyfill', world: 'main' });
+      } else {
+        await page.evaluate(() => {
+          // @ts-ignore: 故意挂在 window 上
+          if (typeof (window as any).__name === 'undefined') {
+            (window as any).__name = (target: any, value: string) =>
+              Object.defineProperty(target, 'name', { value, configurable: true });
+          }
+        });
+      }
     } catch {
       // 注入失败不影响主流程
     }
@@ -3176,29 +3431,53 @@ export class DouyinCrawler {
    */
   private async clickExpandButton(page: Page): Promise<string | null> {
     await this.injectEsbuildPolyfill(page);
-    const btnPos = await page.evaluate(() => {
-      const viewportH = window.innerHeight;
-      const all = Array.from(document.querySelectorAll('*'));
-      for (const el of all) {
-        const t = (el.textContent || '').trim();
-        if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-        const isLeaf = !Array.from(el.children).some(child =>
-          /^查看\d+条回复$/.test((child.textContent || '').trim())
-        );
-        if (!isLeaf) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-        // 如果不在视口内，先 scrollIntoView → 重新获取坐标
-        if (rect.top < 0 || rect.bottom > viewportH) {
-          el.scrollIntoView({ behavior: 'instant', block: 'center' });
-          // scrollIntoView 是同步的，重新获取 rect
-          const newRect = el.getBoundingClientRect();
-          return { x: Math.round(newRect.left + newRect.width / 2), y: Math.round(newRect.top + newRect.height / 2), text: t };
-        }
-        return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), text: t };
+    const btnPos = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, () => {
+          const viewportH = window.innerHeight;
+          const all = Array.from(document.querySelectorAll('*'));
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            if (rect.top < 0 || rect.bottom > viewportH) {
+              el.scrollIntoView({ behavior: 'instant', block: 'center' });
+              const newRect = el.getBoundingClientRect();
+              return { x: Math.round(newRect.left + newRect.width / 2), y: Math.round(newRect.top + newRect.height / 2), text: t };
+            }
+            return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), text: t };
+          }
+          return null;
+        }, { reason: '定位展开按钮坐标', world: 'main' });
+      } else {
+        return page.evaluate(() => {
+          const viewportH = window.innerHeight;
+          const all = Array.from(document.querySelectorAll('*'));
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) continue;
+            if (rect.top < 0 || rect.bottom > viewportH) {
+              el.scrollIntoView({ behavior: 'instant', block: 'center' });
+              const newRect = el.getBoundingClientRect();
+              return { x: Math.round(newRect.left + newRect.width / 2), y: Math.round(newRect.top + newRect.height / 2), text: t };
+            }
+            return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2), text: t };
+          }
+          return null;
+        });
       }
-      return null;
-    });
+    })();
 
     if (!btnPos) return null;
 
@@ -3338,35 +3617,63 @@ export class DouyinCrawler {
 
     // 预扫描：检查是否有展开按钮被隐藏在视窗外
     // 如果有，通过 cdpSmartScroll 滚动评论区域将按钮带到可见位置
-    const preScrollResult = await page.evaluate(() => {
-      const viewportH = window.innerHeight;
-      const all = Array.from(document.querySelectorAll('*'));
-      const hiddenButtons: Array<{ top: number; bottom: number }> = [];
-      for (const el of all) {
-        const t = (el.textContent || '').trim();
-        if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-        const isLeaf = !Array.from(el.children).some(child =>
-          /^查看\d+条回复$/.test((child.textContent || '').trim())
-        );
-        if (!isLeaf) continue;
-        const rect = el.getBoundingClientRect();
-        if (rect.bottom > viewportH || rect.top < 0) {
-          hiddenButtons.push({ top: Math.round(rect.top), bottom: Math.round(rect.bottom) });
-        }
+    const preScrollResult = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, () => {
+          const viewportH = window.innerHeight;
+          const all = Array.from(document.querySelectorAll('*'));
+          const hiddenButtons: Array<{ top: number; bottom: number }> = [];
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom > viewportH || rect.top < 0) {
+              hiddenButtons.push({ top: Math.round(rect.top), bottom: Math.round(rect.bottom) });
+            }
+          }
+          if (hiddenButtons.length > 0) {
+            const maxBottom = Math.max(...hiddenButtons.map(b => b.bottom));
+            const minTop = Math.min(...hiddenButtons.map(b => b.top));
+            const scrollNeeded = maxBottom > viewportH
+              ? maxBottom - viewportH + 150
+              : minTop - 150;
+            return { found: true, count: hiddenButtons.length, scrollNeeded };
+          }
+          return { found: false };
+        }, { reason: '预扫描隐藏展开按钮', world: 'main' });
+      } else {
+        return page.evaluate(() => {
+          const viewportH = window.innerHeight;
+          const all = Array.from(document.querySelectorAll('*'));
+          const hiddenButtons: Array<{ top: number; bottom: number }> = [];
+          for (const el of all) {
+            const t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+            const isLeaf = !Array.from(el.children).some(child =>
+              /^查看\d+条回复$/.test((child.textContent || '').trim())
+            );
+            if (!isLeaf) continue;
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom > viewportH || rect.top < 0) {
+              hiddenButtons.push({ top: Math.round(rect.top), bottom: Math.round(rect.bottom) });
+            }
+          }
+          if (hiddenButtons.length > 0) {
+            const maxBottom = Math.max(...hiddenButtons.map(b => b.bottom));
+            const minTop = Math.min(...hiddenButtons.map(b => b.top));
+            const scrollNeeded = maxBottom > viewportH
+              ? maxBottom - viewportH + 150
+              : minTop - 150;
+            return { found: true, count: hiddenButtons.length, scrollNeeded };
+          }
+          return { found: false };
+        });
       }
-      if (hiddenButtons.length > 0) {
-        // 找到最下方的隐藏按钮，计算需要滚动的距离
-        const maxBottom = Math.max(...hiddenButtons.map(b => b.bottom));
-        const minTop = Math.min(...hiddenButtons.map(b => b.top));
-        // 如果按钮在视窗下方，滚动距离 = 按钮底部 - 视窗高度 + 余量
-        // 如果按钮在视窗上方（已滚过头），滚动距离 = 按钮顶部 - 余量（负值=向上滚）
-        const scrollNeeded = maxBottom > viewportH
-          ? maxBottom - viewportH + 150  // 向下滚
-          : minTop - 150;                 // 向上滚（负值）
-        return { found: true, count: hiddenButtons.length, scrollNeeded };
-      }
-      return { found: false };
-    });
+    })();
 
     if (preScrollResult.found && preScrollResult.scrollNeeded) {
       const scrollPx = preScrollResult.scrollNeeded;
@@ -3385,52 +3692,93 @@ export class DouyinCrawler {
       let expandClicked = 0;
       for (let expandRound = 0; expandRound < MAX_EXPAND_ROUNDS; expandRound++) {
         // 诊断：统计所有"查看N条回复"按钮的匹配和过滤情况（只读）
-        const expandResult = await page.evaluate(() => {
-          const viewportH = window.innerHeight;
+        const expandResult = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.safeEvaluate(page, () => {
+              const viewportH = window.innerHeight;
 
-          // 找到评论滚动容器
-          const scrollContainer = (
-            document.querySelector('.douyin-creator-interactive-tabs-content') ||
-            document.querySelector('[class*="tabs-pane-active"]')
-          ) as HTMLElement | null;
-          const containerRect = scrollContainer?.getBoundingClientRect();
+              const scrollContainer = (
+                document.querySelector('.douyin-creator-interactive-tabs-content') ||
+                document.querySelector('[class*="tabs-pane-active"]')
+              ) as HTMLElement | null;
+              const containerRect = scrollContainer?.getBoundingClientRect();
 
-          // Diagnostic: count ALL text matches and track why they're filtered
-          let totalMatches = 0;
-          let leafMatches = 0;
-          let viewportFiltered = 0;
-          let containerFiltered = 0;
-          const diagnostics: Array<{ text: string; top: number; bottom: number; containerTop: number; containerBottom: number; reason: string }> = [];
+              let totalMatches = 0;
+              let leafMatches = 0;
+              let viewportFiltered = 0;
+              let containerFiltered = 0;
+              const diagnostics: Array<{ text: string; top: number; bottom: number; containerTop: number; containerBottom: number; reason: string }> = [];
 
-          const all = Array.from(document.querySelectorAll('*'));
-          for (const el of all) {
-            const t = (el.textContent || '').trim();
-            // 匹配"查看N条回复"格式
-            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-            totalMatches++;
+              const all = Array.from(document.querySelectorAll('*'));
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                totalMatches++;
 
-            // 检查是否是叶子元素（避免重复点击父容器）
-            const isLeaf = !Array.from(el.children).some(child =>
-              /^查看\d+条回复$/.test((child.textContent || '').trim())
-            );
-            if (!isLeaf) continue;
-            leafMatches++;
+                const isLeaf = !Array.from(el.children).some(child =>
+                  /^查看\d+条回复$/.test((child.textContent || '').trim())
+                );
+                if (!isLeaf) continue;
+                leafMatches++;
 
-            // 检查元素是否在视窗内 且 在滚动容器的可见区域内
-            const rect = el.getBoundingClientRect();
-            if (rect.top < 0 || rect.bottom > viewportH) {
-              viewportFiltered++;
-              diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: containerRect ? Math.round(containerRect.top) : -1, containerBottom: containerRect ? Math.round(containerRect.bottom) : -1, reason: 'viewport' });
-              continue;
-            }
-            if (containerRect && (rect.top < containerRect.top || rect.bottom > containerRect.bottom)) {
-              containerFiltered++;
-              diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: Math.round(containerRect.top), containerBottom: Math.round(containerRect.bottom), reason: 'container' });
-              continue;
-            }
+                const rect = el.getBoundingClientRect();
+                if (rect.top < 0 || rect.bottom > viewportH) {
+                  viewportFiltered++;
+                  diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: containerRect ? Math.round(containerRect.top) : -1, containerBottom: containerRect ? Math.round(containerRect.bottom) : -1, reason: 'viewport' });
+                  continue;
+                }
+                if (containerRect && (rect.top < containerRect.top || rect.bottom > containerRect.bottom)) {
+                  containerFiltered++;
+                  diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: Math.round(containerRect.top), containerBottom: Math.round(containerRect.bottom), reason: 'container' });
+                  continue;
+                }
+              }
+              return { totalMatches, leafMatches, viewportFiltered, containerFiltered, diagnostics };
+            }, { reason: '诊断展开按钮状态', world: 'main' });
+          } else {
+            return page.evaluate(() => {
+              const viewportH = window.innerHeight;
+
+              const scrollContainer = (
+                document.querySelector('.douyin-creator-interactive-tabs-content') ||
+                document.querySelector('[class*="tabs-pane-active"]')
+              ) as HTMLElement | null;
+              const containerRect = scrollContainer?.getBoundingClientRect();
+
+              let totalMatches = 0;
+              let leafMatches = 0;
+              let viewportFiltered = 0;
+              let containerFiltered = 0;
+              const diagnostics: Array<{ text: string; top: number; bottom: number; containerTop: number; containerBottom: number; reason: string }> = [];
+
+              const all = Array.from(document.querySelectorAll('*'));
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                totalMatches++;
+
+                const isLeaf = !Array.from(el.children).some(child =>
+                  /^查看\d+条回复$/.test((child.textContent || '').trim())
+                );
+                if (!isLeaf) continue;
+                leafMatches++;
+
+                const rect = el.getBoundingClientRect();
+                if (rect.top < 0 || rect.bottom > viewportH) {
+                  viewportFiltered++;
+                  diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: containerRect ? Math.round(containerRect.top) : -1, containerBottom: containerRect ? Math.round(containerRect.bottom) : -1, reason: 'viewport' });
+                  continue;
+                }
+                if (containerRect && (rect.top < containerRect.top || rect.bottom > containerRect.bottom)) {
+                  containerFiltered++;
+                  diagnostics.push({ text: t, top: Math.round(rect.top), bottom: Math.round(rect.bottom), containerTop: Math.round(containerRect.top), containerBottom: Math.round(containerRect.bottom), reason: 'container' });
+                  continue;
+                }
+              }
+              return { totalMatches, leafMatches, viewportFiltered, containerFiltered, diagnostics };
+            });
           }
-          return { totalMatches, leafMatches, viewportFiltered, containerFiltered, diagnostics };
-        });
+        })();
 
         // Log diagnostics for debugging expand button detection
         if (expandRound === 0 && expandResult.totalMatches > 0) {
@@ -3448,27 +3796,53 @@ export class DouyinCrawler {
 
         // 用 page.evaluate 找到视口内展开按钮的坐标，再用 CDP 鼠标点击
         let clicked = 0;
-        const btnPos = await page.evaluate(() => {
-          const viewportH = window.innerHeight;
-          const all = Array.from(document.querySelectorAll('*'));
-          for (const el of all) {
-            const t = (el.textContent || '').trim();
-            if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-            const isLeaf = !Array.from(el.children).some(child =>
-              /^查看\d+条回复$/.test((child.textContent || '').trim())
-            );
-            if (!isLeaf) continue;
-            const rect = el.getBoundingClientRect();
-            if (rect.top >= 0 && rect.bottom <= viewportH && rect.width > 0 && rect.height > 0) {
-              return {
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                text: t,
-              };
-            }
+        const btnPos = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.safeEvaluate(page, () => {
+              const viewportH = window.innerHeight;
+              const all = Array.from(document.querySelectorAll('*'));
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                const isLeaf = !Array.from(el.children).some(child =>
+                  /^查看\d+条回复$/.test((child.textContent || '').trim())
+                );
+                if (!isLeaf) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.top >= 0 && rect.bottom <= viewportH && rect.width > 0 && rect.height > 0) {
+                  return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    text: t,
+                  };
+                }
+              }
+              return null;
+            }, { reason: '定位视口内展开按钮', world: 'main' });
+          } else {
+            return page.evaluate(() => {
+              const viewportH = window.innerHeight;
+              const all = Array.from(document.querySelectorAll('*'));
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                const isLeaf = !Array.from(el.children).some(child =>
+                  /^查看\d+条回复$/.test((child.textContent || '').trim())
+                );
+                if (!isLeaf) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.top >= 0 && rect.bottom <= viewportH && rect.width > 0 && rect.height > 0) {
+                  return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                    text: t,
+                  };
+                }
+              }
+              return null;
+            });
           }
-          return null;
-        });
+        })();
 
         if (btnPos) {
           // CDP 鼠标点击：先 hover 到按钮 → 等待 → 点击
@@ -3496,18 +3870,35 @@ export class DouyinCrawler {
         // ════════════════════════════════════════
         for (let loadMore = 0; loadMore < MAX_LOAD_MORE_PER_ROOT; loadMore++) {
           // 先检查是否有展开按钮存在（只读）
-          const hasMoreBtn = await page.evaluate(() => {
-            const all = Array.from(document.querySelectorAll('*'));
-            for (const el of all) {
-              const t = (el.textContent || '').trim();
-              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-              const isLeaf = !Array.from(el.children).some(child =>
-                /^查看\d+条回复$/.test((child.textContent || '').trim())
-              );
-              if (isLeaf) return true;
+          const hasMoreBtn = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, () => {
+                const all = Array.from(document.querySelectorAll('*'));
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  if (isLeaf) return true;
+                }
+                return false;
+              }, { reason: '检查展开按钮是否存在', world: 'main' });
+            } else {
+              return page.evaluate(() => {
+                const all = Array.from(document.querySelectorAll('*'));
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  if (isLeaf) return true;
+                }
+                return false;
+              });
             }
-            return false;
-          });
+          })();
 
           if (!hasMoreBtn) break;
 
@@ -3528,10 +3919,19 @@ export class DouyinCrawler {
       // ════════════════════════════════════════
       // 阶段3：滚动评论区加载更多内容
       // ════════════════════════════════════════
-      const scrollHeight = await page.evaluate(() => {
-        const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
-        return container ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop, clientHeight: container.clientHeight } : null;
-      });
+      const scrollHeight = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
+            return container ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop, clientHeight: container.clientHeight } : null;
+          }, { reason: '读取评论区滚动高度', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
+            return container ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop, clientHeight: container.clientHeight } : null;
+          });
+        }
+      })();
 
       if (!scrollHeight) {
         logger.warn({ awemeId }, '[SmartScroll] Comment container not found, stopping');
@@ -3546,17 +3946,33 @@ export class DouyinCrawler {
         if (scrollRound === 0 && result.totalExpanded === 0) {
           // 第一轮就到底了且没有展开按钮 — 可能是按钮在折叠区域
           // 检查DOM中是否有未展开的按钮（不管是否在可视区域）
-          const hiddenBtnCount = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll('*')).filter(el => {
-              const t = (el.textContent || '').trim();
-              if (!/^查看\d+条回复$/.test(t)) return false;
-              if (!(el instanceof HTMLElement)) return false;
-              const isLeaf = !Array.from(el.children).some(child =>
-                /^查看\d+条回复$/.test((child.textContent || '').trim())
-              );
-              return isLeaf;
-            }).length;
-          });
+          const hiddenBtnCount = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, () => {
+                return Array.from(document.querySelectorAll('*')).filter(el => {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t)) return false;
+                  if (!(el instanceof HTMLElement)) return false;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  return isLeaf;
+                }).length;
+              }, { reason: '统计隐藏展开按钮数', world: 'main' });
+            } else {
+              return page.evaluate(() => {
+                return Array.from(document.querySelectorAll('*')).filter(el => {
+                  const t = (el.textContent || '').trim();
+                  if (!/^查看\d+条回复$/.test(t)) return false;
+                  if (!(el instanceof HTMLElement)) return false;
+                  const isLeaf = !Array.from(el.children).some(child =>
+                    /^查看\d+条回复$/.test((child.textContent || '').trim())
+                  );
+                  return isLeaf;
+                }).length;
+              });
+            }
+          })();
           if (hiddenBtnCount > 0) {
             logger.info({ awemeId, hiddenBtnCount }, '[SmartScroll] Hidden expand buttons found, scrolling to reveal');
             // 滚动到评论区域中间位置来揭示隐藏的按钮
@@ -3575,38 +3991,77 @@ export class DouyinCrawler {
       await HumanActions.wait(page, 1000, 1500);
 
       // 记录当前页面评论数（用于诊断）
-      const currentCids = await page.evaluate(() => {
-        const containers = document.querySelectorAll('[data-cid]');
-        return Array.from(containers).map(el => el.getAttribute('data-cid')).filter(Boolean) as string[];
-      });
+      const currentCids = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const containers = document.querySelectorAll('[data-cid]');
+            return Array.from(containers).map(el => el.getAttribute('data-cid')).filter(Boolean) as string[];
+          }, { reason: '记录当前页面评论 CID', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const containers = document.querySelectorAll('[data-cid]');
+            return Array.from(containers).map(el => el.getAttribute('data-cid')).filter(Boolean) as string[];
+          });
+        }
+      })();
       currentCids.forEach(cid => processedCids.add(cid));
 
       // 记录本轮结束后仍有展开按钮的 cid（这些下一轮仍可展开）
-      const remainingExpandCids = await page.evaluate(() => {
-        const expandable: string[] = [];
-        const all = document.querySelectorAll('*');
-        for (const el of all) {
-          const t = (el.textContent || '').trim();
-          if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
-          const isLeaf = !Array.from(el.children).some(child =>
-            /^查看\d+条回复$/.test((child.textContent || '').trim())
-          );
-          if (!isLeaf) continue;
-          const parent = el.closest('[data-cid]');
-          const cid = parent?.getAttribute('data-cid');
-          if (cid) expandable.push(cid);
+      const remainingExpandCids = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, () => {
+            const expandable: string[] = [];
+            const all = document.querySelectorAll('*');
+            for (const el of all) {
+              const t = (el.textContent || '').trim();
+              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+              const isLeaf = !Array.from(el.children).some(child =>
+                /^查看\d+条回复$/.test((child.textContent || '').trim())
+              );
+              if (!isLeaf) continue;
+              const parent = el.closest('[data-cid]');
+              const cid = parent?.getAttribute('data-cid');
+              if (cid) expandable.push(cid);
+            }
+            return [...new Set(expandable)];
+          }, { reason: '记录仍有展开按钮的 CID', world: 'main' });
+        } else {
+          return page.evaluate(() => {
+            const expandable: string[] = [];
+            const all = document.querySelectorAll('*');
+            for (const el of all) {
+              const t = (el.textContent || '').trim();
+              if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
+              const isLeaf = !Array.from(el.children).some(child =>
+                /^查看\d+条回复$/.test((child.textContent || '').trim())
+              );
+              if (!isLeaf) continue;
+              const parent = el.closest('[data-cid]');
+              const cid = parent?.getAttribute('data-cid');
+              if (cid) expandable.push(cid);
+            }
+            return [...new Set(expandable)];
+          });
         }
-        return [...new Set(expandable)];
-      });
+      })();
 
       logger.info({ awemeId, scrollRound: scrollRound + 1, expandClicked, totalCids: processedCids.size, remainingExpandable: remainingExpandCids.length, remainingCids: remainingExpandCids }, '[SmartScroll] Scroll round complete');
     }
 
     // 最终记录
-    const finalCids = await page.evaluate(() => {
-      const containers = document.querySelectorAll('[data-cid]');
-      return containers.length;
-    });
+    const finalCids = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, () => {
+          const containers = document.querySelectorAll('[data-cid]');
+          return containers.length;
+        }, { reason: '统计最终评论数', world: 'main' });
+      } else {
+        return page.evaluate(() => {
+          const containers = document.querySelectorAll('[data-cid]');
+          return containers.length;
+        });
+      }
+    })();
 
     logger.info({
       awemeId,
@@ -3780,22 +4235,43 @@ export class DouyinCrawler {
       await snap('hover_target', { x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) });
 
       // ── 3. 点击"回复"按钮（用 page.evaluate 找到距离 foundCoords 最近的文本为"回复"的按钮）──
-      const clicked = await page.evaluate(function(coords) {
-        var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-        var best = null;
-        var bestDist = Infinity;
-        for (var i = 0; i < items.length; i++) {
-          var t = (items[i].textContent || '').trim();
-          if (t !== '回复') continue;
-          var r = items[i].getBoundingClientRect();
-          if (r.width === 0 || r.height === 0) continue;
-          var cx = r.left + r.width / 2;
-          var cy = r.top + r.height / 2;
-          var d = Math.hypot(cx - coords.x, cy - coords.y);
-          if (d < bestDist) { bestDist = d; best = { x: Math.round(cx), y: Math.round(cy) }; }
+      const clicked = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+            var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+            var best = null;
+            var bestDist = Infinity;
+            for (var i = 0; i < items.length; i++) {
+              var t = (items[i].textContent || '').trim();
+              if (t !== '回复') continue;
+              var r = items[i].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              var cx = r.left + r.width / 2;
+              var cy = r.top + r.height / 2;
+              var d = Math.hypot(cx - coords.x, cy - coords.y);
+              if (d < bestDist) { bestDist = d; best = { x: Math.round(cx), y: Math.round(cy) }; }
+            }
+            return best;
+          }, { reason: '定位回复按钮坐标', world: 'main', args: [foundCoords] });
+        } else {
+          return page.evaluate(function(coords) {
+            var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+            var best = null;
+            var bestDist = Infinity;
+            for (var i = 0; i < items.length; i++) {
+              var t = (items[i].textContent || '').trim();
+              if (t !== '回复') continue;
+              var r = items[i].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              var cx = r.left + r.width / 2;
+              var cy = r.top + r.height / 2;
+              var d = Math.hypot(cx - coords.x, cy - coords.y);
+              if (d < bestDist) { bestDist = d; best = { x: Math.round(cx), y: Math.round(cy) }; }
+            }
+            return best;
+          }, foundCoords);
         }
-        return best;
-      }, foundCoords);
+      })();
       if (!clicked) {
         logger.warn('[Reply] 回复按钮不在视口中');
         // 回退：直接用坐标点击
@@ -3815,78 +4291,148 @@ export class DouyinCrawler {
       // ── 4. 立即点击 contenteditable（输入框短暂出现后会消失）──
       await HumanActions.wait(page, 300, 600);
       const btnCoords = clicked || { x: foundCoords.x, y: foundCoords.y };
-      let inputClicked = await page.evaluate(function(params: {btnX: number; btnY: number}) {
-        function findReplyBtn(): Element | null {
-          var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-          var best: Element | null = null, bestDist = Infinity;
-          for (var i = 0; i < items.length; i++) {
-            if ((items[i].textContent || '').trim() !== '回复') continue;
-            var r = items[i].getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-            var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-            if (d < bestDist) { bestDist = d; best = items[i]; }
-          }
-          return best;
-        }
-        function findFirstAfter(referenceEl: Element, candidates: NodeListOf<Element>): Element | null {
-          for (var i = 0; i < candidates.length; i++) {
-            var el = candidates[i];
-            var r = el.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var rel = referenceEl.compareDocumentPosition(el);
-            // ★ Bugfix: FOLLOWING(4) = other 节点在 reference 之后
-            // 之前误用 PRECEDING(2) = other 节点在 reference 之前，导致总是返回根评论 panel
-            if (rel & Node.DOCUMENT_POSITION_FOLLOWING) {
-              return el;
+      let inputClicked = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+            function findReplyBtn(): Element | null {
+              var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+              var best: Element | null = null, bestDist = Infinity;
+              for (var i = 0; i < items.length; i++) {
+                if ((items[i].textContent || '').trim() !== '回复') continue;
+                var r = items[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                var d = Math.hypot(cx - coords.x, cy - coords.y);
+                if (d < bestDist) { bestDist = d; best = items[i]; }
+              }
+              return best;
             }
-          }
-          return null;
-        }
+            function findFirstAfter(referenceEl: Element, candidates: NodeListOf<Element>): Element | null {
+              for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                var r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var rel = referenceEl.compareDocumentPosition(el);
+                if (rel & Node.DOCUMENT_POSITION_FOLLOWING) {
+                  return el;
+                }
+              }
+              return null;
+            }
 
-        var replyBtn = findReplyBtn();
-        if (replyBtn) {
-          // 优先 1：在 reply-content- 容器内找 input（该容器必须在按钮之后）
-          var replyContentEls = document.querySelectorAll('[class*="reply-content-"]');
-          for (var i = 0; i < replyContentEls.length; i++) {
-            var p = replyContentEls[i];
-            var r = p.getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var rel = replyBtn.compareDocumentPosition(p);
-            // ★ Bugfix: FOLLOWING(4) = p 在 replyBtn 之后（PRECEDING(2) 才是之前）
-            if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-            var input = p.querySelector('[class*="input-"][contenteditable="true"]');
-            if (input && (input as any).getBoundingClientRect().width > 0) {
-              (input as any).focus();
-              (input as any).click();
-              return true;
+            var replyBtn = findReplyBtn();
+            if (replyBtn) {
+              var replyContentEls = document.querySelectorAll('[class*="reply-content-"]');
+              for (var i = 0; i < replyContentEls.length; i++) {
+                var p = replyContentEls[i];
+                var r = p.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var rel = replyBtn.compareDocumentPosition(p);
+                if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                var input = p.querySelector('[class*="input-"][contenteditable="true"]');
+                if (input && (input as any).getBoundingClientRect().width > 0) {
+                  (input as any).focus();
+                  (input as any).click();
+                  return true;
+                }
+              }
+              var allInputs = document.querySelectorAll('div[class*="input-"][contenteditable="true"]');
+              var foundInput = findFirstAfter(replyBtn, allInputs);
+              if (foundInput) {
+                (foundInput as any).focus();
+                (foundInput as any).click();
+                return true;
+              }
             }
-          }
-          // 优先 2：直接在按钮后找 input
-          var allInputs = document.querySelectorAll('div[class*="input-"][contenteditable="true"]');
-          var foundInput = findFirstAfter(replyBtn, allInputs);
-          if (foundInput) {
-            (foundInput as any).focus();
-            (foundInput as any).click();
-            return true;
-          }
+            return false;
+          }, { reason: '定位并点击回复输入框', world: 'main', args: [btnCoords] });
+        } else {
+          return page.evaluate(function(params: {btnX: number; btnY: number}) {
+            function findReplyBtn(): Element | null {
+              var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+              var best: Element | null = null, bestDist = Infinity;
+              for (var i = 0; i < items.length; i++) {
+                if ((items[i].textContent || '').trim() !== '回复') continue;
+                var r = items[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                var d = Math.hypot(cx - params.btnX, cy - params.btnY);
+                if (d < bestDist) { bestDist = d; best = items[i]; }
+              }
+              return best;
+            }
+            function findFirstAfter(referenceEl: Element, candidates: NodeListOf<Element>): Element | null {
+              for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                var r = el.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var rel = referenceEl.compareDocumentPosition(el);
+                if (rel & Node.DOCUMENT_POSITION_FOLLOWING) {
+                  return el;
+                }
+              }
+              return null;
+            }
+
+            var replyBtn = findReplyBtn();
+            if (replyBtn) {
+              var replyContentEls = document.querySelectorAll('[class*="reply-content-"]');
+              for (var i = 0; i < replyContentEls.length; i++) {
+                var p = replyContentEls[i];
+                var r = p.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var rel = replyBtn.compareDocumentPosition(p);
+                if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                var input = p.querySelector('[class*="input-"][contenteditable="true"]');
+                if (input && (input as any).getBoundingClientRect().width > 0) {
+                  (input as any).focus();
+                  (input as any).click();
+                  return true;
+                }
+              }
+              var allInputs = document.querySelectorAll('div[class*="input-"][contenteditable="true"]');
+              var foundInput = findFirstAfter(replyBtn, allInputs);
+              if (foundInput) {
+                (foundInput as any).focus();
+                (foundInput as any).click();
+                return true;
+              }
+            }
+            return false;
+          }, { btnX: btnCoords.x, btnY: btnCoords.y });
         }
-        return false;
-      }, { btnX: btnCoords.x, btnY: btnCoords.y });
+      })();
       if (!inputClicked) {
         await HumanActions.wait(page, 500, 1000);
-        inputClicked = await page.evaluate(function() {
-          var editables = document.querySelectorAll('[contenteditable="true"]');
-          for (var i = 0; i < editables.length; i++) {
-            var r = editables[i].getBoundingClientRect();
-            if (r.width > 0 && r.height > 0) {
-              (editables[i] as any).focus();
-              (editables[i] as any).click();
-              return true;
-            }
+        inputClicked = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.safeEvaluate(page, function() {
+              var editables = document.querySelectorAll('[contenteditable="true"]');
+              for (var i = 0; i < editables.length; i++) {
+                var r = editables[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  (editables[i] as any).focus();
+                  (editables[i] as any).click();
+                  return true;
+                }
+              }
+              return false;
+            }, { reason: '回退定位回复输入框', world: 'main' });
+          } else {
+            return page.evaluate(function() {
+              var editables = document.querySelectorAll('[contenteditable="true"]');
+              for (var i = 0; i < editables.length; i++) {
+                var r = editables[i].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) {
+                  (editables[i] as any).focus();
+                  (editables[i] as any).click();
+                  return true;
+                }
+              }
+              return false;
+            });
           }
-          return false;
-        });
+        })();
       }
       if (!inputClicked) {
         logger.error('[Reply] Reply input not found');
@@ -3903,111 +4449,215 @@ export class DouyinCrawler {
       await snap('text_typed', { textLength: replyText.length });
 
       // ── 6. 找到发送按钮（在 reply-content 面板内找 text="发送" 且未 disabled 的 button）──
-      let sendBtn = await page.evaluate(function(params: {btnX: number; btnY: number}) {
-        function findReplyBtn(): Element | null {
-          var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-          var best: Element | null = null, bestDist = Infinity;
-          for (var i = 0; i < items.length; i++) {
-            if ((items[i].textContent || '').trim() !== '回复') continue;
-            var r = items[i].getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-            var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-            if (d < bestDist) { bestDist = d; best = items[i]; }
-          }
-          return best;
-        }
+      let sendBtn = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+            function findReplyBtn(): Element | null {
+              var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+              var best: Element | null = null, bestDist = Infinity;
+              for (var i = 0; i < items.length; i++) {
+                if ((items[i].textContent || '').trim() !== '回复') continue;
+                var r = items[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                var d = Math.hypot(cx - coords.x, cy - coords.y);
+                if (d < bestDist) { bestDist = d; best = items[i]; }
+              }
+              return best;
+            }
 
-        var replyBtn = findReplyBtn();
-        if (!replyBtn) return null;
+            var replyBtn = findReplyBtn();
+            if (!replyBtn) return null;
 
-        var panels = document.querySelectorAll('[class*="reply-content-"]');
-        var targetPanel: Element | null = null;
-        for (var i = 0; i < panels.length; i++) {
-          var p = panels[i];
-          var r = p.getBoundingClientRect();
-          if (r.width === 0 || r.height === 0) continue;
-          var rel = replyBtn.compareDocumentPosition(p);
-          // ★ Bugfix: FOLLOWING(4) = p 在 replyBtn 之后（PRECEDING(2) 才是之前）
-          if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-          targetPanel = p;
-          break;
-        }
-        if (!targetPanel) return null;
+            var panels = document.querySelectorAll('[class*="reply-content-"]');
+            var targetPanel: Element | null = null;
+            for (var i = 0; i < panels.length; i++) {
+              var p = panels[i];
+              var r = p.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              var rel = replyBtn.compareDocumentPosition(p);
+              if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+              targetPanel = p;
+              break;
+            }
+            if (!targetPanel) return null;
 
-        var btns = targetPanel.querySelectorAll('button');
-        for (var j = 0; j < btns.length; j++) {
-          var t = (btns[j].textContent || '').trim();
-          if (t === '发送' && !(btns[j] as any).disabled) {
-            var br = btns[j].getBoundingClientRect();
-            return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
-          }
+            var btns = targetPanel.querySelectorAll('button');
+            for (var j = 0; j < btns.length; j++) {
+              var t = (btns[j].textContent || '').trim();
+              if (t === '发送' && !(btns[j] as any).disabled) {
+                var br = btns[j].getBoundingClientRect();
+                return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+              }
+            }
+            return null;
+          }, { reason: '定位发送按钮坐标', world: 'main', args: [btnCoords] });
+        } else {
+          return page.evaluate(function(params: {btnX: number; btnY: number}) {
+            function findReplyBtn(): Element | null {
+              var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+              var best: Element | null = null, bestDist = Infinity;
+              for (var i = 0; i < items.length; i++) {
+                if ((items[i].textContent || '').trim() !== '回复') continue;
+                var r = items[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                var d = Math.hypot(cx - params.btnX, cy - params.btnY);
+                if (d < bestDist) { bestDist = d; best = items[i]; }
+              }
+              return best;
+            }
+
+            var replyBtn = findReplyBtn();
+            if (!replyBtn) return null;
+
+            var panels = document.querySelectorAll('[class*="reply-content-"]');
+            var targetPanel: Element | null = null;
+            for (var i = 0; i < panels.length; i++) {
+              var p = panels[i];
+              var r = p.getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) continue;
+              var rel = replyBtn.compareDocumentPosition(p);
+              if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+              targetPanel = p;
+              break;
+            }
+            if (!targetPanel) return null;
+
+            var btns = targetPanel.querySelectorAll('button');
+            for (var j = 0; j < btns.length; j++) {
+              var t = (btns[j].textContent || '').trim();
+              if (t === '发送' && !(btns[j] as any).disabled) {
+                var br = btns[j].getBoundingClientRect();
+                return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+              }
+            }
+            return null;
+          }, { btnX: btnCoords.x, btnY: btnCoords.y });
         }
-        return null;
-      }, { btnX: btnCoords.x, btnY: btnCoords.y });
+      })();
 
       // ★ 检测并处理客服悬浮窗遮挡发送按钮
       let submitClicked = false;
       if (sendBtn) {
-        const isBlockedByService = await page.evaluate(function(coords: {x: number; y: number}) {
-          const el = document.elementFromPoint(coords.x, coords.y);
-          if (!el) return false;
-          let cur: Element | null = el as Element;
-          while (cur) {
-            const text = (cur.textContent || '').trim();
-            const cls = (cur.className || '').toLowerCase();
-            if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
-              return true;
-            }
-            cur = cur.parentElement;
+        const isBlockedByService = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+              const el = document.elementFromPoint(coords.x, coords.y);
+              if (!el) return false;
+              let cur: Element | null = el as Element;
+              while (cur) {
+                const text = (cur.textContent || '').trim();
+                const cls = (cur.className || '').toLowerCase();
+                if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
+                  return true;
+                }
+                cur = cur.parentElement;
+              }
+              return false;
+            }, { reason: '检测客服悬浮窗遮挡', world: 'main', args: [sendBtn] });
+          } else {
+            return page.evaluate(function(coords: {x: number; y: number}) {
+              const el = document.elementFromPoint(coords.x, coords.y);
+              if (!el) return false;
+              let cur: Element | null = el as Element;
+              while (cur) {
+                const text = (cur.textContent || '').trim();
+                const cls = (cur.className || '').toLowerCase();
+                if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
+                  return true;
+                }
+                cur = cur.parentElement;
+              }
+              return false;
+            }, { x: sendBtn.x, y: sendBtn.y });
           }
-          return false;
-        }, { x: sendBtn.x, y: sendBtn.y });
+        })();
 
         if (isBlockedByService) {
           logger.info('[Reply] 客服悬浮窗遮挡了发送按钮，尝试隐藏悬浮窗');
 
           // ★ 不滚动页面（滚动会导致回复面板失焦、文字丢失）
           // 改为隐藏客服悬浮窗元素
-          const hidden = await page.evaluate(function() {
-            const selectors = [
-              '.creator-help-bar', '.online-service', '.service-popup',
-              '[class*="help-bar"]', '[class*="online-service"]', '[class*="service-popup"]',
-              '[class*="creator-help"]'
-            ];
-            let hiddenCount = 0;
-            for (const sel of selectors) {
-              const els = document.querySelectorAll(sel);
-              for (let i = 0; i < els.length; i++) {
-                const r = els[i].getBoundingClientRect();
-                if (r.width > 0 || r.height > 0) {
-                  (els[i] as HTMLElement).style.display = 'none';
-                  hiddenCount++;
-                }
-              }
-            }
-            // 也尝试隐藏包含"在线客服"文字的浮窗
-            const allEls = document.querySelectorAll('div, span, iframe');
-            for (let i = 0; i < allEls.length; i++) {
-              const el = allEls[i] as HTMLElement;
-              if (el.children.length > 3) continue; // 跳过容器
-              const text = (el.textContent || '').trim();
-              if (text === '在线客服' || text.includes('在线客服')) {
-                // 向上找最近的 fixed/absolute 定位的祖先并隐藏
-                let cur: Element | null = el;
-                while (cur) {
-                  const style = window.getComputedStyle(cur);
-                  if (style.position === 'fixed' || style.position === 'absolute') {
-                    (cur as HTMLElement).style.display = 'none';
-                    hiddenCount++;
-                    break;
+          const hidden = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, function() {
+                const selectors = [
+                  '.creator-help-bar', '.online-service', '.service-popup',
+                  '[class*="help-bar"]', '[class*="online-service"]', '[class*="service-popup"]',
+                  '[class*="creator-help"]'
+                ];
+                let hiddenCount = 0;
+                for (const sel of selectors) {
+                  const els = document.querySelectorAll(sel);
+                  for (let i = 0; i < els.length; i++) {
+                    const r = els[i].getBoundingClientRect();
+                    if (r.width > 0 || r.height > 0) {
+                      (els[i] as HTMLElement).style.display = 'none';
+                      hiddenCount++;
+                    }
                   }
-                  cur = cur.parentElement;
                 }
-              }
+                const allEls = document.querySelectorAll('div, span, iframe');
+                for (let i = 0; i < allEls.length; i++) {
+                  const el = allEls[i] as HTMLElement;
+                  if (el.children.length > 3) continue;
+                  const text = (el.textContent || '').trim();
+                  if (text === '在线客服' || text.includes('在线客服')) {
+                    let cur: Element | null = el;
+                    while (cur) {
+                      const style = window.getComputedStyle(cur);
+                      if (style.position === 'fixed' || style.position === 'absolute') {
+                        (cur as HTMLElement).style.display = 'none';
+                        hiddenCount++;
+                        break;
+                      }
+                      cur = cur.parentElement;
+                    }
+                  }
+                }
+                return hiddenCount;
+              }, { reason: '隐藏客服悬浮窗', world: 'main' });
+            } else {
+              return page.evaluate(function() {
+                const selectors = [
+                  '.creator-help-bar', '.online-service', '.service-popup',
+                  '[class*="help-bar"]', '[class*="online-service"]', '[class*="service-popup"]',
+                  '[class*="creator-help"]'
+                ];
+                let hiddenCount = 0;
+                for (const sel of selectors) {
+                  const els = document.querySelectorAll(sel);
+                  for (let i = 0; i < els.length; i++) {
+                    const r = els[i].getBoundingClientRect();
+                    if (r.width > 0 || r.height > 0) {
+                      (els[i] as HTMLElement).style.display = 'none';
+                      hiddenCount++;
+                    }
+                  }
+                }
+                const allEls = document.querySelectorAll('div, span, iframe');
+                for (let i = 0; i < allEls.length; i++) {
+                  const el = allEls[i] as HTMLElement;
+                  if (el.children.length > 3) continue;
+                  const text = (el.textContent || '').trim();
+                  if (text === '在线客服' || text.includes('在线客服')) {
+                    let cur: Element | null = el;
+                    while (cur) {
+                      const style = window.getComputedStyle(cur);
+                      if (style.position === 'fixed' || style.position === 'absolute') {
+                        (cur as HTMLElement).style.display = 'none';
+                        hiddenCount++;
+                        break;
+                      }
+                      cur = cur.parentElement;
+                    }
+                  }
+                }
+                return hiddenCount;
+              });
             }
-            return hiddenCount;
-          });
+          })();
 
           if (hidden > 0) {
             logger.info({ hiddenCount: hidden }, '[Reply] 客服悬浮窗已隐藏');
@@ -4015,62 +4665,124 @@ export class DouyinCrawler {
           }
 
           // 重新检查发送按钮是否仍被遮挡
-          const stillBlocked = await page.evaluate(function(coords: {x: number; y: number}) {
-            const el = document.elementFromPoint(coords.x, coords.y);
-            if (!el) return false;
-            let cur: Element | null = el as Element;
-            while (cur) {
-              const text = (cur.textContent || '').trim();
-              const cls = (cur.className || '').toLowerCase();
-              if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
-                return true;
-              }
-              cur = cur.parentElement;
+          const stillBlocked = await (async () => {
+            if (isAntiDetectionV2()) {
+              return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+                const el = document.elementFromPoint(coords.x, coords.y);
+                if (!el) return false;
+                let cur: Element | null = el as Element;
+                while (cur) {
+                  const text = (cur.textContent || '').trim();
+                  const cls = (cur.className || '').toLowerCase();
+                  if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
+                    return true;
+                  }
+                  cur = cur.parentElement;
+                }
+                return false;
+              }, { reason: '重新检测客服悬浮窗遮挡', world: 'main', args: [sendBtn] });
+            } else {
+              return page.evaluate(function(coords: {x: number; y: number}) {
+                const el = document.elementFromPoint(coords.x, coords.y);
+                if (!el) return false;
+                let cur: Element | null = el as Element;
+                while (cur) {
+                  const text = (cur.textContent || '').trim();
+                  const cls = (cur.className || '').toLowerCase();
+                  if (text.includes('在线客服') || cls.includes('creator-help-bar') || cls.includes('online-service') || cls.includes('service-popup')) {
+                    return true;
+                  }
+                  cur = cur.parentElement;
+                }
+                return false;
+              }, { x: sendBtn.x, y: sendBtn.y });
             }
-            return false;
-          }, { x: sendBtn.x, y: sendBtn.y });
+          })();
 
           if (stillBlocked) {
             logger.warn('[Reply] 隐藏后发送按钮仍被遮挡，使用 evaluate 直接点击');
             // 悬浮窗无法隐藏，用 evaluate 直接 click 发送按钮（合理回退）
-            const evalClicked = await page.evaluate(function(params: {btnX: number; btnY: number}) {
-              function findReplyBtn(): Element | null {
-                var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-                var best: Element | null = null, bestDist = Infinity;
-                for (var i = 0; i < items.length; i++) {
-                  if ((items[i].textContent || '').trim() !== '回复') continue;
-                  var r = items[i].getBoundingClientRect();
-                  if (r.width === 0 || r.height === 0) continue;
-                  var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-                  var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-                  if (d < bestDist) { bestDist = d; best = items[i]; }
-                }
-                return best;
+            const evalClicked = await (async () => {
+              if (isAntiDetectionV2()) {
+                return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+                  function findReplyBtn(): Element | null {
+                    var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+                    var best: Element | null = null, bestDist = Infinity;
+                    for (var i = 0; i < items.length; i++) {
+                      if ((items[i].textContent || '').trim() !== '回复') continue;
+                      var r = items[i].getBoundingClientRect();
+                      if (r.width === 0 || r.height === 0) continue;
+                      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                      var d = Math.hypot(cx - coords.x, cy - coords.y);
+                      if (d < bestDist) { bestDist = d; best = items[i]; }
+                    }
+                    return best;
+                  }
+                  var replyBtn = findReplyBtn();
+                  if (!replyBtn) return false;
+                  var panels = document.querySelectorAll('[class*="reply-content-"]');
+                  var targetPanel: Element | null = null;
+                  for (var i = 0; i < panels.length; i++) {
+                    var p = panels[i];
+                    var r = p.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    var rel = replyBtn.compareDocumentPosition(p);
+                    if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                    targetPanel = p;
+                    break;
+                  }
+                  if (!targetPanel) return false;
+                  var btns = targetPanel.querySelectorAll('button');
+                  for (var j = 0; j < btns.length; j++) {
+                    var t = (btns[j].textContent || '').trim();
+                    if (t === '发送' && !(btns[j] as any).disabled) {
+                      (btns[j] as HTMLElement).click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }, { reason: 'evaluate 直接点击发送按钮', world: 'main', args: [btnCoords] });
+              } else {
+                return page.evaluate(function(params: {btnX: number; btnY: number}) {
+                  function findReplyBtn(): Element | null {
+                    var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
+                    var best: Element | null = null, bestDist = Infinity;
+                    for (var i = 0; i < items.length; i++) {
+                      if ((items[i].textContent || '').trim() !== '回复') continue;
+                      var r = items[i].getBoundingClientRect();
+                      if (r.width === 0 || r.height === 0) continue;
+                      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+                      var d = Math.hypot(cx - params.btnX, cy - params.btnY);
+                      if (d < bestDist) { bestDist = d; best = items[i]; }
+                    }
+                    return best;
+                  }
+                  var replyBtn = findReplyBtn();
+                  if (!replyBtn) return false;
+                  var panels = document.querySelectorAll('[class*="reply-content-"]');
+                  var targetPanel: Element | null = null;
+                  for (var i = 0; i < panels.length; i++) {
+                    var p = panels[i];
+                    var r = p.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    var rel = replyBtn.compareDocumentPosition(p);
+                    if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+                    targetPanel = p;
+                    break;
+                  }
+                  if (!targetPanel) return false;
+                  var btns = targetPanel.querySelectorAll('button');
+                  for (var j = 0; j < btns.length; j++) {
+                    var t = (btns[j].textContent || '').trim();
+                    if (t === '发送' && !(btns[j] as any).disabled) {
+                      (btns[j] as HTMLElement).click();
+                      return true;
+                    }
+                  }
+                  return false;
+                }, { btnX: btnCoords.x, btnY: btnCoords.y });
               }
-              var replyBtn = findReplyBtn();
-              if (!replyBtn) return false;
-              var panels = document.querySelectorAll('[class*="reply-content-"]');
-              var targetPanel: Element | null = null;
-              for (var i = 0; i < panels.length; i++) {
-                var p = panels[i];
-                var r = p.getBoundingClientRect();
-                if (r.width === 0 || r.height === 0) continue;
-                var rel = replyBtn.compareDocumentPosition(p);
-                if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-                targetPanel = p;
-                break;
-              }
-              if (!targetPanel) return false;
-              var btns = targetPanel.querySelectorAll('button');
-              for (var j = 0; j < btns.length; j++) {
-                var t = (btns[j].textContent || '').trim();
-                if (t === '发送' && !(btns[j] as any).disabled) {
-                  (btns[j] as HTMLElement).click();
-                  return true;
-                }
-              }
-              return false;
-            }, { btnX: btnCoords.x, btnY: btnCoords.y });
+            })();
 
             if (evalClicked) {
               logger.info('[Reply] evaluate 直接点击发送按钮成功');
@@ -4095,24 +4807,47 @@ export class DouyinCrawler {
         logger.info({ x: sendBtn.x, y: sendBtn.y }, '[Reply] 通过坐标点击了发送按钮');
       } else if (!submitClicked) {
         // 回退：用 evaluate 精确匹配文本为"发送"且未 disabled 的按钮
-        const fallbackBtn = await page.evaluate(function() {
-          var panels = document.querySelectorAll('[class*="reply-content-"]');
-          for (var i = 0; i < panels.length; i++) {
-            var r = panels[i].getBoundingClientRect();
-            if (r.width === 0 || r.height === 0) continue;
-            var btns = panels[i].querySelectorAll('button');
-            for (var j = 0; j < btns.length; j++) {
-              var t = (btns[j].textContent || '').trim();
-              if (t === '发送' && !(btns[j] as any).disabled) {
-                var br = btns[j].getBoundingClientRect();
-                if (br.width > 0 && br.height > 0) {
-                  return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+        const fallbackBtn = await (async () => {
+          if (isAntiDetectionV2()) {
+            return HumanActions.safeEvaluate(page, function() {
+              var panels = document.querySelectorAll('[class*="reply-content-"]');
+              for (var i = 0; i < panels.length; i++) {
+                var r = panels[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var btns = panels[i].querySelectorAll('button');
+                for (var j = 0; j < btns.length; j++) {
+                  var t = (btns[j].textContent || '').trim();
+                  if (t === '发送' && !(btns[j] as any).disabled) {
+                    var br = btns[j].getBoundingClientRect();
+                    if (br.width > 0 && br.height > 0) {
+                      return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+                    }
+                  }
                 }
               }
-            }
+              return null;
+            }, { reason: '回退定位发送按钮', world: 'main' });
+          } else {
+            return page.evaluate(function() {
+              var panels = document.querySelectorAll('[class*="reply-content-"]');
+              for (var i = 0; i < panels.length; i++) {
+                var r = panels[i].getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                var btns = panels[i].querySelectorAll('button');
+                for (var j = 0; j < btns.length; j++) {
+                  var t = (btns[j].textContent || '').trim();
+                  if (t === '发送' && !(btns[j] as any).disabled) {
+                    var br = btns[j].getBoundingClientRect();
+                    if (br.width > 0 && br.height > 0) {
+                      return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
+                    }
+                  }
+                }
+              }
+              return null;
+            });
           }
-          return null;
-        });
+        })();
         if (fallbackBtn) {
           await HumanActions.withCDPContext(page, async (ctx) => {
             await ctx.mouse.moveTo({ x: fallbackBtn.x, y: fallbackBtn.y });
@@ -4134,29 +4869,53 @@ export class DouyinCrawler {
       const urlAfterSubmit = page.url();
       const urlChanged = !urlAfterSubmit.includes('interactive/comment');
 
-      const verifyResult = await page.evaluate(function() {
-        // ★ Bugfix: 之前扫 [class*="toast"] 会把"回复成功"的 toast 当 error
-        // 现在只扫 error/fail 元素，并排除包含成功关键词的文本
-        var SUCCESS_KEYWORDS = ['成功', 'success', '已发送', '已回复'];
-        var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"]');
-        for (var i = 0; i < errorEls.length; i++) {
-          var t = (errorEls[i].textContent || '').trim();
-          if (t.length === 0 || t.length >= 100) continue;
-          var isSuccess = false;
-          for (var k = 0; k < SUCCESS_KEYWORDS.length; k++) {
-            if (t.indexOf(SUCCESS_KEYWORDS[k]) >= 0) { isSuccess = true; break; }
-          }
-          if (!isSuccess) return { error: t };
+      const verifyResult = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, function() {
+            var SUCCESS_KEYWORDS = ['成功', 'success', '已发送', '已回复'];
+            var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"]');
+            for (var i = 0; i < errorEls.length; i++) {
+              var t = (errorEls[i].textContent || '').trim();
+              if (t.length === 0 || t.length >= 100) continue;
+              var isSuccess = false;
+              for (var k = 0; k < SUCCESS_KEYWORDS.length; k++) {
+                if (t.indexOf(SUCCESS_KEYWORDS[k]) >= 0) { isSuccess = true; break; }
+              }
+              if (!isSuccess) return { error: t };
+            }
+            var editables = document.querySelectorAll('[contenteditable="true"]');
+            for (var j = 0; j < editables.length; j++) {
+              var r = editables[j].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                return { editableText: (editables[j].textContent || '').slice(0, 50) };
+              }
+            }
+            return { editableText: 'none' };
+          }, { reason: '验证回复提交结果', world: 'main' });
+        } else {
+          return page.evaluate(function() {
+            var SUCCESS_KEYWORDS = ['成功', 'success', '已发送', '已回复'];
+            var errorEls = document.querySelectorAll('[class*="error"], [class*="fail"]');
+            for (var i = 0; i < errorEls.length; i++) {
+              var t = (errorEls[i].textContent || '').trim();
+              if (t.length === 0 || t.length >= 100) continue;
+              var isSuccess = false;
+              for (var k = 0; k < SUCCESS_KEYWORDS.length; k++) {
+                if (t.indexOf(SUCCESS_KEYWORDS[k]) >= 0) { isSuccess = true; break; }
+              }
+              if (!isSuccess) return { error: t };
+            }
+            var editables = document.querySelectorAll('[contenteditable="true"]');
+            for (var j = 0; j < editables.length; j++) {
+              var r = editables[j].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                return { editableText: (editables[j].textContent || '').slice(0, 50) };
+              }
+            }
+            return { editableText: 'none' };
+          });
         }
-        var editables = document.querySelectorAll('[contenteditable="true"]');
-        for (var j = 0; j < editables.length; j++) {
-          var r = editables[j].getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) {
-            return { editableText: (editables[j].textContent || '').slice(0, 50) };
-          }
-        }
-        return { editableText: 'none' };
-      });
+      })();
       logger.info({ verifyResult, urlChanged, urlAfterSubmit }, '[Reply] 提交后验证');
       await snap('verify_result', { ...verifyResult, urlChanged, urlAfterSubmit });
 
@@ -4337,107 +5096,186 @@ export class DouyinCrawler {
       subReplyCount: targetSubReplyCount,
     }, '[FindRoot] Matching criteria');
 
-    return await page.evaluate(function(params) {
-      var username = params.username;
-      var text = params.text;
-      var subReplyCount = params.subReplyCount;
-      var sels = params.sels;
-      var vh = window.innerHeight;
+    if (isAntiDetectionV2()) {
+      return await HumanActions.safeEvaluate(page, function(params: { username: string; text: string; subReplyCount: number; sels: string[] }) {
+        var username = params.username;
+        var text = params.text;
+        var subReplyCount = params.subReplyCount;
+        var sels = params.sels;
+        var vh = window.innerHeight;
 
-      // 遍历所有容器选择器
-      for (var si = 0; si < sels.length; si++) {
-        var containers = document.querySelectorAll(sels[si]);
-        for (var ci = 0; ci < containers.length; ci++) {
-          var container = containers[ci];
-          var containerText = (container.innerText || '').trim();
-          if (containerText.length < 3) continue;
+        for (var si = 0; si < sels.length; si++) {
+          var containers = document.querySelectorAll(sels[si]);
+          for (var ci = 0; ci < containers.length; ci++) {
+            var container = containers[ci];
+            var containerText = (container.innerText || '').trim();
+            if (containerText.length < 3) continue;
 
-          // 提取用户名(去装饰子元素:抖音用户名 div 内常有 <span class="tag-...">作者</span> 等装饰,
-          // 直接 textContent 会拼成 "基本 作者",导致严格相等匹配失败)
-          function bareUsernameText(el: Element): string {
-            if (!el) return '';
-            var clone = el.cloneNode(true) as HTMLElement;
-            var ch = clone.children;
-            for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
-            return (clone.textContent || '').trim().toLowerCase();
-          }
-          var usernameEl = container.querySelector('[class*="username-"]');
-          if (!usernameEl) continue;
-          var foundUsername = bareUsernameText(usernameEl);
+            function bareUsernameText(el: Element): string {
+              if (!el) return '';
+              var clone = el.cloneNode(true) as HTMLElement;
+              var ch = clone.children;
+              for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+              return (clone.textContent || '').trim().toLowerCase();
+            }
+            var usernameEl = container.querySelector('[class*="username-"]');
+            if (!usernameEl) continue;
+            var foundUsername = bareUsernameText(usernameEl);
 
-          // 提取评论文本
-          var contentEl = container.querySelector('[class*="comment-content-text"]');
-          if (!contentEl) continue;
-          var foundContent = (contentEl.textContent || '').trim().toLowerCase();
+            var contentEl = container.querySelector('[class*="comment-content-text"]');
+            if (!contentEl) continue;
+            var foundContent = (contentEl.textContent || '').trim().toLowerCase();
 
-          // 子评论数提取（纯文本匹配，不依赖 class hash）
-          function findLoadMoreInContainer(container: Element) {
-            var candidates = container.querySelectorAll('*');
-            for (var i = 0; i < candidates.length; i++) {
-              var el = candidates[i];
-              if (el.children.length > 0) continue;
-              var t = (el.textContent || '').trim();
-              var m = t.match(/^查看(\d+)条回复$/);
-              if (m && m[1]) {
-                return { type: 'expand' as const, count: parseInt(m[1], 10), el: el };
+            function findLoadMoreInContainer(container: Element) {
+              var candidates = container.querySelectorAll('*');
+              for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                if (el.children.length > 0) continue;
+                var t = (el.textContent || '').trim();
+                var m = t.match(/^查看(\d+)条回复$/);
+                if (m && m[1]) {
+                  return { type: 'expand' as const, count: parseInt(m[1], 10), el: el };
+                }
+                if (t === '收起') {
+                  return { type: 'collapsed' as const, el: el };
+                }
               }
-              if (t === '收起') {
-                return { type: 'collapsed' as const, el: el };
+              return null;
+            }
+            var loadMoreInfo = findLoadMoreInContainer(container);
+            var foundSubReplyCount = 0;
+            var isExpanded = false;
+            if (loadMoreInfo) {
+              if (loadMoreInfo.type === 'expand' && loadMoreInfo.count !== undefined) {
+                foundSubReplyCount = loadMoreInfo.count;
+              } else if (loadMoreInfo.type === 'collapsed') {
+                isExpanded = true;
+                foundSubReplyCount = -1;
               }
             }
-            return null;
-          }
-          var loadMoreInfo = findLoadMoreInContainer(container);
-          var foundSubReplyCount = 0;
-          var isExpanded = false;
-          if (loadMoreInfo) {
-            if (loadMoreInfo.type === 'expand' && loadMoreInfo.count !== undefined) {
-              foundSubReplyCount = loadMoreInfo.count;
-            } else if (loadMoreInfo.type === 'collapsed') {
-              isExpanded = true;
-              foundSubReplyCount = -1; // 已展开，从 DB 数据获取
-            }
-          }
 
-          // 用户名精确匹配
-          if (foundUsername !== username) continue;
+            if (foundUsername !== username) continue;
 
-          // 评论文本模糊匹配（包含关系）
-          var textMatch = foundContent.indexOf(text) >= 0 || text.indexOf(foundContent) >= 0;
-          if (!textMatch) continue;
+            var textMatch = foundContent.indexOf(text) >= 0 || text.indexOf(foundContent) >= 0;
+            if (!textMatch) continue;
 
-          // subReplyCount 检查
-          if (subReplyCount >= 0) {
-            if (foundSubReplyCount > 0 && foundSubReplyCount !== subReplyCount) continue;
-          }
-
-          // 检查容器是否在视口内
-          var rect = container.getBoundingClientRect();
-          if (rect.top < vh && rect.bottom > 0 && rect.width > 0 && rect.height > 0) {
-            // 用容器选择器的 nth-child 方式作为唯一标识
-            var containerSel = sels[si] + ':nth-child(' + (ci + 1) + ')';
-
-            if (foundSubReplyCount < 0 && isExpanded) {
-              foundSubReplyCount = subReplyCount >= 0 ? subReplyCount : 0;
+            if (subReplyCount >= 0) {
+              if (foundSubReplyCount > 0 && foundSubReplyCount !== subReplyCount) continue;
             }
 
-            return {
-              x: Math.round(rect.left + rect.width / 2),
-              y: Math.round(rect.top + rect.height / 2),
-              containerSel: containerSel,
-              isExpanded: isExpanded,
-              subReplyCountInPage: foundSubReplyCount >= 0 ? foundSubReplyCount : 0,
-            };
+            var rect = container.getBoundingClientRect();
+            if (rect.top < vh && rect.bottom > 0 && rect.width > 0 && rect.height > 0) {
+              var containerSel = sels[si] + ':nth-child(' + (ci + 1) + ')';
+
+              if (foundSubReplyCount < 0 && isExpanded) {
+                foundSubReplyCount = subReplyCount >= 0 ? subReplyCount : 0;
+              }
+
+              return {
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                containerSel: containerSel,
+                isExpanded: isExpanded,
+                subReplyCountInPage: foundSubReplyCount >= 0 ? foundSubReplyCount : 0,
+              };
+            }
           }
         }
-      }
-      return null;
-    }, {
-      username: targetUsername,
-      text: targetText,
-      subReplyCount: targetSubReplyCount,
-      sels: containerSels,
-    });
+        return null;
+      }, { reason: '通过用户名+内容匹配根评论', world: 'main', args: [{ username: targetUsername, text: targetText, subReplyCount: targetSubReplyCount, sels: containerSels }] });
+    } else {
+      return await page.evaluate(function(params) {
+        var username = params.username;
+        var text = params.text;
+        var subReplyCount = params.subReplyCount;
+        var sels = params.sels;
+        var vh = window.innerHeight;
+
+        for (var si = 0; si < sels.length; si++) {
+          var containers = document.querySelectorAll(sels[si]);
+          for (var ci = 0; ci < containers.length; ci++) {
+            var container = containers[ci];
+            var containerText = (container.innerText || '').trim();
+            if (containerText.length < 3) continue;
+
+            function bareUsernameText(el: Element): string {
+              if (!el) return '';
+              var clone = el.cloneNode(true) as HTMLElement;
+              var ch = clone.children;
+              for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+              return (clone.textContent || '').trim().toLowerCase();
+            }
+            var usernameEl = container.querySelector('[class*="username-"]');
+            if (!usernameEl) continue;
+            var foundUsername = bareUsernameText(usernameEl);
+
+            var contentEl = container.querySelector('[class*="comment-content-text"]');
+            if (!contentEl) continue;
+            var foundContent = (contentEl.textContent || '').trim().toLowerCase();
+
+            function findLoadMoreInContainer(container: Element) {
+              var candidates = container.querySelectorAll('*');
+              for (var i = 0; i < candidates.length; i++) {
+                var el = candidates[i];
+                if (el.children.length > 0) continue;
+                var t = (el.textContent || '').trim();
+                var m = t.match(/^查看(\d+)条回复$/);
+                if (m && m[1]) {
+                  return { type: 'expand' as const, count: parseInt(m[1], 10), el: el };
+                }
+                if (t === '收起') {
+                  return { type: 'collapsed' as const, el: el };
+                }
+              }
+              return null;
+            }
+            var loadMoreInfo = findLoadMoreInContainer(container);
+            var foundSubReplyCount = 0;
+            var isExpanded = false;
+            if (loadMoreInfo) {
+              if (loadMoreInfo.type === 'expand' && loadMoreInfo.count !== undefined) {
+                foundSubReplyCount = loadMoreInfo.count;
+              } else if (loadMoreInfo.type === 'collapsed') {
+                isExpanded = true;
+                foundSubReplyCount = -1;
+              }
+            }
+
+            if (foundUsername !== username) continue;
+
+            var textMatch = foundContent.indexOf(text) >= 0 || text.indexOf(foundContent) >= 0;
+            if (!textMatch) continue;
+
+            if (subReplyCount >= 0) {
+              if (foundSubReplyCount > 0 && foundSubReplyCount !== subReplyCount) continue;
+            }
+
+            var rect = container.getBoundingClientRect();
+            if (rect.top < vh && rect.bottom > 0 && rect.width > 0 && rect.height > 0) {
+              var containerSel = sels[si] + ':nth-child(' + (ci + 1) + ')';
+
+              if (foundSubReplyCount < 0 && isExpanded) {
+                foundSubReplyCount = subReplyCount >= 0 ? subReplyCount : 0;
+              }
+
+              return {
+                x: Math.round(rect.left + rect.width / 2),
+                y: Math.round(rect.top + rect.height / 2),
+                containerSel: containerSel,
+                isExpanded: isExpanded,
+                subReplyCountInPage: foundSubReplyCount >= 0 ? foundSubReplyCount : 0,
+              };
+            }
+          }
+        }
+        return null;
+      }, {
+        username: targetUsername,
+        text: targetText,
+        subReplyCount: targetSubReplyCount,
+        sels: containerSels,
+      });
+    }
   }
 
   /**
@@ -4448,24 +5286,45 @@ export class DouyinCrawler {
     containerSel: string,
   ): Promise<{ x: number; y: number } | null> {
     await this.injectEsbuildPolyfill(page);
-    return await page.evaluate(function(sel) {
-      var container = document.querySelector(sel);
-      if (!container) return null;
-      var vh = window.innerHeight;
-      var opsAreas = container.querySelectorAll('[class*="operations-"]');
-      for (var oi = 0; oi < opsAreas.length; oi++) {
-        var items = opsAreas[oi].querySelectorAll('[class*="item-"]');
-        for (var ri = 0; ri < items.length; ri++) {
-          if ((items[ri].textContent || '').trim() === '回复') {
-            var r = items[ri].getBoundingClientRect();
-            if (r.width > 0 && r.height > 0 && r.top < vh) {
-              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+    if (isAntiDetectionV2()) {
+      return await HumanActions.safeEvaluate(page, function(sel: string) {
+        var container = document.querySelector(sel);
+        if (!container) return null;
+        var vh = window.innerHeight;
+        var opsAreas = container.querySelectorAll('[class*="operations-"]');
+        for (var oi = 0; oi < opsAreas.length; oi++) {
+          var items = opsAreas[oi].querySelectorAll('[class*="item-"]');
+          for (var ri = 0; ri < items.length; ri++) {
+            if ((items[ri].textContent || '').trim() === '回复') {
+              var r = items[ri].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0 && r.top < vh) {
+                return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+              }
             }
           }
         }
-      }
-      return null;
-    }, containerSel);
+        return null;
+      }, { reason: '在容器内查找回复按钮', world: 'main', args: [containerSel] });
+    } else {
+      return await page.evaluate(function(sel) {
+        var container = document.querySelector(sel);
+        if (!container) return null;
+        var vh = window.innerHeight;
+        var opsAreas = container.querySelectorAll('[class*="operations-"]');
+        for (var oi = 0; oi < opsAreas.length; oi++) {
+          var items = opsAreas[oi].querySelectorAll('[class*="item-"]');
+          for (var ri = 0; ri < items.length; ri++) {
+            if ((items[ri].textContent || '').trim() === '回复') {
+              var r = items[ri].getBoundingClientRect();
+              if (r.width > 0 && r.height > 0 && r.top < vh) {
+                return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+              }
+            }
+          }
+        }
+        return null;
+      }, containerSel);
+    }
   }
 
   /**
@@ -4474,34 +5333,63 @@ export class DouyinCrawler {
    */
   private async scrollRootIntoView(page: Page, targetX: number, targetY: number): Promise<void> {
     await this.injectEsbuildPolyfill(page);
-    const scrolled = await page.evaluate(function(coords: { x: number; y: number }) {
-      // 方案 1：elementFromPoint 直接定位（如果 root 在视口内）
-      var el = document.elementFromPoint(coords.x, coords.y);
-      if (el) {
-        var container = el.closest('div[class*="container-"]');
-        if (container) {
-          (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
-          return true;
-        }
+    const scrolled = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+          var el = document.elementFromPoint(coords.x, coords.y);
+          if (el) {
+            var container = el.closest('div[class*="container-"]');
+            if (container) {
+              (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+              return true;
+            }
+          }
+          var containers = document.querySelectorAll('div[class*="container-"]');
+          var best: Element | null = null;
+          var bestDist = Infinity;
+          for (var i = 0; i < containers.length; i++) {
+            var r = containers[i].getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var cx = r.left + r.width / 2;
+            var cy = r.top + r.height / 2;
+            var d = Math.hypot(cx - coords.x, cy - coords.y);
+            if (d < bestDist) { bestDist = d; best = containers[i]; }
+          }
+          if (best) {
+            (best as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+            return true;
+          }
+          return false;
+        }, { reason: '将根评论滚动到视口中间', world: 'main', args: [{ x: targetX, y: targetY }] });
+      } else {
+        return page.evaluate(function(coords: { x: number; y: number }) {
+          var el = document.elementFromPoint(coords.x, coords.y);
+          if (el) {
+            var container = el.closest('div[class*="container-"]');
+            if (container) {
+              (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+              return true;
+            }
+          }
+          var containers = document.querySelectorAll('div[class*="container-"]');
+          var best: Element | null = null;
+          var bestDist = Infinity;
+          for (var i = 0; i < containers.length; i++) {
+            var r = containers[i].getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            var cx = r.left + r.width / 2;
+            var cy = r.top + r.height / 2;
+            var d = Math.hypot(cx - coords.x, cy - coords.y);
+            if (d < bestDist) { bestDist = d; best = containers[i]; }
+          }
+          if (best) {
+            (best as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+            return true;
+          }
+          return false;
+        }, { x: targetX, y: targetY });
       }
-      // 方案 2：用坐标找到最近的 container（可能在视口外，elementFromPoint 返回 null）
-      var containers = document.querySelectorAll('div[class*="container-"]');
-      var best: Element | null = null;
-      var bestDist = Infinity;
-      for (var i = 0; i < containers.length; i++) {
-        var r = containers[i].getBoundingClientRect();
-        if (r.width === 0 || r.height === 0) continue;
-        var cx = r.left + r.width / 2;
-        var cy = r.top + r.height / 2;
-        var d = Math.hypot(cx - coords.x, cy - coords.y);
-        if (d < bestDist) { bestDist = d; best = containers[i]; }
-      }
-      if (best) {
-        (best as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
-        return true;
-      }
-      return false;
-    }, { x: targetX, y: targetY });
+    })();
     if (scrolled) {
       logger.info({ x: targetX, y: targetY }, '[Reply::Find] Root scrolled into view');
     }
@@ -4522,57 +5410,107 @@ export class DouyinCrawler {
     // 改用 rootX, rootY 定位根评论 wrapper:document.elementFromPoint 找根评论内子元素,
     // closest('div[class*="container-"]') 向上找根评论 wrapper。后续所有"查看N条回复"按钮查找
     // 都在该 wrapper 内,避免误点其他根评论的展开按钮。
-    const rootInfo = await page.evaluate(function(params: { px: number; py: number }) {
-      var px = params.px, py = params.py;
-      // 多次尝试 elementFromPoint(它对 hover/popover 敏感)
-      var el: Element | null = null;
-      for (var dx = -2; dx <= 2 && !el; dx += 2) {
-        for (var dy = -2; dy <= 2 && !el; dy += 2) {
-          var e = document.elementFromPoint(px + dx, py + dy);
-          if (e) { el = e; break; }
-        }
-      }
-      if (!el) return null;
-      // 向上找最近的 div[class*="container-"] 祖先
-      var w: Element | null = el;
-      while (w && w !== document.body) {
-        if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
-          var r = w.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) {
-            return {
-              rect: { x: r.left, y: r.top, w: r.width, h: r.height },
-              // 找该 wrapper 内的 load-more 按钮
-              loadMoreText: (function () {
-                var candidates = w!.querySelectorAll('*');
-                for (var i = 0; i < candidates.length; i++) {
-                  var ce = candidates[i];
-                  if (!(ce instanceof HTMLElement)) continue;
-                  var t = (ce.textContent || '').trim();
-                  var isExpand = /^查看\d+条回复$/.test(t);
-                  var isCollapse = t === '收起';
-                  if (!isExpand && !isCollapse) continue;
-                  var hasMatchingChild = Array.prototype.some.call(ce.children, function (child) {
-                    var ct = (child.textContent || '').trim();
-                    return /^查看\d+条回复$/.test(ct) || ct === '收起';
-                  });
-                  if (hasMatchingChild) continue;
-                  var cr = ce.getBoundingClientRect();
-                  if (cr.width === 0 || cr.height === 0) continue;
-                  return {
-                    type: isExpand ? 'expand' : 'collapsed',
-                    x: Math.round(cr.left + cr.width / 2),
-                    y: Math.round(cr.top + cr.height / 2),
-                  };
-                }
-                return null;
-              })(),
-            };
+    const rootInfo = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+          var px = coords.x, py = coords.y;
+          var el: Element | null = null;
+          for (var dx = -2; dx <= 2 && !el; dx += 2) {
+            for (var dy = -2; dy <= 2 && !el; dy += 2) {
+              var e = document.elementFromPoint(px + dx, py + dy);
+              if (e) { el = e; break; }
+            }
           }
-        }
-        w = w.parentElement;
+          if (!el) return null;
+          var w: Element | null = el;
+          while (w && w !== document.body) {
+            if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+              var r = w.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                return {
+                  rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+                  loadMoreText: (function () {
+                    var candidates = w!.querySelectorAll('*');
+                    for (var i = 0; i < candidates.length; i++) {
+                      var ce = candidates[i];
+                      if (!(ce instanceof HTMLElement)) continue;
+                      var t = (ce.textContent || '').trim();
+                      var isExpand = /^查看\d+条回复$/.test(t);
+                      var isCollapse = t === '收起';
+                      if (!isExpand && !isCollapse) continue;
+                      var hasMatchingChild = Array.prototype.some.call(ce.children, function (child) {
+                        var ct = (child.textContent || '').trim();
+                        return /^查看\d+条回复$/.test(ct) || ct === '收起';
+                      });
+                      if (hasMatchingChild) continue;
+                      var cr = ce.getBoundingClientRect();
+                      if (cr.width === 0 || cr.height === 0) continue;
+                      return {
+                        type: isExpand ? 'expand' : 'collapsed',
+                        x: Math.round(cr.left + cr.width / 2),
+                        y: Math.round(cr.top + cr.height / 2),
+                      };
+                    }
+                    return null;
+                  })(),
+                };
+              }
+            }
+            w = w.parentElement;
+          }
+          return null;
+        }, { reason: '定位根评论 wrapper 和展开按钮', world: 'main', args: [{ x: root.x, y: root.y }] });
+      } else {
+        return page.evaluate(function(params: { px: number; py: number }) {
+          var px = params.px, py = params.py;
+          var el: Element | null = null;
+          for (var dx = -2; dx <= 2 && !el; dx += 2) {
+            for (var dy = -2; dy <= 2 && !el; dy += 2) {
+              var e = document.elementFromPoint(px + dx, py + dy);
+              if (e) { el = e; break; }
+            }
+          }
+          if (!el) return null;
+          var w: Element | null = el;
+          while (w && w !== document.body) {
+            if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+              var r = w.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) {
+                return {
+                  rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+                  loadMoreText: (function () {
+                    var candidates = w!.querySelectorAll('*');
+                    for (var i = 0; i < candidates.length; i++) {
+                      var ce = candidates[i];
+                      if (!(ce instanceof HTMLElement)) continue;
+                      var t = (ce.textContent || '').trim();
+                      var isExpand = /^查看\d+条回复$/.test(t);
+                      var isCollapse = t === '收起';
+                      if (!isExpand && !isCollapse) continue;
+                      var hasMatchingChild = Array.prototype.some.call(ce.children, function (child) {
+                        var ct = (child.textContent || '').trim();
+                        return /^查看\d+条回复$/.test(ct) || ct === '收起';
+                      });
+                      if (hasMatchingChild) continue;
+                      var cr = ce.getBoundingClientRect();
+                      if (cr.width === 0 || cr.height === 0) continue;
+                      return {
+                        type: isExpand ? 'expand' : 'collapsed',
+                        x: Math.round(cr.left + cr.width / 2),
+                        y: Math.round(cr.top + cr.height / 2),
+                      };
+                    }
+                    return null;
+                  })(),
+                };
+              }
+            }
+            w = w.parentElement;
+          }
+          return null;
+        }, { px: root.x, py: root.y });
       }
-      return null;
-    }, { px: root.x, py: root.y });
+    })();
 
     if (!rootInfo) {
       logger.warn({ x: root.x, y: root.y }, '[Expand] root wrapper not found via elementFromPoint');
@@ -4585,17 +5523,31 @@ export class DouyinCrawler {
     }
 
     // 滚到根评论视口内,确保按钮可见
-    await page.evaluate(function(rect: { x: number; y: number; w: number; h: number }) {
-      var target = document.elementFromPoint(rect.x + rect.w / 2, rect.y + rect.h / 2);
-      var w: Element | null = target;
-      while (w && w !== document.body) {
-        if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
-          w.scrollIntoView({ behavior: 'instant', block: 'end' });
-          return;
+    if (isAntiDetectionV2()) {
+      await HumanActions.safeEvaluate(page, function(rect: {x: number; y: number; w: number; h: number}) {
+        var target = document.elementFromPoint(rect.x + rect.w / 2, rect.y + rect.h / 2);
+        var w: Element | null = target;
+        while (w && w !== document.body) {
+          if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+            w.scrollIntoView({ behavior: 'instant', block: 'end' });
+            return;
+          }
+          w = w.parentElement;
         }
-        w = w.parentElement;
-      }
-    }, rootInfo.rect);
+      }, { reason: '滚动根评论到视口', world: 'main', args: [rootInfo.rect] });
+    } else {
+      await page.evaluate(function(rect: { x: number; y: number; w: number; h: number }) {
+        var target = document.elementFromPoint(rect.x + rect.w / 2, rect.y + rect.h / 2);
+        var w: Element | null = target;
+        while (w && w !== document.body) {
+          if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+            w.scrollIntoView({ behavior: 'instant', block: 'end' });
+            return;
+          }
+          w = w.parentElement;
+        }
+      }, rootInfo.rect);
+    }
     await HumanActions.wait(page, 200, 400);
 
     // hover 根评论
@@ -4631,88 +5583,154 @@ export class DouyinCrawler {
     const targetUsername = target.username.trim().toLowerCase();
     const targetText = target.text.trim().toLowerCase();
 
-    return await page.evaluate(function(params) {
-      var username = params.username;
-      var text = params.text;
-      var rx = params.rx;
-      var ry = params.ry;
-      var vh = window.innerHeight;
+    if (isAntiDetectionV2()) {
+      return await HumanActions.safeEvaluate(page, function(params: { username: string; text: string; rx: number; ry: number }) {
+        var username = params.username;
+        var text = params.text;
+        var rx = params.rx;
+        var ry = params.ry;
+        var vh = window.innerHeight;
 
-      // 去装饰子元素,取 username 元素的纯文本(排除 <span class="tag-...">作者</span> 等)
-      function bareUsernameText(el: Element): string {
-        if (!el) return '';
-        var clone = el.cloneNode(true) as HTMLElement;
-        var ch = clone.children;
-        for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
-        return (clone.textContent || '').trim().toLowerCase();
-      }
+        function bareUsernameText(el: Element): string {
+          if (!el) return '';
+          var clone = el.cloneNode(true) as HTMLElement;
+          var ch = clone.children;
+          for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+          return (clone.textContent || '').trim().toLowerCase();
+        }
 
-      // ★ 用 rootX, rootY 定位根评论 wrapper,避免依赖 :nth-child(N) 拼接的脆弱 selector
-      var rootEl: Element | null = null;
-      for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
-        for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
-          var e = document.elementFromPoint(rx + dx, ry + dy);
-          if (!e) continue;
-          var w: Element | null = e;
-          while (w && w !== document.body) {
-            if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
-              var r = w.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+        var rootEl: Element | null = null;
+        for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
+          for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
+            var e = document.elementFromPoint(rx + dx, ry + dy);
+            if (!e) continue;
+            var w: Element | null = e;
+            while (w && w !== document.body) {
+              if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+                var r = w.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+              }
+              w = w.parentElement;
             }
-            w = w.parentElement;
           }
         }
-      }
-      if (!rootEl) return null;
+        if (!rootEl) return null;
 
-      // 在 rootEl 的**所有后代**中找目标子评论
-      var commentTexts = rootEl.querySelectorAll('[class*="comment-content-text"]');
-      for (var i = 0; i < commentTexts.length; i++) {
-        var el = commentTexts[i];
-        var foundContent = (el.textContent || '').trim().toLowerCase();
-        // ★ 严格相等匹配(不双向 includes):避免 lqq 回复"基本"时撞到那条作者回复
-        if (foundContent !== text) continue;
+        var commentTexts = rootEl.querySelectorAll('[class*="comment-content-text"]');
+        for (var i = 0; i < commentTexts.length; i++) {
+          var el = commentTexts[i];
+          var foundContent = (el.textContent || '').trim().toLowerCase();
+          if (foundContent !== text) continue;
 
-        // 向上找到该子评论的 wrapper(同时含 username + operations 的最小祖先)
-        var wrapper = el.parentElement;
-        var maxDepth = 10;
-        while (wrapper && maxDepth > 0) {
-          maxDepth--;
-          var hasU = wrapper.querySelector('[class*="username-"]');
-          var hasO = wrapper.querySelector('[class*="operations-"]');
-          if (hasU && hasO) break;
-          wrapper = wrapper.parentElement;
-        }
-        if (!wrapper) continue;
+          var wrapper = el.parentElement;
+          var maxDepth = 10;
+          while (wrapper && maxDepth > 0) {
+            maxDepth--;
+            var hasU = wrapper.querySelector('[class*="username-"]');
+            var hasO = wrapper.querySelector('[class*="operations-"]');
+            if (hasU && hasO) break;
+            wrapper = wrapper.parentElement;
+          }
+          if (!wrapper) continue;
 
-        // 验证 wrapper 内 username == 目标用户名
-        var uEl = wrapper.querySelector('[class*="username-"]');
-        if (!uEl) continue;
-        if (bareUsernameText(uEl) !== username) continue;
+          var uEl = wrapper.querySelector('[class*="username-"]');
+          if (!uEl) continue;
+          if (bareUsernameText(uEl) !== username) continue;
 
-        // 找"回复"按钮
-        var opsArea = wrapper.querySelector('[class*="operations-"]');
-        if (opsArea) {
-          var items = opsArea.querySelectorAll('[class*="item-"]');
-          for (var ri = 0; ri < items.length; ri++) {
-            if ((items[ri].textContent || '').trim() === '回复') {
-              var r = items[ri].getBoundingClientRect();
-              if (r.width > 0 && r.height > 0 && r.top < vh) {
-                return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+          var opsArea = wrapper.querySelector('[class*="operations-"]');
+          if (opsArea) {
+            var items = opsArea.querySelectorAll('[class*="item-"]');
+            for (var ri = 0; ri < items.length; ri++) {
+              if ((items[ri].textContent || '').trim() === '回复') {
+                var r = items[ri].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.top < vh) {
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                }
               }
             }
           }
+          var wr = wrapper.getBoundingClientRect();
+          return { x: Math.round(wr.left + wr.width / 2), y: Math.round(wr.top + wr.height / 2) };
         }
-        var wr = wrapper.getBoundingClientRect();
-        return { x: Math.round(wr.left + wr.width / 2), y: Math.round(wr.top + wr.height / 2) };
-      }
-      return null;
-    }, {
-      username: targetUsername,
-      text: targetText,
-      rx: root.x,
-      ry: root.y,
-    });
+        return null;
+      }, { reason: '在根评论内找目标子评论', world: 'main', args: [{ username: targetUsername, text: targetText, rx: root.x, ry: root.y }] });
+    } else {
+      return await page.evaluate(function(params) {
+        var username = params.username;
+        var text = params.text;
+        var rx = params.rx;
+        var ry = params.ry;
+        var vh = window.innerHeight;
+
+        function bareUsernameText(el: Element): string {
+          if (!el) return '';
+          var clone = el.cloneNode(true) as HTMLElement;
+          var ch = clone.children;
+          for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+          return (clone.textContent || '').trim().toLowerCase();
+        }
+
+        var rootEl: Element | null = null;
+        for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
+          for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
+            var e = document.elementFromPoint(rx + dx, ry + dy);
+            if (!e) continue;
+            var w: Element | null = e;
+            while (w && w !== document.body) {
+              if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+                var r = w.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+              }
+              w = w.parentElement;
+            }
+          }
+        }
+        if (!rootEl) return null;
+
+        var commentTexts = rootEl.querySelectorAll('[class*="comment-content-text"]');
+        for (var i = 0; i < commentTexts.length; i++) {
+          var el = commentTexts[i];
+          var foundContent = (el.textContent || '').trim().toLowerCase();
+          if (foundContent !== text) continue;
+
+          var wrapper = el.parentElement;
+          var maxDepth = 10;
+          while (wrapper && maxDepth > 0) {
+            maxDepth--;
+            var hasU = wrapper.querySelector('[class*="username-"]');
+            var hasO = wrapper.querySelector('[class*="operations-"]');
+            if (hasU && hasO) break;
+            wrapper = wrapper.parentElement;
+          }
+          if (!wrapper) continue;
+
+          var uEl = wrapper.querySelector('[class*="username-"]');
+          if (!uEl) continue;
+          if (bareUsernameText(uEl) !== username) continue;
+
+          var opsArea = wrapper.querySelector('[class*="operations-"]');
+          if (opsArea) {
+            var items = opsArea.querySelectorAll('[class*="item-"]');
+            for (var ri = 0; ri < items.length; ri++) {
+              if ((items[ri].textContent || '').trim() === '回复') {
+                var r = items[ri].getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.top < vh) {
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                }
+              }
+            }
+          }
+          var wr = wrapper.getBoundingClientRect();
+          return { x: Math.round(wr.left + wr.width / 2), y: Math.round(wr.top + wr.height / 2) };
+        }
+        return null;
+      }, {
+        username: targetUsername,
+        text: targetText,
+        rx: root.x,
+        ry: root.y,
+      });
+    }
   }
 
   /**
@@ -4725,44 +5743,83 @@ export class DouyinCrawler {
     await this.injectEsbuildPolyfill(page);
     // ★ 与 expandRootRepliesIfNeeded 对齐:用 rootX, rootY 定位根评论 wrapper,
     // 避免 :nth-child(N) 拼出的脆弱 selector
-    const btnPos = await page.evaluate(function(params: { rx: number; ry: number }) {
-      var rx = params.rx, ry = params.ry;
-      // 找根评论 wrapper
-      var rootEl: Element | null = null;
-      for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
-        for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
-          var e = document.elementFromPoint(rx + dx, ry + dy);
-          if (!e) continue;
-          var w: Element | null = e;
-          while (w && w !== document.body) {
-            if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
-              var r = w.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+    const btnPos = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
+          var rx = coords.x, ry = coords.y;
+          var rootEl: Element | null = null;
+          for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
+            for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
+              var e = document.elementFromPoint(rx + dx, ry + dy);
+              if (!e) continue;
+              var w: Element | null = e;
+              while (w && w !== document.body) {
+                if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+                  var r = w.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+                }
+                w = w.parentElement;
+              }
             }
-            w = w.parentElement;
           }
-        }
+          if (!rootEl) return null;
+          var candidates = rootEl.querySelectorAll('*');
+          for (var i = 0; i < candidates.length; i++) {
+            var el = candidates[i];
+            if (!(el instanceof HTMLElement)) continue;
+            var t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t)) continue;
+            var hasMatchingChild = Array.prototype.some.call(el.children, function (child) {
+              var ct = (child.textContent || '').trim();
+              return /^查看\d+条回复$/.test(ct);
+            });
+            if (hasMatchingChild) continue;
+            var r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            }
+          }
+          return null;
+        }, { reason: '定位加载更多按钮坐标', world: 'main', args: [{ x: root.x, y: root.y }] });
+      } else {
+        return page.evaluate(function(params: { rx: number; ry: number }) {
+          var rx = params.rx, ry = params.ry;
+          var rootEl: Element | null = null;
+          for (var dx = -2; dx <= 2 && !rootEl; dx += 2) {
+            for (var dy = -2; dy <= 2 && !rootEl; dy += 2) {
+              var e = document.elementFromPoint(rx + dx, ry + dy);
+              if (!e) continue;
+              var w: Element | null = e;
+              while (w && w !== document.body) {
+                if (w.tagName === 'DIV' && w.className && w.className.indexOf('container-') >= 0) {
+                  var r = w.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) { rootEl = w; break; }
+                }
+                w = w.parentElement;
+              }
+            }
+          }
+          if (!rootEl) return null;
+          var candidates = rootEl.querySelectorAll('*');
+          for (var i = 0; i < candidates.length; i++) {
+            var el = candidates[i];
+            if (!(el instanceof HTMLElement)) continue;
+            var t = (el.textContent || '').trim();
+            if (!/^查看\d+条回复$/.test(t)) continue;
+            var hasMatchingChild = Array.prototype.some.call(el.children, function (child) {
+              var ct = (child.textContent || '').trim();
+              return /^查看\d+条回复$/.test(ct);
+            });
+            if (hasMatchingChild) continue;
+            var r = el.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+              return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+            }
+          }
+          return null;
+        }, { rx: root.x, ry: root.y });
       }
-      if (!rootEl) return null;
-      // 在 wrapper 内找"查看N条回复"按钮(leaf 判定)
-      var candidates = rootEl.querySelectorAll('*');
-      for (var i = 0; i < candidates.length; i++) {
-        var el = candidates[i];
-        if (!(el instanceof HTMLElement)) continue;
-        var t = (el.textContent || '').trim();
-        if (!/^查看\d+条回复$/.test(t)) continue;
-        var hasMatchingChild = Array.prototype.some.call(el.children, function (child) {
-          var ct = (child.textContent || '').trim();
-          return /^查看\d+条回复$/.test(ct);
-        });
-        if (hasMatchingChild) continue;
-        var r = el.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0) {
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
-        }
-      }
-      return null;
-    }, { rx: root.x, ry: root.y });
+    })();
 
     if (!btnPos) return false;
 
@@ -4783,20 +5840,39 @@ export class DouyinCrawler {
     await this.injectEsbuildPolyfill(page);
     // 每 3 轮诊断一次容器状态
     if (scrollRound % 3 === 0) {
-      const expandMoreClicked = await page.evaluate(function() {
-        var btns = document.querySelectorAll('span, div, button, a');
-        for (var i = 0; i < btns.length; i++) {
-          var t = (btns[i].textContent || '').trim();
-          if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
-            var rect = btns[i].getBoundingClientRect();
-            if (rect.width > 0 && rect.height > 0) {
-              btns[i].click();
-              return true;
+      const expandMoreClicked = await (async () => {
+        if (isAntiDetectionV2()) {
+          return HumanActions.safeEvaluate(page, function() {
+            var btns = document.querySelectorAll('span, div, button, a');
+            for (var i = 0; i < btns.length; i++) {
+              var t = (btns[i].textContent || '').trim();
+              if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
+                var rect = btns[i].getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                  btns[i].click();
+                  return true;
+                }
+              }
             }
-          }
+            return false;
+          }, { reason: '点击展开更多评论按钮', world: 'main' });
+        } else {
+          return page.evaluate(function() {
+            var btns = document.querySelectorAll('span, div, button, a');
+            for (var i = 0; i < btns.length; i++) {
+              var t = (btns[i].textContent || '').trim();
+              if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
+                var rect = btns[i].getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                  btns[i].click();
+                  return true;
+                }
+              }
+            }
+            return false;
+          });
         }
-        return false;
-      });
+      })();
       if (expandMoreClicked) {
         logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Clicked "展开更多评论"');
         await HumanActions.wait(page, 1500, 2500);
@@ -4805,10 +5881,19 @@ export class DouyinCrawler {
     }
 
     // ── 滚动加载更多 ──
-    const sh = await page.evaluate(function() {
-      var c = document.querySelector('.douyin-creator-interactive-tabs-content');
-      return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
-    });
+    const sh = await (async () => {
+      if (isAntiDetectionV2()) {
+        return HumanActions.safeEvaluate(page, function() {
+          var c = document.querySelector('.douyin-creator-interactive-tabs-content');
+          return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
+        }, { reason: '读取评论区滚动状态', world: 'main' });
+      } else {
+        return page.evaluate(function() {
+          var c = document.querySelector('.douyin-creator-interactive-tabs-content');
+          return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
+        });
+      }
+    })();
     if (!sh) {
       logger.warn('[Reply::Find] Container gone, stopping');
       return false;
@@ -4835,65 +5920,117 @@ export class DouyinCrawler {
     const targetUsername = target.username.trim().toLowerCase();
     const targetText = target.text.trim().toLowerCase();
 
-    return await page.evaluate(function(params) {
-      var username = params.username;
-      var text = params.text;
-      var vh = window.innerHeight;
+    if (isAntiDetectionV2()) {
+      return await HumanActions.safeEvaluate(page, function(params: { username: string; text: string }) {
+        var username = params.username;
+        var text = params.text;
+        var vh = window.innerHeight;
 
-      // 扫所有 comment-content-text 元素
-      var textEls = document.querySelectorAll('[class*="comment-content-text"], [class*="comment-content-text-"]');
-      for (var i = 0; i < textEls.length; i++) {
-        var el = textEls[i];
-        var content = (el.textContent || '').trim().toLowerCase();
-        if (content.indexOf(text) < 0 && text.indexOf(content) < 0) continue;
+        var textEls = document.querySelectorAll('[class*="comment-content-text"], [class*="comment-content-text-"]');
+        for (var i = 0; i < textEls.length; i++) {
+          var el = textEls[i];
+          var content = (el.textContent || '').trim().toLowerCase();
+          if (content.indexOf(text) < 0 && text.indexOf(content) < 0) continue;
 
-        // 向上找 username 确认(去装饰子元素)
-        function bareUsernameText(el: Element): string {
-          if (!el) return '';
-          var clone = el.cloneNode(true) as HTMLElement;
-          var ch = clone.children;
-          for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
-          return (clone.textContent || '').trim().toLowerCase();
-        }
-        var parent = el.parentElement;
-        var foundUsername = '';
-        for (var depth = 0; depth < 8 && parent; depth++) {
-          var uEl = parent.querySelector('[class*="username-"]');
-          if (uEl) {
-            foundUsername = bareUsernameText(uEl);
-            break;
+          function bareUsernameText(el: Element): string {
+            if (!el) return '';
+            var clone = el.cloneNode(true) as HTMLElement;
+            var ch = clone.children;
+            for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+            return (clone.textContent || '').trim().toLowerCase();
           }
-          parent = parent.parentElement;
-        }
-        if (!foundUsername || foundUsername !== username) continue;
+          var parent = el.parentElement;
+          var foundUsername = '';
+          for (var depth = 0; depth < 8 && parent; depth++) {
+            var uEl = parent.querySelector('[class*="username-"]');
+            if (uEl) {
+              foundUsername = bareUsernameText(uEl);
+              break;
+            }
+            parent = parent.parentElement;
+          }
+          if (!foundUsername || foundUsername !== username) continue;
 
-        // 找回复按钮
-        parent = el.parentElement;
-        for (var d2 = 0; d2 < 8 && parent; d2++) {
-          var ops = parent.querySelector('[class*="operations-"]');
-          if (ops) {
-            var items = ops.querySelectorAll('[class*="item-"]');
-            for (var ri = 0; ri < items.length; ri++) {
-              if ((items[ri].textContent || '').trim() === '回复') {
-                var r = items[ri].getBoundingClientRect();
-                if (r.width > 0 && r.height > 0) {
-                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+          parent = el.parentElement;
+          for (var d2 = 0; d2 < 8 && parent; d2++) {
+            var ops = parent.querySelector('[class*="operations-"]');
+            if (ops) {
+              var items = ops.querySelectorAll('[class*="item-"]');
+              for (var ri = 0; ri < items.length; ri++) {
+                if ((items[ri].textContent || '').trim() === '回复') {
+                  var r = items[ri].getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) {
+                    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                  }
                 }
               }
             }
+            parent = parent.parentElement;
           }
-          parent = parent.parentElement;
-        }
 
-        // 回退：返回元素中心
-        el.scrollIntoView({ behavior: 'instant', block: 'center' });
-        var er = el.getBoundingClientRect();
-        return { x: Math.round(er.left + er.width / 2), y: Math.round(er.top + er.height / 2) };
-      }
-      return null;
-    }, {
-      username: targetUsername,
-      text: targetText,
-    });
+          el.scrollIntoView({ behavior: 'instant', block: 'center' });
+          var er = el.getBoundingClientRect();
+          return { x: Math.round(er.left + er.width / 2), y: Math.round(er.top + er.height / 2) };
+        }
+        return null;
+      }, { reason: '最终全扫回退匹配回复按钮', world: 'main', args: [{ username: targetUsername, text: targetText }] });
+    } else {
+      return await page.evaluate(function(params) {
+        var username = params.username;
+        var text = params.text;
+        var vh = window.innerHeight;
+
+        var textEls = document.querySelectorAll('[class*="comment-content-text"], [class*="comment-content-text-"]');
+        for (var i = 0; i < textEls.length; i++) {
+          var el = textEls[i];
+          var content = (el.textContent || '').trim().toLowerCase();
+          if (content.indexOf(text) < 0 && text.indexOf(content) < 0) continue;
+
+          function bareUsernameText(el: Element): string {
+            if (!el) return '';
+            var clone = el.cloneNode(true) as HTMLElement;
+            var ch = clone.children;
+            for (var i = ch.length - 1; i >= 0; i--) ch[i].remove();
+            return (clone.textContent || '').trim().toLowerCase();
+          }
+          var parent = el.parentElement;
+          var foundUsername = '';
+          for (var depth = 0; depth < 8 && parent; depth++) {
+            var uEl = parent.querySelector('[class*="username-"]');
+            if (uEl) {
+              foundUsername = bareUsernameText(uEl);
+              break;
+            }
+            parent = parent.parentElement;
+          }
+          if (!foundUsername || foundUsername !== username) continue;
+
+          parent = el.parentElement;
+          for (var d2 = 0; d2 < 8 && parent; d2++) {
+            var ops = parent.querySelector('[class*="operations-"]');
+            if (ops) {
+              var items = ops.querySelectorAll('[class*="item-"]');
+              for (var ri = 0; ri < items.length; ri++) {
+                if ((items[ri].textContent || '').trim() === '回复') {
+                  var r = items[ri].getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) {
+                    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                  }
+                }
+              }
+            }
+            parent = parent.parentElement;
+          }
+
+          el.scrollIntoView({ behavior: 'instant', block: 'center' });
+          var er = el.getBoundingClientRect();
+          return { x: Math.round(er.left + er.width / 2), y: Math.round(er.top + er.height / 2) };
+        }
+        return null;
+      }, {
+        username: targetUsername,
+        text: targetText,
+      });
+    }
   }
 }
