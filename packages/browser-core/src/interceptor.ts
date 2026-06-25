@@ -572,6 +572,23 @@ export class RequestInterceptor {
     return collected;
   }
 
+  async pollStatus(
+    pattern: string,
+    opts: { predicate: (r: InterceptedResponse) => boolean; pollMs: number; timeoutMs: number },
+  ): Promise<InterceptedResponse | null> {
+    const deadline = Date.now() + opts.timeoutMs;
+    let seenIndex = 0;
+    while (Date.now() < deadline) {
+      const all = this.getResponses(pattern);
+      while (seenIndex < all.length) {
+        const r = all[seenIndex++];
+        if (opts.predicate(r)) return r;
+      }
+      await new Promise(resolve => setTimeout(resolve, opts.pollMs));
+    }
+    return null;
+  }
+
   clear(pattern: string): void {
     this.interceptedData.delete(pattern);
     this.capturedUrls.delete(pattern);
