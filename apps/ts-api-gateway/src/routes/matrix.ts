@@ -66,7 +66,7 @@ function handleError(res: Response, logger: ReturnType<typeof createLogger>, err
 /** GET /api/v1/matrix/accounts — 托管账号列表 */
 router.get('/accounts', async (_req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
+    const users = await prisma.platformAccount.findMany({
       orderBy: { updatedAt: 'desc' },
     });
 
@@ -76,7 +76,7 @@ router.get('/accounts', async (_req: Request, res: Response) => {
         id: user.id,
         platform: user.platform,
         accountName: user.wechatUserid,
-        windowId: user.fingerprintWindowId,
+        windowId: user.windowId,
         cookieStatus,
         cookieValidDays,
       };
@@ -96,7 +96,7 @@ router.post('/accounts/check-login', async (req: Request, res: Response) => {
     });
     const { accountId } = bodySchema.parse(req.body);
 
-    const user = await prisma.user.findUnique({ where: { id: Number(accountId) } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: Number(accountId) } });
     if (!user) {
       return res.status(404).json({ success: false, error: `账号不存在: ${accountId}` });
     }
@@ -441,7 +441,7 @@ router.get('/monitor/active-tasks', async (_req: Request, res: Response) => {
         taskId,
         platform: data.platform || 'unknown',
         userId: data.userId,
-        windowId: data.windowId || data.fingerprintWindowId || 'unknown',
+        windowId: data.windowId || data.windowId || 'unknown',
         status: await job.isActive() ? 'running' : 'queued',
         progress,
       });
@@ -637,7 +637,7 @@ router.post('/monitor/active-tasks/cancel-all', async (_req: Request, res: Respo
 /** GET /api/v1/matrix/monitor/accounts — 独立监控用户列表 */
 router.get('/monitor/accounts', async (_req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany({
+    const users = await prisma.platformAccount.findMany({
       orderBy: { updatedAt: 'desc' },
       include: {
         _count: { select: { videos: true } },
@@ -648,7 +648,7 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
     });
 
     // 批量查询操作员信息（用于获取用户名称）
-    const windowIds = [...new Set(users.map((u) => u.fingerprintWindowId))];
+    const windowIds = [...new Set(users.map((u) => u.windowId))];
     const windows = await prisma.browserWindow.findMany({
       where: { externalId: { in: windowIds } },
       include: {
@@ -668,14 +668,14 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
           }),
         ]);
 
-        const window = windowMap.get(user.fingerprintWindowId);
+        const window = windowMap.get(user.windowId);
         const operator = window?.operator;
 
         return {
           id: user.id,
           platform: user.platform,
           platformName: PLATFORM_DISPLAY_NAMES[user.platform] || user.platform,
-          fingerprintWindowId: user.fingerprintWindowId,
+          windowId: user.windowId,
           windowName: window?.windowName || '',
           operatorId: operator?.id || null,
           operatorName: operator?.displayName || '',
@@ -705,7 +705,7 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
 /** GET /api/v1/matrix/monitor/users — 监控目标按平台聚合 */
 router.get('/monitor/users', async (_req: Request, res: Response) => {
   try {
-    const users = await prisma.user.findMany();
+    const users = await prisma.platformAccount.findMany();
 
     // 按 platform 分组聚合
     const grouped = new Map<
@@ -785,7 +785,7 @@ router.get('/monitor/videos', async (req: Request, res: Response) => {
       orderBy: { createTime: 'desc' },
       take: limit,
       include: {
-        user: { select: { platform: true, fingerprintWindowId: true } },
+        user: { select: { platform: true, windowId: true } },
         _count: { select: { comments: true } },
       },
     });
@@ -799,7 +799,7 @@ router.get('/monitor/videos', async (req: Request, res: Response) => {
         createTime: Number(v.createTime),
         commentCount: v.commentCount ?? 0,
         platform: v.user.platform,
-        windowId: v.user.fingerprintWindowId,
+        windowId: v.user.windowId,
         metrics: v.metrics ? JSON.parse(v.metrics) : null,
       })),
     });
@@ -984,9 +984,9 @@ router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) =
       return res.status(404).json({ success: false, error: `评论不存在: ${id}` });
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
-      select: { id: true, platform: true, fingerprintWindowId: true },
+      select: { id: true, platform: true, windowId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: '未找到关联用户' });
@@ -997,8 +997,8 @@ router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) =
       taskId: `reply_${Date.now()}_${comment.cid}`,
       userId: user.id,
       platform: user.platform as any,
-      windowId: user.fingerprintWindowId,
-      fingerprintWindowId: user.fingerprintWindowId,
+      windowId: user.windowId,
+      windowId: user.windowId,
       replyData: {
         videoId: comment.videoId,
         commentCid: comment.cid,
@@ -1040,9 +1040,9 @@ router.post('/monitor/comments/:id/accept-reply', async (req: Request, res: Resp
       return res.status(404).json({ success: false, error: `评论不存在: ${id}` });
     }
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
-      select: { id: true, platform: true, fingerprintWindowId: true },
+      select: { id: true, platform: true, windowId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: '未找到关联用户' });
@@ -1059,8 +1059,8 @@ router.post('/monitor/comments/:id/accept-reply', async (req: Request, res: Resp
       taskId: `reply_${Date.now()}_${comment.cid}`,
       userId: user.id,
       platform: user.platform as any,
-      windowId: user.fingerprintWindowId,
-      fingerprintWindowId: user.fingerprintWindowId,
+      windowId: user.windowId,
+      windowId: user.windowId,
       replyData: {
         videoId: comment.videoId,
         commentCid: comment.cid,
@@ -1085,7 +1085,7 @@ router.get('/monitor/accounts/:userId', async (req: Request, res: Response) => {
     const paramsSchema = z.object({ userId: z.coerce.number().int().positive() });
     const { userId } = paramsSchema.parse(req.params);
 
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: userId },
       include: {
         videos: {
@@ -1127,7 +1127,7 @@ router.get('/monitor/accounts/:userId', async (req: Request, res: Response) => {
         id: user.id,
         platform: user.platform,
         platformName: PLATFORM_DISPLAY_NAMES[user.platform] || user.platform,
-        fingerprintWindowId: user.fingerprintWindowId,
+        windowId: user.windowId,
         status: user.status,
         monitoringEnabled: user.monitoringEnabled,
         cooldownUntil: user.cooldownUntil ? Number(user.cooldownUntil) : 0,
@@ -1159,7 +1159,7 @@ router.patch('/monitor/accounts/:userId/skip-pinned', async (req: Request, res: 
       }
     }
 
-    await prisma.user.update({
+    await prisma.platformAccount.update({
       where: { id: userId },
       data: { skipPinnedVideos },
     });
@@ -1176,7 +1176,7 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     const paramsSchema = z.object({ userId: z.coerce.number().int().positive() });
     const { userId } = paramsSchema.parse(req.params);
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: userId } });
     if (!user) {
       return res.status(404).json({ success: false, error: '用户不存在' });
     }
@@ -1205,12 +1205,12 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
-      windowId: user.fingerprintWindowId,
-      fingerprintWindowId: user.fingerprintWindowId,
+      windowId: user.windowId,
+      windowId: user.windowId,
     });
 
     // 重置该 (窗口, 平台) 的调度器倒计时
-    resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+    resetSchedulerTimer(user.windowId, user.platform);
 
     await prisma.operationLog.create({
       data: {
@@ -1243,7 +1243,7 @@ router.get('/monitor/scheduler-status', (_req: Request, res: Response) => {
 router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
   try {
     // 获取所有活跃监控用户
-    const users = await prisma.user.findMany({
+    const users = await prisma.platformAccount.findMany({
       where: {
         monitoringEnabled: true,
         status: { not: 'blocked' },
@@ -1257,9 +1257,9 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     // 按窗口分组，每个窗口内的任务串行执行
     const byWindow = new Map<string, typeof users>();
     for (const u of users) {
-      const items = byWindow.get(u.fingerprintWindowId) || [];
+      const items = byWindow.get(u.windowId) || [];
       items.push(u);
-      byWindow.set(u.fingerprintWindowId, items);
+      byWindow.set(u.windowId, items);
     }
 
     const jobIds: string[] = [];
@@ -1269,8 +1269,8 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,
-          windowId: user.fingerprintWindowId,
-          fingerprintWindowId: user.fingerprintWindowId,
+          windowId: user.windowId,
+          windowId: user.windowId,
         });
         jobIds.push(job.id);
       }
@@ -1290,10 +1290,10 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     // 为每个唯一的 (窗口, 平台) 重置调度器
     const resetPairs = new Set<string>();
     for (const u of users) {
-      const pairKey = `${u.fingerprintWindowId}_${u.platform}`;
+      const pairKey = `${u.windowId}_${u.platform}`;
       if (!resetPairs.has(pairKey)) {
         resetPairs.add(pairKey);
-        resetSchedulerTimer(u.fingerprintWindowId, u.platform);
+        resetSchedulerTimer(u.windowId, u.platform);
       }
     }
 
@@ -1341,7 +1341,7 @@ router.post('/monitor/videos/clear', async (_req: Request, res: Response) => {
     logger.info({ cancelled: allJobs.length }, '清空数据时已取消所有队列任务');
 
     // 2. 暂停所有平台（禁用所有用户的监控）
-    await prisma.user.updateMany({
+    await prisma.platformAccount.updateMany({
       data: { monitoringEnabled: false },
     });
     logger.info('已暂停所有平台监控');
@@ -1359,7 +1359,7 @@ router.post('/monitor/videos/clear', async (_req: Request, res: Response) => {
     await prisma.monitorStatus.deleteMany();
 
     // 4. 重置用户状态
-    await prisma.user.updateMany({
+    await prisma.platformAccount.updateMany({
       data: { consecutiveNoUpdate: 0, cooldownUntil: 0, status: 'init', platformAuthorId: null, platformAuthorName: null },
     });
 
@@ -1376,7 +1376,7 @@ router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Respons
     const { userId } = paramsSchema.parse(req.params);
 
     // 检查用户是否存在
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: userId } });
     if (!user) {
       return res.status(404).json({ success: false, error: '用户不存在' });
     }
@@ -1399,7 +1399,7 @@ router.post('/monitor/accounts/:userId/clear', async (req: Request, res: Respons
     await prisma.monitorStatus.deleteMany({ where: { accountId: String(userId) } });
 
     // 重置用户状态
-    await prisma.user.update({
+    await prisma.platformAccount.update({
       where: { id: userId },
       data: { consecutiveNoUpdate: 0, cooldownUntil: 0, status: 'init', platformAuthorId: null, platformAuthorName: null },
     });
@@ -1423,17 +1423,17 @@ router.post('/monitor/accounts/:userId/clear-all', async (req: Request, res: Res
     }
 
     // 1. 获取用户所在窗口
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: userId },
-      select: { fingerprintWindowId: true },
+      select: { windowId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
     // 2. 获取该窗口下所有用户 ID
-    const windowUsers = await prisma.user.findMany({
-      where: { fingerprintWindowId: user.fingerprintWindowId },
+    const windowUsers = await prisma.platformAccount.findMany({
+      where: { windowId: user.windowId },
       select: { id: true },
     });
     const userIds = windowUsers.map(u => u.id);
@@ -1464,8 +1464,8 @@ router.post('/monitor/accounts/:userId/clear-all', async (req: Request, res: Res
     ]);
 
     // 6. 重置用户状态
-    await prisma.user.updateMany({
-      where: { fingerprintWindowId: user.fingerprintWindowId },
+    await prisma.platformAccount.updateMany({
+      where: { windowId: user.windowId },
       data: {
         status: 'init',
         monitoringEnabled: true,
@@ -1482,7 +1482,7 @@ router.post('/monitor/accounts/:userId/clear-all', async (req: Request, res: Res
         action: 'monitor_clear_all_user_data',
         details: JSON.stringify({
           userId,
-          windowId: user.fingerprintWindowId,
+          windowId: user.windowId,
           deletedVideos: deletedVideos.count,
           deletedComments: deletedComments.count,
         }),
@@ -1516,17 +1516,17 @@ router.post('/monitor/accounts/:userId/restore-all', async (req: Request, res: R
     }
 
     // 1. 获取用户所在窗口
-    const user = await prisma.user.findUnique({
+    const user = await prisma.platformAccount.findUnique({
       where: { id: userId },
-      select: { fingerprintWindowId: true },
+      select: { windowId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
     // 2. 重置该窗口下所有用户（不限平台）
-    const result = await prisma.user.updateMany({
-      where: { fingerprintWindowId: user.fingerprintWindowId },
+    const result = await prisma.platformAccount.updateMany({
+      where: { windowId: user.windowId },
       data: {
         status: 'init',
         monitoringEnabled: true,
@@ -1538,19 +1538,19 @@ router.post('/monitor/accounts/:userId/restore-all', async (req: Request, res: R
     });
 
     // 3. 重置调度器
-    const allUsers = await prisma.user.findMany({
-      where: { fingerprintWindowId: user.fingerprintWindowId },
-      select: { fingerprintWindowId: true, platform: true },
+    const allUsers = await prisma.platformAccount.findMany({
+      where: { windowId: user.windowId },
+      select: { windowId: true, platform: true },
     });
     for (const u of allUsers) {
-      resetSchedulerTimer(u.fingerprintWindowId, u.platform);
+      resetSchedulerTimer(u.windowId, u.platform);
     }
 
     // 4. 写入操作日志
     await prisma.operationLog.create({
       data: {
         action: 'monitor_restore_all_platforms',
-        details: JSON.stringify({ userId, windowId: user.fingerprintWindowId, updatedCount: result.count }),
+        details: JSON.stringify({ userId, windowId: user.windowId, updatedCount: result.count }),
         userId: 'system',
         userName: '恢复所有平台',
         result: 'success',
@@ -1569,9 +1569,9 @@ router.post('/monitor/accounts/:userId/restore-all', async (req: Request, res: R
 router.post('/monitor/accounts/enable-all', async (_req: Request, res: Response) => {
   try {
     // 1. 查询所有已暂停的用户
-    const pausedUsers = await prisma.user.findMany({
+    const pausedUsers = await prisma.platformAccount.findMany({
       where: { monitoringEnabled: false },
-      select: { id: true, fingerprintWindowId: true, platform: true },
+      select: { id: true, windowId: true, platform: true },
     });
 
     if (pausedUsers.length === 0) {
@@ -1579,14 +1579,14 @@ router.post('/monitor/accounts/enable-all', async (_req: Request, res: Response)
     }
 
     // 2. 批量启用
-    await prisma.user.updateMany({
+    await prisma.platformAccount.updateMany({
       where: { monitoringEnabled: false },
       data: { monitoringEnabled: true },
     });
 
     // 3. 重置调度器
     for (const user of pausedUsers) {
-      resetSchedulerTimer(user.fingerprintWindowId, user.platform);
+      resetSchedulerTimer(user.windowId, user.platform);
     }
 
     // 4. 写入操作日志
@@ -1616,12 +1616,12 @@ router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Respons
     const { userId } = paramsSchema.parse(req.params);
     const { enabled } = bodySchema.parse(req.body);
 
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.platformAccount.findUnique({ where: { id: userId } });
     if (!user) {
       return res.status(404).json({ success: false, error: '用户不存在' });
     }
 
-    await prisma.user.update({
+    await prisma.platformAccount.update({
       where: { id: userId },
       data: { monitoringEnabled: enabled },
     });
@@ -1642,11 +1642,11 @@ router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Respons
       const { resetSchedulerTimer } = await import('../services/monitorService');
       if (enabled) {
         // 启用时：立即重置该 (窗口, 平台) 的调度器，触发即时调度
-        resetSchedulerTimer(user.fingerprintWindowId, user.platform);
-        logger.info({ userId, windowId: user.fingerprintWindowId, platform: user.platform }, '[toggle] 调度器已重置，等待即时调度');
+        resetSchedulerTimer(user.windowId, user.platform);
+        logger.info({ userId, windowId: user.windowId, platform: user.platform }, '[toggle] 调度器已重置，等待即时调度');
       } else {
         // 禁用时：无需操作，getAllActiveUsers() 已过滤 monitoringEnabled=false 的用户
-        logger.info({ userId, windowId: user.fingerprintWindowId, platform: user.platform }, '[toggle] 用户已禁用，调度器将在下次运行时自动跳过');
+        logger.info({ userId, windowId: user.windowId, platform: user.platform }, '[toggle] 用户已禁用，调度器将在下次运行时自动跳过');
       }
     } catch (restartErr: any) {
       logger.warn({ err: restartErr.message }, '[toggle] 调度器重置失败（不影响 toggle 结果）');
@@ -1667,7 +1667,7 @@ router.get('/monitor/new-comments', async (_req: Request, res: Response) => {
         comments: { some: { isNew: 1 } },
       },
       include: {
-        user: { select: { id: true, platform: true, fingerprintWindowId: true } },
+        user: { select: { id: true, platform: true, windowId: true } },
         _count: { select: { comments: true } },
         comments: {
           where: { isNew: 1 },
@@ -1948,8 +1948,8 @@ router.get('/queue/active', async (_req: Request, res: Response) => {
         taskId,
         taskType: data.taskType || 'unknown',
         platform: data.platform || 'unknown',
-        windowId: data.windowId || data.fingerprintWindowId || '',
-        windowName: (data.windowId && windowNameMap.get(data.windowId)) || (data.fingerprintWindowId && windowNameMap.get(data.fingerprintWindowId)) || '',
+        windowId: data.windowId || data.windowId || '',
+        windowName: (data.windowId && windowNameMap.get(data.windowId)) || (data.windowId && windowNameMap.get(data.windowId)) || '',
         status: await job.isActive() ? 'running' : 'queued',
         phaseIndex,
         totalPhases,
