@@ -15,41 +15,40 @@ datasource db {
 // ============================================================
 
 model User {
-  id                   Int      @id @default(autoincrement())
-  fingerprintWindowId  String   @map("fingerprint_window_id")
-  wechatUserid         String   @map("wechat_userid")
-  platform             String   @default("douyin")
-  status               String   @default("init") // init | active | blocked | cooldown
-  consecutiveNoUpdate  Int      @default(0) @map("consecutive_no_update")
-  cooldownUntil        BigInt   @default(0) @map("cooldown_until")
-  monitoringEnabled    Boolean  @default(true) @map("monitoring_enabled")
-  platformAuthorId     String?  @map("platform_author_id")    // 抖音uid / 快手userId
-  platformAuthorName   String?  @map("platform_author_name")  // 作者昵称
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
-  skipPinnedVideos     Json?    @map("skip_pinned_videos")
+  id                  Int      @id @default(autoincrement())
+  fingerprintWindowId String   @map("fingerprint_window_id")
+  wechatUserid        String   @map("wechat_userid")
+  platform            String   @default("douyin")
+  status              String   @default("init") // init | active | blocked | cooldown
+  consecutiveNoUpdate Int      @default(0) @map("consecutive_no_update")
+  cooldownUntil       BigInt   @default(0) @map("cooldown_until")
+  monitoringEnabled   Boolean  @default(true) @map("monitoring_enabled")
+  platformAuthorId    String?  @map("platform_author_id") // 抖音uid / 快手userId
+  platformAuthorName  String?  @map("platform_author_name") // 作者昵称
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  skipPinnedVideos    Json?    @map("skip_pinned_videos")
 
-  videos    Video[]
   @@unique([fingerprintWindowId, platform], name: "idx_users_window_platform")
   @@map("users")
 }
 
 model Video {
-  id           String   @id
-  userId       Int      @map("user_id")
-  description  String   @default("")
-  createTime   BigInt   @map("create_time")
-  commentCount Int      @default(0) @map("comment_count")
-  metrics      String   @default("{}") // JSON
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
-  isPinned     Boolean  @default(false) @map("is_pinned")
-  rootCommentRetryCount Int @default(0) @map("root_comment_retry_count")
+  id                    String   @id
+  userId                Int      @map("user_id")
+  description           String   @default("")
+  createTime            BigInt   @map("create_time")
+  commentCount          Int      @default(0) @map("comment_count")
+  metrics               String   @default("{}") // JSON
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+  isPinned              Boolean  @default(false) @map("is_pinned")
+  rootCommentRetryCount Int      @default(0) @map("root_comment_retry_count")
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     PlatformAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
   comments Comment[]
 
-  @@index([userId], name: "idx_videos_user_id")
+  @@unique([userId, id], name: "idx_videos_user_id")
   @@index([userId, createTime(sort: Desc)], name: "idx_videos_user_id_create_time")
   @@map("videos")
 }
@@ -72,16 +71,16 @@ model Comment {
   isAuthor     Boolean  @default(false) @map("is_author")
   createdAt    DateTime @default(now()) @map("created_at")
 
-  imageUrls    String?  @map("image_urls") @db.Text  // JSON 数组，存储图片 URL
+  imageUrls String? @map("image_urls") @db.Text // JSON 数组，存储图片 URL
 
   // AI 客服建议字段
-  suggestedReply      String?    @map("suggested_reply") @db.Text
-  suggestionStatus    String     @default("none") @map("suggestion_status") @db.VarChar(16)
-  suggestionModel     String?    @map("suggestion_model") @db.VarChar(64)
-  suggestionLatencyMs Int?       @map("suggestion_latency_ms")
-  suggestionAt        DateTime?  @map("suggestion_at")
-  replyStatus         String     @default("none") @map("reply_status") @db.VarChar(16)
-  repliedAt           DateTime?  @map("replied_at")
+  suggestedReply      String?   @map("suggested_reply") @db.Text
+  suggestionStatus    String    @default("none") @map("suggestion_status") @db.VarChar(16)
+  suggestionModel     String?   @map("suggestion_model") @db.VarChar(64)
+  suggestionLatencyMs Int?      @map("suggestion_latency_ms")
+  suggestionAt        DateTime? @map("suggestion_at")
+  replyStatus         String    @default("none") @map("reply_status") @db.VarChar(16)
+  repliedAt           DateTime? @map("replied_at")
 
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
@@ -137,16 +136,16 @@ model OperationLog {
 }
 
 model SystemStatus {
-  id                 Int      @id @default(1)
-  status             String   @default("running") // running | paused | error
-  currentInterval    Int      @default(180000) @map("current_interval") // ms
-  consecutiveChecks  Int      @default(0) @map("consecutive_checks")
-  lastCheckTime      BigInt   @default(0) @map("last_check_time")
-  totalChecks        Int      @default(0) @map("total_checks")
-  isDebugMode        Boolean  @default(false) @map("is_debug_mode")
-  enableWarmup       Boolean  @default(false) @map("enable_warmup")
-  nextCheckAt        BigInt   @default(0) @map("next_check_at")
-  updatedAt          DateTime @updatedAt @map("updated_at")
+  id                Int      @id @default(1)
+  status            String   @default("running") // running | paused | error
+  currentInterval   Int      @default(180000) @map("current_interval") // ms
+  consecutiveChecks Int      @default(0) @map("consecutive_checks")
+  lastCheckTime     BigInt   @default(0) @map("last_check_time")
+  totalChecks       Int      @default(0) @map("total_checks")
+  isDebugMode       Boolean  @default(false) @map("is_debug_mode")
+  enableWarmup      Boolean  @default(false) @map("enable_warmup")
+  nextCheckAt       BigInt   @default(0) @map("next_check_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
 
   @@map("system_status")
 }
@@ -160,7 +159,7 @@ model CrawlSetting {
   platform  String   @unique
   mode      String   @default("simple") // "simple" | "deep"
   enabled   Boolean  @default(true)
-  config    Json?    // { max_root_comments: 30 }
+  config    Json? // { max_root_comments: 30 }
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("crawl_settings")
@@ -182,15 +181,15 @@ model PlatformConfig {
 }
 
 model PlatformConfigAudit {
-  id         Int      @id @default(autoincrement())
-  platform   String
-  configKey  String   @map("config_key")
-  oldValue   String   @default("") @map("old_value")
-  newValue   String   @map("new_value")
-  version    Int
-  action     String   @default("update") // update | create | delete
-  operator   String   @default("system")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id        Int      @id @default(autoincrement())
+  platform  String
+  configKey String   @map("config_key")
+  oldValue  String   @default("") @map("old_value")
+  newValue  String   @map("new_value")
+  version   Int
+  action    String   @default("update") // update | create | delete
+  operator  String   @default("system")
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@map("platform_config_audit")
 }
@@ -269,13 +268,13 @@ model VideoCommentRecord {
 }
 
 model MonitorStatus {
-  id              Int       @id @default(autoincrement())
-  platform        String    @db.VarChar(20)
-  accountId       String    @map("account_id") @db.VarChar(64)
-  lastCheckTime   DateTime? @map("last_check_time")
-  lastVideoCount  Int?      @map("last_video_count")
-  lastCommentCount Int?     @map("last_comment_count")
-  status          String    @default("running") @db.VarChar(20)
+  id               Int       @id @default(autoincrement())
+  platform         String    @db.VarChar(20)
+  accountId        String    @map("account_id") @db.VarChar(64)
+  lastCheckTime    DateTime? @map("last_check_time")
+  lastVideoCount   Int?      @map("last_video_count")
+  lastCommentCount Int?      @map("last_comment_count")
+  status           String    @default("running") @db.VarChar(20)
 
   @@map("monitor_status")
 }
@@ -297,15 +296,15 @@ model VideoCommentCount {
 // ============================================================
 
 model CustomSelector {
-  id          Int      @id @default(autoincrement())
-  platform    String   @db.VarChar(32)
-  selectorKey String   @map("selector_key") @db.VarChar(128)
-  selectorValue String  @map("selector_value") @db.Text // JSON: { css_selector?, xpath?, id_selector?, text_selector? }
-  description String   @default("") @db.VarChar(255)
-  version     Int      @default(1)
-  enabled     Boolean  @default(true)
-  createdAt   DateTime @default(now()) @map("created_at")
-  updatedAt   DateTime @updatedAt @map("updated_at")
+  id            Int      @id @default(autoincrement())
+  platform      String   @db.VarChar(32)
+  selectorKey   String   @map("selector_key") @db.VarChar(128)
+  selectorValue String   @map("selector_value") @db.Text // JSON: { css_selector?, xpath?, id_selector?, text_selector? }
+  description   String   @default("") @db.VarChar(255)
+  version       Int      @default(1)
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@unique([platform, selectorKey], name: "idx_selector_platform_key")
   @@map("custom_selectors")
@@ -317,17 +316,16 @@ model CustomSelector {
 
 /// 操作员（企业微信用户）——系统的管理单位
 model Operator {
-  id            Int      @id @default(autoincrement())
-  wechatUserId  String   @unique @map("wechat_user_id") @db.VarChar(64) // 企业微信用户ID
-  displayName   String   @map("display_name") @db.VarChar(64)
-  phone         String?  @db.VarChar(20)
-  role          String   @default("operator") @db.VarChar(20) // admin | operator
-  enabled       Boolean  @default(true)
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id           Int      @id @default(autoincrement())
+  wechatUserId String   @unique @map("wechat_user_id") @db.VarChar(64) // 企业微信用户ID
+  displayName  String   @map("display_name") @db.VarChar(64)
+  phone        String?  @db.VarChar(20)
+  role         String   @default("operator") @db.VarChar(20) // admin | operator
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
-  windows       BrowserWindow[]
-  platforms     OperatorPlatform[]
+  windows BrowserWindow[]
 
   @@map("operators")
 }
@@ -337,7 +335,7 @@ model BrowserWindow {
   id              Int      @id @default(autoincrement())
   externalId      String   @map("external_id") @db.VarChar(128) // 浏览器API返回的窗口ID
   browserVendor   String   @map("browser_vendor") @db.VarChar(20) // bitbrowser | roxybrowser
-  windowName      String   @map("window_name") @default("") @db.VarChar(255)
+  windowName      String   @default("") @map("window_name") @db.VarChar(255)
   workspaceId     String?  @map("workspace_id") @db.VarChar(64) // RoxyBrowser 需要
   boundOperatorId Int?     @map("bound_operator_id") // 绑定的操作员ID
   status          String   @default("available") @db.VarChar(20) // available | bound | error
@@ -346,38 +344,54 @@ model BrowserWindow {
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 
-  operator Operator? @relation(fields: [boundOperatorId], references: [id], onDelete: SetNull)
+  operator           Operator?           @relation(fields: [boundOperatorId], references: [id], onDelete: SetNull)
+  platforms          PlatformAccount[]
+  loginVerifications LoginVerification[]
 
   @@unique([externalId, browserVendor], name: "idx_window_external_vendor")
   @@map("browser_windows")
 }
 
-/// 操作员-平台绑定关系——记录每个用户管理哪些平台
-model OperatorPlatform {
-  id              Int      @id @default(autoincrement())
-  operatorId      Int      @map("operator_id")
-  platform        String   @db.VarChar(32) // douyin | kuaishou | xiaohongshu | ...
-  loginStatus     String   @default("unknown") @map("login_status") @db.VarChar(20) // unknown | logged_in | not_logged_in | checking
-  lastVerifiedAt  DateTime? @map("last_verified_at")
-  createdAt       DateTime @default(now()) @map("created_at")
-  updatedAt       DateTime @updatedAt @map("updated_at")
+/// 平台账号——替代 users 表 + OperatorPlatform 表，挂在窗口下
+model PlatformAccount {
+  id                  Int       @id @default(autoincrement())
+  windowId            Int       @map("window_id")
+  windowExternalId    String    @map("window_external_id") @db.VarChar(128)
+  platform            String    @db.VarChar(32)
+  wechatUserid        String?   @map("wechat_userid") @db.VarChar(64)
+  status              String    @default("init") @db.VarChar(32)
+  consecutiveNoUpdate Int       @default(0) @map("consecutive_no_update")
+  cooldownUntil       BigInt?   @map("cooldown_until")
+  monitoringEnabled   Boolean   @default(false) @map("monitoring_enabled")
+  platformAuthorId    String?   @map("platform_author_id") @db.VarChar(128)
+  platformAuthorName  String?   @map("platform_author_name") @db.VarChar(256)
+  loginStatus         String    @default("unknown") @map("login_status") @db.VarChar(32)
+  lastVerifiedAt      DateTime? @map("last_verified_at")
+  skipPinnedVideos    Json?     @map("skip_pinned_videos")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
 
-  operator Operator @relation(fields: [operatorId], references: [id], onDelete: Cascade)
+  window         BrowserWindow   @relation(fields: [windowId], references: [id], onDelete: Restrict)
+  videos         Video[]
+  taskExecutions TaskExecution[]
 
-  @@unique([operatorId, platform], name: "idx_operator_platform")
-  @@map("operator_platforms")
+  @@unique([windowId, platform], name: "idx_platform_account_window_platform")
+  @@index([wechatUserid], name: "idx_platform_account_wechat_userid")
+  @@map("platform_accounts")
 }
 
 /// 登录验证记录——记录每次验证的结果
 model LoginVerification {
-  id              Int      @id @default(autoincrement())
-  operatorId      Int      @map("operator_id")
-  platform        String   @db.VarChar(32)
-  status          String   @db.VarChar(20) // logged_in | not_logged_in | qr_sent | error
-  detail          String?  @db.Text // JSON: 验证详情（截图URL、QR码URL等）
-  createdAt       DateTime @default(now()) @map("created_at")
+  id        Int      @id @default(autoincrement())
+  windowId  Int      @map("window_id")
+  platform  String   @db.VarChar(32)
+  status    String   @db.VarChar(20) // logged_in | not_logged_in | qr_sent | error
+  detail    String?  @db.Text // JSON: 验证详情（截图URL、QR码URL等）
+  createdAt DateTime @default(now()) @map("created_at")
 
-  @@index([operatorId, platform], name: "idx_verification_operator_platform")
+  window BrowserWindow @relation(fields: [windowId], references: [id], onDelete: Cascade)
+
+  @@index([windowId, platform], name: "idx_verification_window_platform")
   @@map("login_verifications")
 }
 
@@ -386,25 +400,26 @@ model LoginVerification {
 // ============================================================
 
 model TaskExecution {
-  id              String   @id @default(cuid())
-  taskId          String   // 对应 BullMQ jobId
-  taskType        String   @db.VarChar(16) // 'monitor' | 'publish' | 'reply'
-  platform        String   @db.VarChar(32)
+  id              String    @id @default(cuid())
+  taskId          String // 对应 BullMQ jobId
+  taskType        String    @db.VarChar(16) // 'monitor' | 'publish' | 'reply'
+  platform        String    @db.VarChar(32)
   userId          Int?
-  windowId        String   @db.VarChar(128)
-  status          String   @default("running") @db.VarChar(16)
-  currentPhase    String?  @db.VarChar(64)
+  windowId        String    @db.VarChar(128)
+  status          String    @default("running") @db.VarChar(16)
+  currentPhase    String?   @db.VarChar(64)
   phaseIndex      Int?
   totalPhases     Int?
   progressPercent Int?
-  startedAt       DateTime @default(now()) @map("started_at")
+  startedAt       DateTime  @default(now()) @map("started_at")
   completedAt     DateTime? @map("completed_at")
-  durationMs      Int?     @map("duration_ms")
-  errorMessage    String?  @map("error_message") @db.Text
-  isDebugMode     Boolean  @default(false) @map("is_debug_mode")
-  createdAt       DateTime @default(now()) @map("created_at")
+  durationMs      Int?      @map("duration_ms")
+  errorMessage    String?   @map("error_message") @db.Text
+  isDebugMode     Boolean   @default(false) @map("is_debug_mode")
+  createdAt       DateTime  @default(now()) @map("created_at")
 
-  steps           TaskExecutionStep[]
+  steps TaskExecutionStep[]
+  user  PlatformAccount?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([taskType, createdAt], name: "idx_task_exec_type_created")
   @@index([status, createdAt], name: "idx_task_exec_status_created")
@@ -413,20 +428,20 @@ model TaskExecution {
 }
 
 model TaskExecutionStep {
-  id              String   @id @default(cuid())
-  executionId     String   @map("execution_id")
-  phase           String   @db.VarChar(64)
-  stepIndex       Int      @map("step_index")
-  label           String   @db.VarChar(128)
-  status          String   @db.VarChar(16) // 'success' | 'failed' | 'fallback'
-  durationMs      Int?     @map("duration_ms")
-  selectorTries   Json?    @map("selector_tries")
-  mouseAction     String?  @map("mouse_action") @db.VarChar(128)
-  extra           Json?
-  snapshotPath    String?  @map("snapshot_path") @db.VarChar(512)
-  createdAt       DateTime @default(now()) @map("created_at")
+  id            String   @id @default(cuid())
+  executionId   String   @map("execution_id")
+  phase         String   @db.VarChar(64)
+  stepIndex     Int      @map("step_index")
+  label         String   @db.VarChar(128)
+  status        String   @db.VarChar(16) // 'success' | 'failed' | 'fallback'
+  durationMs    Int?     @map("duration_ms")
+  selectorTries Json?    @map("selector_tries")
+  mouseAction   String?  @map("mouse_action") @db.VarChar(128)
+  extra         Json?
+  snapshotPath  String?  @map("snapshot_path") @db.VarChar(512)
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  execution       TaskExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  execution TaskExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
 
   @@index([executionId, stepIndex], name: "idx_task_step_exec_index")
   @@map("task_execution_steps")
