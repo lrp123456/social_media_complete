@@ -1294,6 +1294,19 @@ export class KuaishouCrawler {
 
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 批量查询根评论 count（level=1），用于判断 root_comments_missing
+    let rootCountMap = new Map<string, number>();
+    try {
+      const rootCounts = await prisma.comment.groupBy({
+        by: ['videoId'],
+        where: { videoId: { in: dbVideos.map(v => v.id) }, level: 1 },
+        _count: { id: true },
+      });
+      rootCountMap = new Map(rootCounts.map(r => [r.videoId, r._count.id]));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, '[Phase1] Failed to batch query root comment counts, defaulting to 0');
+    }
+
     // 快手两个数据源的 workId / photoId 不同，按 title+createTime 归一化 ID
     const titleToDbId = new Map<string, string>();
     for (const dv of dbVideos) {
@@ -1332,6 +1345,8 @@ export class KuaishouCrawler {
       const decision = getCommentCrawlDecision({
         currentCount: video.comment_count,
         storedCount: dbVideo?.commentCount,
+        rootCommentCount: dbVideo ? (rootCountMap.get(dbVideo.id) ?? 0) : 0,
+        retryCount: dbVideo?.rootCommentRetryCount ?? 0,
       });
 
       if (!dbVideo) {
@@ -3179,13 +3194,15 @@ export class KuaishouCrawler {
         // 4. 存储新评论
         if (commentsToStore.length > 0) {
           for (const comment of commentsToStore) {
+            // timestamp 归一化：>1e12 视为毫秒，转换为秒
+            const normalizedTime = comment.timestamp > 1e12 ? Math.floor(comment.timestamp / 1000) : (comment.timestamp || 0);
             await db.upsertComment(item.awemeId, {
               cid: String(comment.commentId),
               text: comment.content || '',
               user_nickname: comment.authorName || '',
               user_uid: String(comment.authorId) || '',
               digg_count: comment.likedCount || 0,
-              create_time: comment.timestamp || 0,
+              create_time: normalizedTime,
               reply_id: '0',
             });
           }
@@ -3196,14 +3213,21 @@ export class KuaishouCrawler {
             totalCollected: allComments.length,
           }, '[Simple] Stored new root comments');
 
-          // 5. 构建 commentGroups（与 unifiedQueue 兼容）
+          // 5. 采到根评论，重置 retryCount
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: 0 },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Simple] Root comment retry count reset to 0');
+
+          // 6. 构建 commentGroups（与 unifiedQueue 兼容）
           const commentGroups = commentsToStore.map(comment => ({
             rootComment: {
               cid: String(comment.commentId),
               text: comment.content || '',
               userNickname: comment.authorName || '',
               userUid: String(comment.authorId) || '',
-              createTime: comment.timestamp || 0,
+              createTime: comment.timestamp > 1e12 ? Math.floor(comment.timestamp / 1000) : (comment.timestamp || 0),
               diggCount: comment.likedCount || 0,
               level: 1 as const,
               replyId: '0',
@@ -3218,7 +3242,7 @@ export class KuaishouCrawler {
                 text: comment.content || '',
                 userNickname: comment.authorName || '',
                 userUid: String(comment.authorId) || '',
-                createTime: comment.timestamp || 0,
+                createTime: comment.timestamp > 1e12 ? Math.floor(comment.timestamp / 1000) : (comment.timestamp || 0),
                 diggCount: comment.likedCount || 0,
                 level: 1 as const,
                 replyId: '0',
@@ -3232,6 +3256,12 @@ export class KuaishouCrawler {
           results.push({ awemeId: item.awemeId, success: true, commentGroups });
         } else {
           logger.info({ awemeId: item.awemeId }, '[Simple] No new root comments found');
+          // 采空，retryCount +1
+          await prisma.video.update({
+            where: { id: item.awemeId },
+            data: { rootCommentRetryCount: { increment: 1 } },
+          });
+          logger.info({ awemeId: item.awemeId }, '[Simple] Root comment retry count incremented');
           results.push({ awemeId: item.awemeId, success: true, commentGroups: [] });
         }
       } catch (err) {

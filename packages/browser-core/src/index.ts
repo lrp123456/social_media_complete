@@ -11,7 +11,8 @@ export { CDPScroller } from './cdpScroller';
 export { TrajectoryGenerator } from './trajectory';
 export { BehaviorNoise } from './behaviorNoise';
 export { HumanActions, FindResult, FallbackConfig } from './humanActions';
-export { BrowserManager } from './browserManager';
+export { BrowserManager, BitWindowOpener } from './browserManager';
+export type { WindowOpener } from './browserManager';
 export {
   SelectorReader,
   DEFAULT_SELECTOR_CONFIG,

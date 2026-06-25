@@ -6,34 +6,107 @@ import fs from 'fs';
 import path from 'path';
 const logger = rootLogger.child({ name: 'browserManager' });
 
-interface RoxyBrowserOpenResponse {
-  code: number;
-  msg: string;
-  data?: {
-    ws?: string;
-    http?: string;
-    pid?: number;
-    port?: number;
-    webDriver?: string;
-    webSocket?: string;
-    windowId?: string;
-    windowName?: string;
-    workspaceId?: string;
-    workspaceName?: string;
-  };
+// ============================================================
+// 多厂商窗口开启器抽象
+// ============================================================
+
+/** 窗口开启器接口 — 每个浏览器厂商实现自己的 API */
+export interface WindowOpener {
+  readonly vendor: string;
+  /** 检查窗口是否已打开，返回已有 WS URL（null 表示未打开） */
+  getConnectionInfo(windowId: string): Promise<string | null>;
+  /** 打开窗口，返回 CDP WebSocket URL */
+  openWindow(windowId: string): Promise<string>;
 }
 
-interface RoxyBrowserConnectionInfoResponse {
-  code: number;
-  msg: string;
-  data?: Array<{
-    dirId?: string;
-    ws?: string;
-    http?: string;
-    pid?: number;
-    port?: number;
-    [key: string]: any;
-  }>;
+/** RoxyBrowser 窗口开启器 */
+class RoxyWindowOpener implements WindowOpener {
+  readonly vendor = 'roxybrowser';
+  private apiHost: string;
+  private apiKey: string;
+
+  constructor(apiHost: string, apiKey: string) {
+    this.apiHost = apiHost;
+    this.apiKey = apiKey;
+  }
+
+  async getConnectionInfo(windowId: string): Promise<string | null> {
+    const url = `${this.apiHost}/browser/connection_info`;
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'token': this.apiKey },
+      });
+      if (!response.ok) return null;
+      const result = await response.json() as any;
+      if (result.code !== 0 || !result.data) return null;
+      const windowInfo = result.data.find((item: any) => item.dirId === windowId);
+      return windowInfo?.ws || null;
+    } catch (error: any) {
+      logger.warn({ windowId, error: error.message }, 'RoxyBrowser getConnectionInfo failed');
+      return null;
+    }
+  }
+
+  async openWindow(windowId: string): Promise<string> {
+    const url = `${this.apiHost}/browser/open`;
+    logger.info({ windowId, url }, 'Opening browser window via RoxyBrowser API');
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'token': this.apiKey },
+      body: JSON.stringify({ dirId: windowId, args: [] }),
+    });
+    if (!response.ok) {
+      throw new Error(`RoxyBrowser API request failed: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json() as any;
+    if (result.code !== 0) {
+      throw new Error(`RoxyBrowser API error: ${result.msg} (code: ${result.code})`);
+    }
+    if (!result.data?.ws) {
+      throw new Error('RoxyBrowser API response missing WebSocket endpoint');
+    }
+    logger.info({ windowId, ws: result.data.ws }, 'Browser window opened successfully via RoxyBrowser');
+    return result.data.ws;
+  }
+}
+
+/** BitBrowser 窗口开启器 */
+export class BitWindowOpener implements WindowOpener {
+  readonly vendor = 'bitbrowser';
+  private apiHost: string;
+
+  constructor(apiHost: string) {
+    this.apiHost = apiHost;
+  }
+
+  async getConnectionInfo(windowId: string): Promise<string | null> {
+    // BitBrowser 没有 connection_info 端点，直接尝试 open（如果已打开会返回现有 WS）
+    return null;
+  }
+
+  async openWindow(windowId: string): Promise<string> {
+    const url = `${this.apiHost}/browser/open`;
+    logger.info({ windowId, url }, 'Opening browser window via BitBrowser API');
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: windowId }),
+    });
+    if (!response.ok) {
+      throw new Error(`BitBrowser API request failed: ${response.status} ${response.statusText}`);
+    }
+    const result = await response.json() as any;
+    if (result.success === false) {
+      throw new Error(`BitBrowser API error: ${result.msg || JSON.stringify(result)}`);
+    }
+    const ws = result.data?.ws;
+    if (!ws) {
+      throw new Error('BitBrowser API response missing WebSocket endpoint');
+    }
+    logger.info({ windowId, ws }, 'Browser window opened successfully via BitBrowser');
+    return ws;
+  }
 }
 
 interface MouseTracePoint {
@@ -66,6 +139,9 @@ export class BrowserManager {
   private traceLogDir: string;
   private userSessions: Map<string, UserSession> = new Map();
   private debugModeEnabled: boolean = false;
+  private openers: Map<string, WindowOpener> = new Map();
+  /** 外部注册的 vendor 解析器：根据 windowId(externalId) 返回 vendor 名称 */
+  private vendorResolver: ((windowId: string) => Promise<string | null>) | null = null;
 
   constructor(apiPort: number = 50000, apiKey: string = '') {
     this.apiHost = `http://127.0.0.1:${apiPort}`;
@@ -74,6 +150,46 @@ export class BrowserManager {
     if (!fs.existsSync(this.traceLogDir)) {
       fs.mkdirSync(this.traceLogDir, { recursive: true });
     }
+    // 默认注册 RoxyBrowser 开启器（向后兼容）
+    this.openers.set('roxybrowser', new RoxyWindowOpener(this.apiHost, apiKey));
+  }
+
+  /** 注册窗口开启器（用于支持多厂商） */
+  registerOpener(opener: WindowOpener): void {
+    this.openers.set(opener.vendor, opener);
+    logger.info({ vendor: opener.vendor }, 'Window opener registered');
+  }
+
+  /** 注册 vendor 解析器（从数据库查询 windowId 对应的 vendor） */
+  setVendorResolver(resolver: (windowId: string) => Promise<string | null>): void {
+    this.vendorResolver = resolver;
+  }
+
+  /** 获取指定厂商的开启器（默认回退到 RoxyBrowser） */
+  private getOpener(vendor: string = 'roxybrowser'): WindowOpener {
+    const opener = this.openers.get(vendor);
+    if (!opener) {
+      logger.warn({ vendor, available: [...this.openers.keys()] }, 'No opener for vendor, falling back to roxybrowser');
+      return this.openers.get('roxybrowser')!;
+    }
+    return opener;
+  }
+
+  /** 解析 windowId 对应的 vendor（优先使用传入值，否则调用 resolver） */
+  private async resolveVendor(windowId: string, vendor?: string): Promise<string> {
+    if (vendor) return vendor;
+    if (this.vendorResolver) {
+      try {
+        const resolved = await this.vendorResolver(windowId);
+        if (resolved) {
+          logger.debug({ windowId, vendor: resolved }, 'Vendor resolved from database');
+          return resolved;
+        }
+      } catch (err: any) {
+        logger.warn({ windowId, error: err.message }, 'Vendor resolver failed, falling back to roxybrowser');
+      }
+    }
+    return 'roxybrowser';
   }
 
   setDebugMode(enabled: boolean): void {
@@ -98,7 +214,8 @@ export class BrowserManager {
     return this.mouseTraces;
   }
 
-  async getBrowser(windowId: string, platform?: Platform): Promise<Browser | null> {
+  async getBrowser(windowId: string, platform?: Platform, vendor?: string): Promise<Browser | null> {
+    const resolvedVendor = await this.resolveVendor(windowId, vendor);
     // 1. 按 platform 精确匹配已有 session
     if (platform) {
       const sessionKey = `${windowId}_${platform}`;
@@ -131,7 +248,7 @@ export class BrowserManager {
     }
     // 3. 建立新 CDP 连接
     try {
-      const wsEndpoint = await this.getOrCreateWsEndpoint(windowId);
+      const wsEndpoint = await this.getOrCreateWsEndpoint(windowId, resolvedVendor);
       const browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 30000 });
       // 注册轻量 session 防资源泄漏
       const loginSessionKey = `${windowId}_login`;
@@ -147,7 +264,8 @@ export class BrowserManager {
     }
   }
 
-  async connect(windowId: string, spaceId: string, platform: Platform = 'douyin'): Promise<{ browser: Browser; page: Page }> {
+  async connect(windowId: string, spaceId: string, platform: Platform = 'douyin', vendor?: string): Promise<{ browser: Browser; page: Page }> {
+    const resolvedVendor = await this.resolveVendor(windowId, vendor);
     const sessionKey = `${windowId}_${platform}`;
 
     const existingSession = this.userSessions.get(sessionKey);
@@ -280,7 +398,7 @@ export class BrowserManager {
       }
     }
 
-    const wsEndpoint = await this.getOrCreateWsEndpoint(windowId);
+    const wsEndpoint = await this.getOrCreateWsEndpoint(windowId, resolvedVendor);
 
     logger.info({ windowId, wsEndpoint, platform }, 'Connecting to fingerprint browser via CDP');
 
@@ -542,80 +660,25 @@ export class BrowserManager {
     return statuses;
   }
 
-  private async getOrCreateWsEndpoint(windowId: string): Promise<string> {
-    const existingWs = await this.getConnectionInfoWs(windowId);
+  private async getOrCreateWsEndpoint(windowId: string, vendor?: string): Promise<string> {
+    const opener = this.getOpener(vendor);
+    const existingWs = await opener.getConnectionInfo(windowId);
     if (existingWs) {
-      logger.info({ windowId, ws: existingWs }, 'Window already open, reusing WebSocket');
+      logger.info({ windowId, ws: existingWs, vendor: opener.vendor }, 'Window already open, reusing WebSocket');
       return existingWs;
     }
 
-    return this.openBrowserWindow(windowId);
+    return opener.openWindow(windowId);
   }
 
   private async getConnectionInfoWs(windowId: string): Promise<string | null> {
-    const url = `${this.apiHost}/browser/connection_info`;
-
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'token': this.apiKey,
-        },
-      });
-
-      if (!response.ok) return null;
-
-      const result = await response.json() as RoxyBrowserConnectionInfoResponse;
-      if (result.code !== 0 || !result.data) return null;
-
-      const windowInfo = result.data.find((item: any) => item.dirId === windowId);
-      if (windowInfo?.ws) {
-        return windowInfo.ws;
-      }
-
-      return null;
-    } catch (error: any) {
-      logger.warn({ windowId, error: error.message }, 'Failed to get connection info');
-      return null;
-    }
+    // Legacy method — kept for backward compatibility, delegates to default opener
+    return this.getOpener('roxybrowser').getConnectionInfo(windowId);
   }
 
   private async openBrowserWindow(windowId: string): Promise<string> {
-    const url = `${this.apiHost}/browser/open`;
-    const body = {
-      dirId: windowId,
-      args: [],
-    };
-
-    logger.info({ windowId, url }, 'Opening browser window via RoxyBrowser API');
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'token': this.apiKey,
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      throw new Error(`RoxyBrowser API request failed: ${response.status} ${response.statusText}`);
-    }
-
-    const result = await response.json() as RoxyBrowserOpenResponse;
-
-    if (result.code !== 0) {
-      throw new Error(`RoxyBrowser API error: ${result.msg} (code: ${result.code})`);
-    }
-
-    if (!result.data?.ws) {
-      throw new Error('RoxyBrowser API response missing WebSocket endpoint');
-    }
-
-    logger.info({ windowId, ws: result.data.ws }, 'Browser window opened successfully');
-
-    return result.data.ws;
+    // Legacy method — kept for backward compatibility, delegates to default opener
+    return this.getOpener('roxybrowser').openWindow(windowId);
   }
 
   async saveMouseTraces(sessionId: string): Promise<string | null> {

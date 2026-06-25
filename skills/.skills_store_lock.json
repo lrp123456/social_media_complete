@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "solo-architect": {
+      "name": "一人公司的性能架构师 - 代码性能与架构优化助手",
+      "zip_url": "https://api.skillhub.cn/api/v1/download?slug=solo-architect",
+      "source": "community",
+      "version": "1.0.0",
+      "installedAt": "2026-06-24T09:13:25Z"
+    }
+  }
+}

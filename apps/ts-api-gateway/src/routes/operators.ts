@@ -126,6 +126,11 @@ async function syncOperatorToMonitorUser(operatorId: number): Promise<void> {
             monitoringEnabled: true,
           },
         });
+        // 初始化调度器倒计时（避免前端显示 "--"）
+        try {
+          const { resetSchedulerTimer } = await import('../services/monitorService');
+          resetSchedulerTimer(boundWindow.externalId, plat.platform);
+        } catch { /* scheduler may not be ready */ }
         logger.info({ operatorId, platform: plat.platform, windowId: boundWindow.externalId }, '已同步创建监控用户记录');
       }
     }
@@ -214,10 +219,7 @@ router.post('/', async (req: Request, res: Response) => {
 
     const data = schema.parse(req.body);
 
-    const existing = await prisma.operator.findUnique({ where: { wechatUserId: data.wechatUserId } });
-    if (existing) {
-      return res.status(409).json({ success: false, error: '该企业微信用户ID已存在' });
-    }
+    // 允许同一企微用户创建多个操作员（不同窗口），不再校验 wechatUserId 唯一
 
     const operator = await prisma.operator.create({ data });
 
@@ -247,6 +249,7 @@ router.put('/:id', async (req: Request, res: Response) => {
   try {
     const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
     const bodySchema = z.object({
+      wechatUserId: z.string().min(1).max(64).optional(),
       displayName: z.string().min(1).max(64).optional(),
       phone: z.string().max(20).optional(),
       role: z.enum(['admin', 'operator']).optional(),
@@ -255,6 +258,8 @@ router.put('/:id', async (req: Request, res: Response) => {
 
     const { id } = paramsSchema.parse(req.params);
     const data = bodySchema.parse(req.body);
+
+    // 允许同一企微用户拥有多个操作员，不再校验 wechatUserId 唯一
 
     const operator = await prisma.operator.update({ where: { id }, data });
     res.json({ success: true, data: operator });

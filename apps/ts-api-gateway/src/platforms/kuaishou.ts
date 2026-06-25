@@ -145,8 +145,40 @@ export class KuaishouPublisher extends BasePublisher {
     // 3. 添加标签
     if (metadata.tags.length > 0) {
       await HumanActions.wait(page, 500, 1000);
-      // 快手标签通常是单独输入框
-      logger.info(`[快手] ${metadata.tags.length} 个标签待添加（手动）`);
+      try {
+        // 快手标签输入框选择器
+        const tagSels = this.sel().getSelectorListWithFallback('kuaishou', 'textboxes', 'tb_tag', [
+          'input[placeholder*="话题"]:visible',
+          'input[placeholder*="标签"]:visible',
+          '[class*=tag] input:visible',
+          '[class*=topic] input:visible',
+        ]);
+        const tagInput = await HumanActions.cdpFindElement(page, tagSels);
+        if (tagInput) {
+          for (const tag of metadata.tags.slice(0, 5)) { // 最多5个标签
+            const tagText = tag.startsWith('#') ? tag : `#${tag}`;
+            await HumanActions.cdpClick(page, tagInput.sel);
+            await HumanActions.wait(page, 200, 400);
+            await HumanActions.safeCDPType(page, tagText, tagInput.sel);
+            await HumanActions.wait(page, 300, 600);
+            // 按回车确认标签
+            await page.keyboard.press('Enter');
+            await HumanActions.wait(page, 300, 500);
+          }
+          logger.info(`[快手] ${metadata.tags.length} 个标签已添加`);
+        } else {
+          // 回退：在描述框末尾添加标签
+          if (descInput) {
+            const tagText = ' ' + metadata.tags.map((t) => `#${t}`).join(' ');
+            await HumanActions.safeCDPType(page, tagText, descInput.sel);
+            logger.info(`[快手] ${metadata.tags.length} 个标签已添加到描述末尾`);
+          } else {
+            logger.warn({ count: metadata.tags.length, selectors: tagSels }, '[快手] 标签输入框未找到，跳过标签添加');
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ err: err.message }, '[快手] 标签添加失败');
+      }
     }
   }
 

@@ -125,28 +125,96 @@ export class XiaohongshuPublisher extends BasePublisher {
     }
 
     // 2. 填写描述（小红书有富文本编辑器）
-    const descSels = this.sel().getSelectorListWithFallback('xiaohongshu', 'textboxes', 'tb_description', ['[class*=desc] [contenteditable]', '[class*=content] [contenteditable]']);
-    const descSelector = descSels[0];
-    const descVisible = await HumanActions.cdpIsElementVisible(page, descSelector);
-    if (descVisible) {
-      await HumanActions.cdpClick(page, descSelector);
-      await HumanActions.wait(page, 300, 600);
-      await HumanActions.safeCDPType(page, metadata.description, descSelector);
-      logger.info('[小红书] 描述已填写');
-    } else {
+    const descSels = this.sel().getSelectorListWithFallback('xiaohongshu', 'textboxes', 'tb_description', [
+      '[class*=desc] [contenteditable]',
+      '[class*=content] [contenteditable]',
+      '.tiptap:visible',
+      '[data-placeholder*="描述"]:visible',
+      'div[contenteditable="true"]:visible',
+    ]);
+    let descFilled = false;
+    for (const descSelector of descSels) {
+      try {
+        const descVisible = await HumanActions.cdpIsElementVisible(page, descSelector);
+        if (descVisible) {
+          await HumanActions.cdpClick(page, descSelector);
+          await HumanActions.wait(page, 300, 600);
+          await HumanActions.safeCDPType(page, metadata.description, descSelector);
+          logger.info(`[小红书] 描述已填写 (via ${descSelector})`);
+          descFilled = true;
+          break;
+        }
+      } catch {}
+    }
+    if (!descFilled) {
+      // 回退：尝试 Playwright locator
+      try {
+        const descLocator = page.locator('[data-placeholder*="描述"]').first();
+        await descLocator.waitFor({ state: 'visible', timeout: 5000 });
+        await descLocator.click();
+        await HumanActions.wait(page, 300, 600);
+        await descLocator.fill(metadata.description);
+        logger.info('[小红书] 描述已填写 (Playwright fallback)');
+        descFilled = true;
+      } catch {}
+    }
+    if (!descFilled) {
       logger.warn({ selectors: descSels }, '[小红书] 描述输入框未找到或不可见，跳过描述填写');
     }
 
     // 3. 添加话题（小红书使用 #话题 格式）
     if (metadata.tags.length > 0) {
-      const tagSels = this.sel().getSelectorListWithFallback('xiaohongshu', 'textboxes', 'tb_topic', ['[class*=topic] input:visible', 'input[placeholder*="话题"]']);
-      const tagArea = await HumanActions.cdpFindElement(page, tagSels);
-      if (tagArea) {
-        const tagText = metadata.tags.map((t) => `#${t} `).join('');
-        await HumanActions.safeCDPType(page, tagText, tagArea.sel);
-        logger.info(`[小红书] ${metadata.tags.length} 个话题已添加`);
-      } else {
-        logger.warn({ count: metadata.tags.length, selectors: tagSels }, '[小红书] 话题输入框未找到，跳过话题添加');
+      try {
+        const tagSels = this.sel().getSelectorListWithFallback('xiaohongshu', 'textboxes', 'tb_topic', [
+          '[class*=topic] input:visible',
+          'input[placeholder*="话题"]',
+          'input[placeholder*="添加话题"]:visible',
+          'input[placeholder*="tag"]:visible',
+        ]);
+        let tagAdded = false;
+        for (const tagSel of tagSels) {
+          try {
+            const tagVisible = await HumanActions.cdpIsElementVisible(page, tagSel);
+            if (tagVisible) {
+              await HumanActions.cdpClick(page, tagSel);
+              await HumanActions.wait(page, 300, 600);
+              for (const tag of metadata.tags.slice(0, 5)) { // 最多5个话题
+                const tagText = tag.startsWith('#') ? tag : `#${tag}`;
+                await HumanActions.safeCDPType(page, tagText, tagSel);
+                await HumanActions.wait(page, 300, 600);
+                // 按回车确认话题
+                await page.keyboard.press('Enter');
+                await HumanActions.wait(page, 300, 500);
+              }
+              logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (via ${tagSel})`);
+              tagAdded = true;
+              break;
+            }
+          } catch {}
+        }
+        if (!tagAdded) {
+          // 回退：尝试 Playwright locator
+          try {
+            const tagLocator = page.locator('input[placeholder*="话题"]').first();
+            await tagLocator.waitFor({ state: 'visible', timeout: 5000 });
+            await tagLocator.click();
+            await HumanActions.wait(page, 300, 600);
+            for (const tag of metadata.tags.slice(0, 5)) {
+              const tagText = tag.startsWith('#') ? tag : `#${tag}`;
+              await tagLocator.fill(tagText);
+              await HumanActions.wait(page, 300, 600);
+              await page.keyboard.press('Enter');
+              await HumanActions.wait(page, 300, 500);
+            }
+            logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (Playwright fallback)`);
+            tagAdded = true;
+          } catch {}
+        }
+        if (!tagAdded) {
+          logger.warn({ count: metadata.tags.length, selectors: tagSels }, '[小红书] 话题输入框未找到，跳过话题添加');
+        }
+      } catch (err: any) {
+        logger.warn({ err: err.message }, '[小红书] 话题添加失败');
       }
     }
   }

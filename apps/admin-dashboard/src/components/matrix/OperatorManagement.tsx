@@ -236,30 +236,54 @@ export default function OperatorManagement() {
         onSuccess: (data: any) => {
           // If a window was selected, bind it
           if (formWindowId && data?.id) {
-            bindWindow.mutate({ windowId: formWindowId, operatorId: data.id });
+            bindWindow.mutate(
+              { windowId: formWindowId, operatorId: data.id },
+              {
+                onError: (err: any) => {
+                  alert(`用户已创建，但绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                },
+              },
+            );
           }
           resetForm();
+        },
+        onError: (err: any) => {
+          alert(`创建用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
         },
       },
     );
   };
 
   const handleUpdate = () => {
-    if (!editingId || !formDisplayName.trim()) return;
+    if (!editingId || !formDisplayName.trim() || !formWechatId.trim()) return;
     updateOperator.mutate(
-      { id: editingId, displayName: formDisplayName.trim(), phone: formPhone.trim() || undefined },
+      { id: editingId, wechatUserId: formWechatId.trim(), displayName: formDisplayName.trim(), phone: formPhone.trim() || undefined },
       {
         onSuccess: () => {
           // Handle window binding changes
           const currentWindow = operators.find((op) => op.id === editingId)?.windows[0];
           if (formWindowId && formWindowId !== currentWindow?.id) {
             // Bind new window
-            bindWindow.mutate({ windowId: formWindowId, operatorId: editingId });
+            bindWindow.mutate(
+              { windowId: formWindowId, operatorId: editingId },
+              {
+                onError: (err: any) => {
+                  alert(`用户信息已更新，但绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                },
+              },
+            );
           } else if (!formWindowId && currentWindow) {
             // Unbind current window
-            unbindWindow.mutate(currentWindow.id);
+            unbindWindow.mutate(currentWindow.id, {
+              onError: (err: any) => {
+                alert(`用户信息已更新，但解绑窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+              },
+            });
           }
           resetForm();
+        },
+        onError: (err: any) => {
+          alert(`更新用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
         },
       },
     );
@@ -275,18 +299,35 @@ export default function OperatorManagement() {
   };
 
   const handleDelete = (id: number) => {
-    deleteOperator.mutate(id, { onSuccess: () => setDeletingId(null) });
+    deleteOperator.mutate(id, {
+      onSuccess: () => setDeletingId(null),
+      onError: (err: any) => {
+        alert(`删除用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+      },
+    });
   };
 
   const handleBindWindow = (operatorId: number, windowId: number) => {
-    bindWindow.mutate({ windowId, operatorId });
+    bindWindow.mutate(
+      { windowId, operatorId },
+      {
+        onError: (err: any) => {
+          alert(`绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+        },
+      },
+    );
   };
 
   const handleAddPlatform = (operatorId: number) => {
     if (!newPlatformKey) return;
     addPlatform.mutate(
       { operatorId, platform: newPlatformKey },
-      { onSuccess: () => { setAddPlatformForOp(null); setNewPlatformKey(''); } },
+      {
+        onSuccess: () => { setAddPlatformForOp(null); setNewPlatformKey(''); },
+        onError: (err: any) => {
+          alert(`添加平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+        },
+      },
     );
   };
 
@@ -502,7 +543,6 @@ export default function OperatorManagement() {
                   value={formWechatId}
                   onChange={(e) => setFormWechatId(e.target.value)}
                   placeholder="例如: WangXiaoMing"
-                  disabled={!!editingId}
                 />
                 {!editingId && (
                   <button
@@ -655,7 +695,17 @@ export default function OperatorManagement() {
                     className="form-input text-xs py-1 px-2 w-40"
                     value=""
                     onChange={(e) => {
-                      if (e.target.value) handleBindWindow(op.id, Number(e.target.value));
+                      if (e.target.value) {
+                        const wid = Number(e.target.value);
+                        bindWindow.mutate(
+                          { windowId: wid, operatorId: op.id },
+                          {
+                            onError: (err: any) => {
+                              alert(`绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                            },
+                          },
+                        );
+                      }
                     }}
                   >
                     <option value="">绑定窗口…</option>
@@ -668,7 +718,11 @@ export default function OperatorManagement() {
                 )}
                 {boundWindow && (
                   <button
-                    onClick={() => unbindWindow.mutate(boundWindow.id)}
+                    onClick={() => unbindWindow.mutate(boundWindow.id, {
+                      onError: (err: any) => {
+                        alert(`解绑窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                      },
+                    })}
                     className="btn-ghost text-xs px-2 py-1"
                     title="解绑窗口"
                   >
@@ -761,7 +815,14 @@ export default function OperatorManagement() {
                             })},
                           );
                         }}
-                        onRemove={() => removePlatform.mutate({ operatorId: op.id, platform: plat.platform })}
+                        onRemove={() => removePlatform.mutate(
+                          { operatorId: op.id, platform: plat.platform },
+                          {
+                            onError: (err: any) => {
+                              alert(`移除平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                            },
+                          },
+                        )}
                         verifying={verifyingPlatforms.has(`${op.id}_${plat.platform}`)}
                         capability={capability}
                       />

@@ -2,7 +2,11 @@ export type CommentCrawlDecisionReason =
   | 'new_video_with_comments'
   | 'new_video_without_comments'
   | 'comment_count_changed'
-  | 'comment_count_unchanged';
+  | 'comment_count_unchanged'
+  | 'root_comments_missing';
+
+/** 根评论缺失重试上限 */
+export const ROOT_COMMENT_RETRY_LIMIT = 5;
 
 export interface CommentCrawlDecision {
   shouldQueue: boolean;
@@ -13,9 +17,13 @@ export interface CommentCrawlDecision {
 export function getCommentCrawlDecision(input: {
   currentCount: number;
   storedCount: number | null | undefined;
+  rootCommentCount?: number;
+  retryCount?: number;
 }): CommentCrawlDecision {
   const currentCount = Number(input.currentCount || 0);
   const storedCount = input.storedCount;
+  const rootCommentCount = input.rootCommentCount ?? 0;
+  const retryCount = input.retryCount ?? 0;
 
   if (storedCount === null || storedCount === undefined) {
     if (currentCount > 0) {
@@ -26,6 +34,11 @@ export function getCommentCrawlDecision(input: {
 
   if (currentCount !== storedCount) {
     return { shouldQueue: true, isFirstCrawl: false, reason: 'comment_count_changed' };
+  }
+
+  // 评论总数未变，但根评论缺失且未达重试上限 → 触发补采
+  if (currentCount > 0 && rootCommentCount === 0 && retryCount < ROOT_COMMENT_RETRY_LIMIT) {
+    return { shouldQueue: true, isFirstCrawl: false, reason: 'root_comments_missing' };
   }
 
   return { shouldQueue: false, isFirstCrawl: false, reason: 'comment_count_unchanged' };

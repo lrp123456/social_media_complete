@@ -127,6 +127,8 @@ export interface LoginFlowConfig {
   loggedOutIndicators: string[];
   loggedInIndicators: string[];
   qrSelectors: string[];
+  /** 可选：激活 QR 码的选择器（如小红书创作者中心需点击缩略图弹出 QR 弹窗） */
+  qrActivationSelector?: string;
 }
 
 /** 登录检测结果 */

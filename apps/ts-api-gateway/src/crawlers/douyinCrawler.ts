@@ -1452,6 +1452,19 @@ export class DouyinCrawler {
 
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 批量查询根评论 count（level=1），用于判断 root_comments_missing
+    let rootCountMap = new Map<string, number>();
+    try {
+      const rootCounts = await prisma.comment.groupBy({
+        by: ['videoId'],
+        where: { videoId: { in: dbVideos.map(v => v.id) }, level: 1 },
+        _count: { id: true },
+      });
+      rootCountMap = new Map(rootCounts.map(r => [r.videoId, r._count.id]));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, '[Phase1] Failed to batch query root comment counts, defaulting to 0');
+    }
+
     // 抖音两个数据源可能因 item_id/aweme_id 不同导致同一视频被误判为新视频
     // 按 description+createTime 归一化 ID
     const titleToDbId = new Map<string, string>();
@@ -1492,6 +1505,8 @@ export class DouyinCrawler {
       const decision = getCommentCrawlDecision({
         currentCount: video.comment_count,
         storedCount: dbVideo?.commentCount,
+        rootCommentCount: dbVideo ? (rootCountMap.get(dbVideo.id) ?? 0) : 0,
+        retryCount: dbVideo?.rootCommentRetryCount ?? 0,
       });
 
       if (!dbVideo) {

@@ -26,6 +26,8 @@ export interface CommentContext {
   parentCommentText?: string;
   /** 根评论文本 */
   rootCommentText?: string;
+  /** 评论包含的图片 URL 列表 */
+  imageUrls?: string[];
 }
 
 export interface GenerateReplyResult {
@@ -201,6 +203,11 @@ class CommentReplyGenerator {
       parts.push(`${ctx.commenterName} 回复说：${ctx.text}`);
     } else {
       parts.push(`${ctx.commenterName} 评论说：${ctx.text}`);
+    }
+
+    // 如果评论包含图片，提示用户
+    if (ctx.imageUrls && ctx.imageUrls.length > 0) {
+      parts.push(`（该评论包含 ${ctx.imageUrls.length} 张图片）`);
     }
 
     return parts.join('\n');

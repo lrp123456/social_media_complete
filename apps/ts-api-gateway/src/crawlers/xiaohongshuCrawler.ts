@@ -661,6 +661,19 @@ export class XiaohongshuCrawler {
 
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 批量查询根评论 count（level=1），用于判断 root_comments_missing
+    let rootCountMap = new Map<string, number>();
+    try {
+      const rootCounts = await prisma.comment.groupBy({
+        by: ['videoId'],
+        where: { videoId: { in: dbVideos.map(v => v.id) }, level: 1 },
+        _count: { id: true },
+      });
+      rootCountMap = new Map(rootCounts.map(r => [r.videoId, r._count.id]));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, '[XHS-Light] Failed to batch query root comment counts, defaulting to 0');
+    }
+
     logger.info({ userId, dbVideoCount: dbVideos.length, fetchedCount: videos.length }, '[XHS-Light] Comparing with database records');
 
     const updatedVideos: Array<{
@@ -708,6 +721,8 @@ export class XiaohongshuCrawler {
       const decision = getCommentCrawlDecision({
         currentCount: video.comment_count,
         storedCount: dbVideo.commentCount,
+        rootCommentCount: rootCountMap.get(dbVideo.id) ?? 0,
+        retryCount: dbVideo.rootCommentRetryCount ?? 0,
       });
       if (decision.shouldQueue) {
         logger.info({

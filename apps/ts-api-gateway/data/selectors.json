@@ -5848,7 +5848,11 @@
             ".creator-container",
             "[class*=\"creator-container\"]"
           ],
+          "qrActivationSelector": "img.css-wemwzq",
           "qrSelectors": [
+            "div.css-dvxtzn img[src^=\"data:image/png\"]",
+            "div.css-dvxtzn img",
+            "img.css-1lhmg90",
             ".qrcode-img",
             "img[alt*=\"二维码\"]",
             "img[src*=\"qr\"]"

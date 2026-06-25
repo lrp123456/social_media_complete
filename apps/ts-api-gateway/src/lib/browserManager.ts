@@ -3,7 +3,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { BrowserManager } from '@social-media/browser-core';
+import { BrowserManager, BitWindowOpener } from '@social-media/browser-core';
 import { createLogger } from './logger';
 
 const logger = createLogger('browser-manager');
@@ -43,7 +43,30 @@ export function getBrowserManager(): BrowserManager {
     }
 
     instance = new BrowserManager(apiPort, apiKey);
-    logger.info({ apiPort, hasKey: !!apiKey }, 'BrowserManager 单例已创建');
+
+    // 注册 BitBrowser 窗口开启器
+    const bitUrl = process.env.BIT_BROWSER_URL;
+    if (bitUrl) {
+      instance.registerOpener(new BitWindowOpener(bitUrl));
+      logger.info({ bitUrl }, 'BitBrowser opener registered');
+    }
+
+    // 注册 vendor 解析器：从数据库查询 windowId 对应的 browserVendor
+    instance.setVendorResolver(async (windowId: string) => {
+      try {
+        const { prisma } = require('./prisma');
+        const window = await prisma.browserWindow.findFirst({
+          where: { externalId: windowId },
+          select: { browserVendor: true },
+        });
+        return window?.browserVendor || null;
+      } catch (err: any) {
+        logger.warn({ windowId, error: err.message }, 'Failed to resolve vendor from database');
+        return null;
+      }
+    });
+
+    logger.info({ apiPort, hasKey: !!apiKey, hasBit: !!bitUrl }, 'BrowserManager 单例已创建');
   }
   return instance;
 }

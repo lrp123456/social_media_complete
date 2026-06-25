@@ -924,6 +924,19 @@ export class TencentCrawler {
     // 对比数据库中的评论数
     const dbVideos = await db.getVideosByUserId(userId);
 
+    // 批量查询根评论 count（level=1），用于判断 root_comments_missing
+    let rootCountMap = new Map<string, number>();
+    try {
+      const rootCounts = await prisma.comment.groupBy({
+        by: ['videoId'],
+        where: { videoId: { in: dbVideos.map(v => v.id) }, level: 1 },
+        _count: { id: true },
+      });
+      rootCountMap = new Map(rootCounts.map(r => [r.videoId, r._count.id]));
+    } catch (err) {
+      logger.warn({ err: (err as Error).message }, '[Phase1] Failed to batch query root comment counts, defaulting to 0');
+    }
+
     // 动态剔除：已入库视频变为非公开时从数据库删除
     for (const dbVideo of dbVideos) {
       const freshVideo = enriched.find(v => v.exportId.replace(/\//g, '_') === dbVideo.id);
@@ -960,6 +973,8 @@ export class TencentCrawler {
       const decision = getCommentCrawlDecision({
         currentCount: newCount,
         storedCount: dbVideo?.commentCount,
+        rootCommentCount: dbVideo ? (rootCountMap.get(dbVideo.id) ?? 0) : 0,
+        retryCount: dbVideo?.rootCommentRetryCount ?? 0,
       });
 
       if (!dbVideo) {

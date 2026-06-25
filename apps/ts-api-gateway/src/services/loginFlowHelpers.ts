@@ -26,6 +26,7 @@ export function loadLoginFlowConfig(platform: string): LoginFlowConfig[] {
       loggedOutIndicators: entry.loggedOutIndicators || [],
       loggedInIndicators: entry.loggedInIndicators || [],
       qrSelectors: entry.qrSelectors || [],
+      qrActivationSelector: entry.qrActivationSelector || undefined,
     });
   }
   return result;
@@ -49,6 +50,7 @@ export function getLoginFlowConfig(platform: string, flowId: string): LoginFlowC
     loggedOutIndicators: entry.loggedOutIndicators || [],
     loggedInIndicators: entry.loggedInIndicators || [],
     qrSelectors: entry.qrSelectors || [],
+    qrActivationSelector: entry.qrActivationSelector || undefined,
   };
 }
 
@@ -97,7 +99,7 @@ export async function ensureLoginTab(
   }
   if (!record) return null;
 
-  // 3. 平台特定：点击 QR 切换按钮
+  // 3. 平台特定：点击 QR 切换按钮或激活 QR 弹窗
   const switchSelector = PLATFORM_QR_SWITCH[platform];
   if (switchSelector) {
     try {
@@ -108,6 +110,54 @@ export async function ensureLoginTab(
         console.info(`[ensureLoginTab] clicked QR switch "${switchSelector}" for ${platform}`);
       }
     } catch { /* switch may not be needed */ }
+  }
+  // 4. 平台特定：QR 弹窗预激活（如小红书创作者中心需点缩略图）
+  if (platform === 'xiaohongshu') {
+    try {
+      const alreadyOpen = await record.page.$('div.css-dvxtzn');
+      if (!alreadyOpen) {
+        const thumb = await record.page.$('img.css-wemwzq');
+        if (thumb) {
+          const box = await thumb.boundingBox();
+          if (box) {
+            await record.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          } else {
+            await thumb.click();
+          }
+          await new Promise(r => setTimeout(r, 2500));
+          console.info('[ensureLoginTab] xiaohongshu QR modal activated via CDP click');
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[ensureLoginTab] xiaohongshu QR activation failed: ${err.message}`);
+    }
+  }
+
+  // 5. 通用：QR 码过期检测与刷新（快手等平台 QR 有时效限制）
+  try {
+    const timeoutOverlay = await record.page.$('.qrcode-status-timeout, [class*="qrcode-status-timeout"]');
+    if (timeoutOverlay) {
+      const refreshBtn = await record.page.$('.qrcode-refresh, [class*="qrcode-refresh"], [class*="refresh"]');
+      if (refreshBtn) {
+        await refreshBtn.click();
+        await new Promise(r => setTimeout(r, 3000));
+        // 等待过期遮罩消失
+        try { await record.page.waitForSelector('.qrcode-status-timeout', { state: 'hidden', timeout: 5000 }); } catch { /* 可能已消失 */ }
+        console.info(`[ensureLoginTab] QR expired, clicked refresh for ${platform}`);
+        // 如果刷新后仍然过期，再点一次
+        const stillTimeout = await record.page.$('.qrcode-status-timeout');
+        if (stillTimeout) {
+          const btn2 = await record.page.$('.qrcode-refresh, [class*="qrcode-refresh"]');
+          if (btn2) {
+            await btn2.click();
+            await new Promise(r => setTimeout(r, 3000));
+            console.info(`[ensureLoginTab] QR still expired, clicked refresh again for ${platform}`);
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn(`[ensureLoginTab] QR timeout check failed for ${platform}: ${err.message}`);
   }
 
   return record;

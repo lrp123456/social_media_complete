@@ -111,8 +111,46 @@ export class LoginTabRegistry {
   async captureQR(page: any, config: LoginFlowConfig): Promise<Buffer | null> {
     const selectors = config.qrSelectors || [];
 
+    // 0. 如配置了激活选择器，先点击它（如小红书创作者中心需点缩略图弹出 QR 弹窗）
+    if (config.qrActivationSelector) {
+      try {
+        const activator = await page.$(config.qrActivationSelector);
+        if (activator) {
+          // 优先用 CDP 坐标点击（绕过 React 合成事件），降级用 element.click()
+          const box = await activator.boundingBox();
+          if (box) {
+            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+          } else {
+            await activator.click();
+          }
+          await page.waitForTimeout(2000);
+          // 等待弹窗出现
+          for (const sel of selectors) {
+            try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); break; } catch { continue; }
+          }
+          console.info(`[LoginTabRegistry] captureQR: activated QR via "${config.qrActivationSelector}"`);
+        }
+      } catch (err: any) {
+        console.warn(`[LoginTabRegistry] captureQR: activation selector "${config.qrActivationSelector}" failed: ${err.message}`);
+      }
+    }
+
     // 收集所有 frame（主页面 + 子 iframe），视频号 QR 在 login-for-iframe 内
     const frames: any[] = [page, ...page.frames().filter((f: any) => f !== page.mainFrame())];
+
+    // 0.5 QR 码过期检测：如果存在过期遮罩，先点击刷新按钮
+    try {
+      const timeoutOverlay = await page.$('.qrcode-status-timeout, [class*="qrcode-status-timeout"]');
+      if (timeoutOverlay) {
+        const refreshBtn = await page.$('.qrcode-refresh, [class*="qrcode-refresh"]');
+        if (refreshBtn) {
+          await refreshBtn.click();
+          await page.waitForTimeout(3000);
+          try { await page.waitForSelector('.qrcode-status-timeout', { state: 'hidden', timeout: 5000 }); } catch { /* 可能已消失 */ }
+          console.info('[LoginTabRegistry] captureQR: QR expired, clicked refresh');
+        }
+      }
+    } catch { /* 过期检测失败不阻塞主流程 */ }
 
     for (const sel of selectors) {
       for (const frame of frames) {
