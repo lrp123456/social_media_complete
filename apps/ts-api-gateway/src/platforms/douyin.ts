@@ -5,9 +5,11 @@
 
 import { Page } from 'patchright';
 import { HumanActions, SelectorReader, DEFAULT_SELECTOR_CONFIG } from '@social-media/browser-core';
+import type { RequestInterceptor } from '@social-media/browser-core';
 import { getSelectorReader } from '../lib/selectorStore';
 import { BasePublisher } from './BasePublisher';
 import { createLogger } from '../lib/logger';
+import { isAntiDetectionV2 } from '../lib/antiDetectionMode';
 import type { LoginContext, UploadContext } from './types';
 import type { PlatformName } from '@social-media/shared-config';
 
@@ -19,6 +21,9 @@ const PUBLISH_URL = 'https://creator.douyin.com/creator-micro/content/upload';
 export class DouyinPublisher extends BasePublisher {
   readonly platform: PlatformName = 'douyin';
   readonly creatorUrl = 'https://creator.douyin.com';
+
+  /** 网络请求拦截器（v2 反检测路径使用） */
+  protected interceptor?: RequestInterceptor;
 
   private sel(): SelectorReader { return getSelectorReader(); }
 
@@ -143,7 +148,11 @@ export class DouyinPublisher extends BasePublisher {
       const titleContainer = await HumanActions.cdpFindElement(page, titleSelectors);
       if (titleContainer) {
         const title = (metadata.title || '').slice(0, 30);
-        await HumanActions.safeCDPType(page, title, titleContainer.sel);
+        if (isAntiDetectionV2()) {
+          await HumanActions.fill(page, titleContainer.sel, title);
+        } else {
+          await HumanActions.safeCDPType(page, title, titleContainer.sel);
+        }
         logger.info(`[抖音] 标题已填写: ${title} (via ${titleContainer.sel})`);
       } else {
         logger.warn(`[抖音] 标题输入框未找到 (尝试了 ${titleSelectors.length} 个选择器: ${titleSelectors.join(', ')})`);
@@ -158,7 +167,11 @@ export class DouyinPublisher extends BasePublisher {
       const descContainer = await HumanActions.cdpFindElement(page, descSelectors);
       if (descContainer) {
         const desc = (metadata.description || '').slice(0, 1000);
-        await HumanActions.safeCDPType(page, desc, descContainer.sel);
+        if (isAntiDetectionV2()) {
+          await HumanActions.fill(page, descContainer.sel, desc);
+        } else {
+          await HumanActions.safeCDPType(page, desc, descContainer.sel);
+        }
         logger.info(`[抖音] 描述已填写 (via ${descContainer.sel})`);
       } else {
         logger.warn(`[抖音] 描述输入框未找到 (尝试了 ${descSelectors.length} 个选择器: ${descSelectors.join(', ')})`);
@@ -170,7 +183,11 @@ export class DouyinPublisher extends BasePublisher {
       try {
         const tagText = ' ' + metadata.tags.map((t) => `#${t}`).join(' ');
         const descSel = descSelectors[0];
-        await HumanActions.safeCDPType(page, tagText, descSel);
+        if (isAntiDetectionV2()) {
+          await HumanActions.fill(page, descSel, tagText);
+        } else {
+          await HumanActions.safeCDPType(page, tagText, descSel);
+        }
         logger.info(`[抖音] ${metadata.tags.length} 个标签已添加`);
       } catch (err: any) {
         logger.warn(`[抖音] 标签添加失败: ${err.message}`);
@@ -261,7 +278,11 @@ export class DouyinPublisher extends BasePublisher {
 
       // 3d. 记录点击前 URL, 点击
       const urlBefore = page.url();
-      await HumanActions.cdpClick(page, btn.sel);
+      if (isAntiDetectionV2()) {
+        await HumanActions.click(page, btn.sel);
+      } else {
+        await HumanActions.cdpClick(page, btn.sel);
+      }
       await HumanActions.wait(page, postClickWait[0], postClickWait[1]);
       const urlAfter = page.url();
       lastClickResult = { attempt: attempt + 1, sel: btn.sel, urlBefore, urlAfter };
@@ -308,38 +329,55 @@ export class DouyinPublisher extends BasePublisher {
       throw new Error(`[抖音] 发布按钮点击失败（已重试 ${maxRetries} 次, 最后尝试: ${lastClickResult?.sel ?? 'N/A'}）`);
     }
 
-    // 5. 等待发布结果 — 成功 toast (用 cdpFindElement) + URL 模式命中
-    let success = false;
-    const successSelectors = sel.getSelectorListWithFallback('douyin', 'regions', 'region_success_toast', [
-      '[class*="toast"]:visible',
-      '[class*="success"]:visible',
-      'text=发布成功',
-      'text=上传成功',
-    ]);
-    const successPatterns = rules.successUrlPatterns ?? ['/content/manage'];
-    const waitMs = rules.publishWaitMs ?? 15000;
-    const pollInterval = 1000;
-    const polls = Math.ceil(waitMs / pollInterval);
-    for (let i = 0; i < polls; i++) {
-      const toast = await HumanActions.cdpFindElement(page, successSelectors);
-      if (toast) {
-        success = true;
-        break;
+    // 5. 等待发布结果 — v2 走拦截器判定，legacy 走 DOM + URL 模式
+    if (isAntiDetectionV2()) {
+      // v2: 拦截器优先，带 DOM 兜底
+      const PUBLISH_RESULT_PATTERN = '/aweme/v1/creator/item/post';
+      const resp = await this.interceptor?.waitForResponse(
+        PUBLISH_RESULT_PATTERN,
+        15000,
+        (r: any) => r.body?.aweme_id || r.body?.item?.id,
+      );
+      if (resp) {
+        logger.info('[抖音] 发布成功（拦截器判定）');
+      } else {
+        // DOM 兜底
+        await page.locator('text=发布成功').waitFor({ timeout: 15000 }).catch(() => {});
       }
-      const currentUrl = page.url();
-      if (successPatterns.some((pat) => currentUrl.includes(pat) && !currentUrl.includes('/upload'))) {
-        success = true;
-        logger.info(`[抖音] URL 已跳转至管理页: ${currentUrl} (命中模式: ${successPatterns.join('|')})`);
-        break;
-      }
-      await HumanActions.wait(page, 800, 1200);
-    }
-
-    if (success) {
-      logger.info('[抖音] ✅ 发布成功');
     } else {
-      const finalUrl = page.url();
-      logger.warn(`[抖音] ⚠️ 提交流程完成, 但 ${waitMs}ms 内未检测到成功标志 (URL: ${finalUrl})`);
+      // legacy: 原有 DOM + URL 模式判定
+      let success = false;
+      const successSelectors = sel.getSelectorListWithFallback('douyin', 'regions', 'region_success_toast', [
+        '[class*="toast"]:visible',
+        '[class*="success"]:visible',
+        'text=发布成功',
+        'text=上传成功',
+      ]);
+      const successPatterns = rules.successUrlPatterns ?? ['/content/manage'];
+      const waitMs = rules.publishWaitMs ?? 15000;
+      const pollInterval = 1000;
+      const polls = Math.ceil(waitMs / pollInterval);
+      for (let i = 0; i < polls; i++) {
+        const toast = await HumanActions.cdpFindElement(page, successSelectors);
+        if (toast) {
+          success = true;
+          break;
+        }
+        const currentUrl = page.url();
+        if (successPatterns.some((pat) => currentUrl.includes(pat) && !currentUrl.includes('/upload'))) {
+          success = true;
+          logger.info(`[抖音] URL 已跳转至管理页: ${currentUrl} (命中模式: ${successPatterns.join('|')})`);
+          break;
+        }
+        await HumanActions.wait(page, 800, 1200);
+      }
+
+      if (success) {
+        logger.info('[抖音] ✅ 发布成功');
+      } else {
+        const finalUrl = page.url();
+        logger.warn(`[抖音] ⚠️ 提交流程完成, 但 ${waitMs}ms 内未检测到成功标志 (URL: ${finalUrl})`);
+      }
     }
 
     return page.url();
