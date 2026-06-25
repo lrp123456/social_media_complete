@@ -769,7 +769,7 @@ export class XiaohongshuCrawler {
     }
 
     logger.info({ userId, videoCount: videos.length }, '[XHS-Light] Comparison done, upserting videos to database');
-    await db.reconcileVideosForUser(userId, videos, this.maxMonitorVideos);
+    await db.reconcileVideosForUser(userId, 'xiaohongshu', videos, this.maxMonitorVideos);
 
     // 注意：不在 Phase1 更新评论数和标记已通知
     // 这些操作移到 Phase3 成功之后，避免 Phase3 失败时数据库状态不一致
@@ -1195,7 +1195,7 @@ export class XiaohongshuCrawler {
           const { loginTabRegistry, getLoginFlowConfig } = await import('../services/loginFlowHelpers');
           const { prisma: prismaXhs } = await import('../lib/prisma');
           const xhsUser = await prismaXhs.platformAccount.findUnique({ where: { id: userId }, select: { windowId: true } });
-          const xhsWindowId = xhsUser?.windowId ? String(xhsUser.fingerprintWindowId) : 'unknown';
+          const xhsWindowId = xhsUser?.windowId ? String(xhsUser.windowId) : 'unknown';
 
           const mainsiteConfig = getLoginFlowConfig('xiaohongshu', 'mainsite');
           if (mainsiteConfig && xhsUser?.windowId) {

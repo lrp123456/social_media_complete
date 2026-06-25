@@ -1052,7 +1052,7 @@ export class TencentCrawler {
         favCount: v.favCount,
       },
     }));
-    await db.reconcileVideosForUser(userId, videoInfos, this.maxMonitorVideos);
+    await db.reconcileVideosForUser(userId, 'tencent', videoInfos, this.maxMonitorVideos);
 
     this.unregisterListener();
 
