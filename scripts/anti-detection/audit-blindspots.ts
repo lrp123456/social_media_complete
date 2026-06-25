@@ -46,4 +46,26 @@ for (const f of DOUYIN_FILES) {
   for (const [p, c] of Object.entries(counts)) console.log(`  ${p}: ${c}`);
 }
 console.log(`\n=== 抖音范围裸调用总计: ${total} ===`);
+
+// ===== world:'main' 计数（spec 4.3：单文件不超过 3 处） =====
+const WORLD_MAIN_LIMIT = 3;
+console.log(`\n=== world:'main' 计数（限制: ≤${WORLD_MAIN_LIMIT}/文件） ===`);
+let worldMainViolations = 0;
+for (const f of DOUYIN_FILES) {
+  let content: string;
+  try {
+    content = readFileSync(join(ROOT, f), 'utf8');
+  } catch {
+    continue;
+  }
+  // 匹配 world: 'main' 或 world:'main' 或 world:"main"
+  const matches = (content.match(/world\s*:\s*["']main["']/g) || []).length;
+  const status = matches <= WORLD_MAIN_LIMIT ? '✓' : '✗ VIOLATION';
+  if (matches > WORLD_MAIN_LIMIT) worldMainViolations++;
+  console.log(`  ${f}: ${matches} ${status}`);
+}
+if (worldMainViolations > 0) {
+  console.log(`\n⚠️  ${worldMainViolations} 个文件超过 world:'main' 限制`);
+}
+
 process.exit(0); // 审计脚本始终退出 0，仅报告
