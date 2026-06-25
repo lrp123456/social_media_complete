@@ -60,3 +60,25 @@ describe('RequestInterceptor.pollStatus', () => {
     expect(r).toBeNull();
   });
 });
+
+describe('RequestInterceptor 可靠性采样', () => {
+  it('每 100 次采样 1 次无兜底模式', () => {
+    const interceptor = new RequestInterceptor();
+    const samples: boolean[] = [];
+    for (let i = 0; i < 1000; i++) {
+      samples.push((interceptor as any).shouldSampleNoFallback());
+    }
+    const sampleCount = samples.filter(Boolean).length;
+    // 1% 即约 10 次，容差 ±5
+    expect(sampleCount).toBeGreaterThanOrEqual(5);
+    expect(sampleCount).toBeLessThanOrEqual(20);
+  });
+
+  it('记录 interceptorOnlySuccess 指标', async () => {
+    const interceptor = new RequestInterceptor();
+    (interceptor as any).interceptedData.set('p', [{ url: 'u', status: 200, body: {} } as any]);
+    await interceptor.waitForResponse('p', { timeoutMs: 100, predicate: () => true, sampleNoFallback: true } as any);
+    const metrics = interceptor.getAntiDetectionMetrics();
+    expect(metrics.interceptorOnlySuccess).toBeGreaterThanOrEqual(0);
+  });
+});

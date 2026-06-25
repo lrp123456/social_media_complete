@@ -230,6 +230,8 @@ export class RequestInterceptor {
   private activeListeners: Map<string, { cdp: CDPSession; cdpHandler: (params: any) => void; page: Page; pageHandler: (response: any) => void }> = new Map();
   private capturedUrls: Map<string, Set<string>> = new Map();
   private pageIdCounter = 0;
+  private waitForResponseCount = 0;
+  private antiDetectionMetrics = { interceptorOnlySuccess: 0, interceptorOnlyFailure: 0, fallbackToDom: 0 };
 
   setValidationConfig(pattern: string, config: ValidationConfig): void {
     this.validationConfigs.set(pattern, config);
@@ -589,6 +591,15 @@ export class RequestInterceptor {
     return null;
   }
 
+  private shouldSampleNoFallback(): boolean {
+    this.waitForResponseCount++;
+    return this.waitForResponseCount % 100 === 0; // 每 100 次 1 次
+  }
+
+  getAntiDetectionMetrics(): { interceptorOnlySuccess: number; interceptorOnlyFailure: number; fallbackToDom: number } {
+    return { ...this.antiDetectionMetrics };
+  }
+
   clear(pattern: string): void {
     this.interceptedData.delete(pattern);
     this.capturedUrls.delete(pattern);
@@ -601,17 +612,23 @@ export class RequestInterceptor {
 
   async waitForResponse(
     pattern: string,
-    timeoutMs: number = 15000,
-    predicate?: (response: InterceptedResponse) => boolean
+    timeoutMsOrOpts: number | { timeoutMs: number; predicate?: (response: InterceptedResponse) => boolean; sampleNoFallback?: boolean } = 15000,
+    predicate?: (response: InterceptedResponse) => boolean,
   ): Promise<InterceptedResponse | null> {
+    // Normalize arguments to support both old (timeoutMs, predicate) and new (opts) signatures
+    const opts = typeof timeoutMsOrOpts === 'object'
+      ? timeoutMsOrOpts
+      : { timeoutMs: timeoutMsOrOpts, predicate };
     const startTime = Date.now();
+    const isSampling = opts.sampleNoFallback === true;
 
-    while (Date.now() - startTime < timeoutMs) {
+    while (Date.now() - startTime < opts.timeoutMs) {
       const responses = this.getResponses(pattern);
       if (responses.length > 0) {
         for (let i = responses.length - 1; i >= 0; i--) {
           const r = responses[i];
-          if (!predicate || predicate(r)) {
+          if (!opts.predicate || opts.predicate(r)) {
+            if (isSampling) this.antiDetectionMetrics.interceptorOnlySuccess++;
             return r;
           }
         }
@@ -622,7 +639,9 @@ export class RequestInterceptor {
       await new Promise(resolve => setTimeout(resolve, 200));
     }
 
-    logger.debug({ pattern, timeoutMs, dataKeys: [...this.interceptedData.keys()], rejectionCount: this.rejectionLog.length }, 'waitForResponse timed out');
+    logger.debug({ pattern, timeoutMs: opts.timeoutMs, dataKeys: [...this.interceptedData.keys()], rejectionCount: this.rejectionLog.length }, 'waitForResponse timed out');
+    if (isSampling) this.antiDetectionMetrics.interceptorOnlyFailure++;
+    else this.antiDetectionMetrics.fallbackToDom++;
     return null;
   }
 
