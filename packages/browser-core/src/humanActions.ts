@@ -93,6 +93,32 @@ export class HumanActions {
     await page.waitForTimeout(delay);
   }
 
+  // ===== 反检测收口：读取类（零注入优先，原生 Locator） =====
+
+  static async readText(page: Page, selector: string): Promise<string | null> {
+    const locator = page.locator(selector);
+    if ((await locator.count()) === 0) return null;
+    return locator.textContent();
+  }
+
+  static async readAttribute(page: Page, selector: string, attr: string): Promise<string | null> {
+    const locator = page.locator(selector);
+    if ((await locator.count()) === 0) return null;
+    return locator.getAttribute(attr);
+  }
+
+  static async exists(page: Page, selector: string, timeoutMs: number = 0): Promise<boolean> {
+    const locator = page.locator(selector);
+    if (timeoutMs > 0) {
+      try {
+        await locator.waitFor({ state: 'attached', timeout: timeoutMs });
+      } catch {
+        return false;
+      }
+    }
+    return (await locator.count()) > 0;
+  }
+
   private static async getCDPContext(page: Page): Promise<CDPContext> {
     let ctx = HumanActions.cdpContexts.get(page);
     if (ctx) {
