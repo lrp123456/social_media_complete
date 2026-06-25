@@ -2256,8 +2256,7 @@ export class KuaishouCrawler {
     return updatedCounts;
   }
 
-  private async waitForCommentResponse(page: Page): Promise<InterceptedResponse | null> {
-    const timeout = 20000;
+  private async waitForCommentResponse(page: Page, timeout = 20000): Promise<InterceptedResponse | null> {
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
@@ -3076,9 +3075,9 @@ export class KuaishouCrawler {
   /**
    * 收集所有分页的 commentList API 响应（简单模式用）
    */
-  private async collectAllCommentResponses(page: Page): Promise<InterceptedResponse[]> {
+  private async collectAllCommentResponses(page: Page, initialResponse?: InterceptedResponse): Promise<InterceptedResponse[]> {
     const allResponses: InterceptedResponse[] = [];
-    let response = await this.waitForCommentResponse(page);
+    let response = initialResponse || await this.waitForCommentResponse(page);
     if (!response) return [];
     allResponses.push(response);
 
@@ -3150,51 +3149,31 @@ export class KuaishouCrawler {
         // ── 等待 API 响应 ──
         await HumanActions.wait(page, 3000, 5000);
 
-        // 1. 获取已有的根评论 CID 集合
+        // 1. 短等待首个 commentList，避免无响应视频阻塞整轮队列
+        const firstCommentResponse = await this.waitForCommentResponse(page, 8000);
+        if (!firstCommentResponse) {
+          logger.warn({ awemeId: item.awemeId }, '[Simple] No commentList after selecting video — skipping');
+          results.push({ awemeId: item.awemeId, success: false, error: 'No commentList after selecting video' });
+          continue;
+        }
+
+        // 2. 获取已有的根评论 CID 集合
         const existingCids = await prisma.comment.findMany({
           where: { videoId: item.awemeId, level: 1 },
           select: { cid: true },
         });
         const existingCidSet = new Set(existingCids.map(c => c.cid));
 
-        // 2. 滚动加载根评论
-        const allComments: any[] = [];
-        let consecutiveNoNew = 0;
-        let hasMore = true;
+        // 3. 滚动加载根评论
+        const responses = await this.collectAllCommentResponses(page, firstCommentResponse);
+        const allComments = responses.flatMap(r => r.body?.data?.list || [])
+          .filter(c => !existingCidSet.has(String(c.commentId)));
 
-        while (hasMore && allComments.length < maxRootComments && consecutiveNoNew < 5) {
-          // 等待 API 响应
-          const responses = await this.collectAllCommentResponses(page);
-
-          if (responses.length === 0) {
-            consecutiveNoNew++;
-            logger.info({ awemeId: item.awemeId, consecutiveNoNew }, '[Simple] No API response, incrementing counter');
-            continue;
-          }
-
-          // 提取根评论（快手 API 格式）
-          const newComments = responses.flatMap(r => r.body?.data?.list || [])
-            .filter(c => !existingCidSet.has(String(c.commentId)));
-
-          if (newComments.length === 0) {
-            consecutiveNoNew++;
-          } else {
-            consecutiveNoNew = 0;
-            allComments.push(...newComments);
-          }
-
-          // 检查 has_more（快手：pcursor 有值=有更多）
-          const lastResp = responses[responses.length - 1];
-          hasMore = !!lastResp?.body?.data?.pcursor;
-
-          // 继续滚动
-          if (hasMore && allComments.length < maxRootComments) {
-            await this.scrollCommentAreaForKuaishou(page, 'bottom');
-            await HumanActions.wait(page, 8000, 8000);
-          }
+        if (allComments.length > maxRootComments) {
+          allComments.length = maxRootComments;
         }
 
-        // 3. 限制到 maxRootComments
+        // 4. 限制到 maxRootComments
         const commentsToStore = allComments.slice(0, maxRootComments);
 
         // 4. 存储新评论
