@@ -13,6 +13,7 @@ import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import type { ReplyTarget } from './replyTypes';
 import { parseDomTimestamp, isTimestampMatch, isDescriptionMatch } from './timeParser';
 import { getCommentCrawlDecision, truncateToNewest } from '../services/commentCrawlRules';
+import { isKuaishouDrawerVideoTextMatch, shouldStopKuaishouDrawerSearch } from './kuaishouDrawerUtils';
 import fs from 'fs';
 import path from 'path';
 
@@ -2021,28 +2022,30 @@ export class KuaishouCrawler {
   ): Promise<boolean> {
     const MAX_SCROLL_ATTEMPTS = 100;
     const TIMESTAMP_TOLERANCE = 60;
+    let lastLoadedItems = -1;
+    let noGrowthRounds = 0;
+    let emptyRounds = 0;
+    let hasScrolled = false;
 
     logger.info({ awemeId, createTime, descPrefix: description.substring(0, 20) }, '[Drawer] Searching for target video in drawer');
 
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      // 在 page.evaluate 中遍历 .video-item 元素
-      const matchResult = await page.evaluate(({ desc, createTimeNum, tolerance }: { desc: string; createTimeNum: number; tolerance: number }) => {
-        const items = document.querySelectorAll('.video-item');
+      const matchResult = await page.evaluate(({ createTimeNum, tolerance }: { createTimeNum: number; tolerance: number }) => {
+        const items = Array.from(document.querySelectorAll('.video-item'));
         let minTimestamp = Infinity;
         let maxTimestamp = -Infinity;
         let itemCount = 0;
-        const timeDiffs: number[] = [];
+        const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
 
         for (const item of items) {
           const titleEl = item.querySelector('.video-info__content__title');
           const dateEl = item.querySelector('.video-info__content__date');
           const title = titleEl?.textContent?.trim() || '';
           const dateText = dateEl?.textContent?.trim() || '';
-          const fullText = title + ' ' + dateText;
+          const fullText = `${title} ${dateText}`;
 
-          // 解析时间（快手格式：2026-05-28 09:03:19）
           const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
           if (!dateMatch) continue;
           const [, y, m, d, h, min, s] = dateMatch;
@@ -2051,50 +2054,55 @@ export class KuaishouCrawler {
           itemCount++;
           if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
           if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
-          timeDiffs.push(domTimestamp - createTimeNum);
 
-          // 时间差判断
-          if (Math.abs(domTimestamp - createTimeNum) > tolerance) continue;
-
-          // description 前缀匹配
-          const descPrefix = desc.toLowerCase().substring(0, 20);
-          if (descPrefix.length > 0 && !fullText.toLowerCase().includes(descPrefix)) continue;
-
-          // 匹配成功，点击 date 区域（安全区域，不会触发跳转）
-          // 注意：不要点击 .video-info__cover 或 .video-info__content__title，它们会跳转到视频详情页
-          const dateClickEl = item.querySelector('.video-info__content__date');
-          if (dateClickEl) {
-            (dateClickEl as HTMLElement).click();
-            return { found: true, domTimestamp, title: title.substring(0, 50), itemCount, minTimestamp, maxTimestamp, timeDiffs };
+          if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
+            candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
           }
         }
 
-        // 如果所有已加载视频的时间都早于目标时间，说明已经滚动过头了
-        if (minTimestamp < createTimeNum - tolerance) {
-          return { found: false, scrolledPast: true, itemCount, minTimestamp, maxTimestamp, timeDiffs };
-        }
-
-        return { found: false, scrolledPast: false, itemCount, minTimestamp, maxTimestamp, timeDiffs };
-      }, { desc: description, createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
+        return {
+          itemCount,
+          minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
+          maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
+          candidates,
+        };
+      }, { createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
 
       logger.info({ scrollAttempt, loadedItems: matchResult.itemCount, latestDate: matchResult.maxTimestamp, oldestDate: matchResult.minTimestamp, targetCreateTime: createTime }, '[Drawer] Scroll diagnostic');
 
-      if (matchResult.found) {
-        // 检测是否误点击导致跳转
+      const matchedCandidate = matchResult.candidates.find(candidate =>
+        isKuaishouDrawerVideoTextMatch(candidate.fullText, description),
+      );
+
+      if (matchedCandidate) {
+        const clicked = await page.evaluate((targetDateText: string) => {
+          const items = Array.from(document.querySelectorAll('.video-item'));
+          for (const item of items) {
+            const dateEl = item.querySelector('.video-info__content__date');
+            if (dateEl?.textContent?.trim() === targetDateText) {
+              (dateEl as HTMLElement).click();
+              return true;
+            }
+          }
+          return false;
+        }, matchedCandidate.dateText);
+
+        if (!clicked) {
+          logger.warn({ awemeId, dateText: matchedCandidate.dateText }, '[Drawer] Matched candidate but date click failed');
+          return false;
+        }
+
         await HumanActions.wait(page, 500, 800);
         const currentUrl = page.url();
         if (currentUrl.includes('kuaishou.com/short-video/') || currentUrl.includes('kuaishou.com/video/')) {
           logger.warn({ awemeId, currentUrl, expectedUrl: 'cp.kuaishou.com/article/comment' }, '[Drawer] 误点击导致跳转到视频详情页，返回评论管理页面');
-          // 返回评论管理页面
           await page.goto('https://cp.kuaishou.com/article/comment', { waitUntil: 'domcontentloaded', timeout: 15000 });
           await HumanActions.wait(page, 2000, 3000);
-          // 重新打开抽屉
           const drawerOpened = await this.openSelectVideoDrawer(page);
           if (!drawerOpened) {
             logger.error({ awemeId }, '[Drawer] 返回后重新打开抽屉失败');
             return false;
           }
-          // 重试计数
           const retryKey = `retry_${awemeId}`;
           const retryCount = (this as any)[retryKey] || 0;
           if (retryCount >= 3) {
@@ -2103,16 +2111,42 @@ export class KuaishouCrawler {
             return false;
           }
           (this as any)[retryKey] = retryCount + 1;
-          // 继续下一次滚动尝试
           continue;
         }
-        logger.info({ awemeId, domTimestamp: matchResult.domTimestamp, createTime, matchType: 'timestamp+description' }, '[Drawer] 匹配成功');
+
+        logger.info({ awemeId, domTimestamp: matchedCandidate.domTimestamp, createTime, matchType: 'timestamp+normalized-description' }, '[Drawer] 匹配成功');
         return true;
       }
 
-      // 如果已滚动过头，提前终止
-      if (matchResult.scrolledPast) {
-        logger.warn({ awemeId, createTime, oldestTimestamp: matchResult.minTimestamp }, '[Drawer] 已滚动过头，停止搜索');
+      if (matchResult.itemCount === 0) {
+        emptyRounds++;
+      } else {
+        emptyRounds = 0;
+      }
+
+      if (matchResult.itemCount === lastLoadedItems) {
+        noGrowthRounds++;
+      } else {
+        noGrowthRounds = 0;
+      }
+      lastLoadedItems = matchResult.itemCount;
+
+      const stopDecision = shouldStopKuaishouDrawerSearch({
+        itemCount: matchResult.itemCount,
+        emptyRounds,
+        noGrowthRounds,
+        hasScrolled,
+        minTimestamp: matchResult.minTimestamp,
+        targetCreateTime: createTime,
+        tolerance: TIMESTAMP_TOLERANCE,
+      });
+
+      if (stopDecision.stop) {
+        if (stopDecision.reason === 'empty-list') {
+          logger.warn({ awemeId, emptyRounds }, '[Drawer] Empty video list repeated — stopping search');
+        } else {
+          logger.warn({ awemeId, noGrowthRounds, oldestTimestamp: matchResult.minTimestamp }, '[Drawer] No growth after scrolling and passed target window — stopping search');
+        }
         break;
       }
 
@@ -2120,6 +2154,7 @@ export class KuaishouCrawler {
       if (scrollAttempt < MAX_SCROLL_ATTEMPTS) {
         logger.info({ scrollAttempt }, '[Drawer] 未匹配，滚动加载更多');
         await this.scrollDrawerForMoreKuaishou(page, scrollAttempt);
+        hasScrolled = true;
       }
     }
 
