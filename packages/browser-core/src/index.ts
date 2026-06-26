@@ -40,3 +40,10 @@ export { LoginTabRegistry } from './loginTabRegistry';
 
 // Types
 export * from './types';
+
+export { MaintenanceProbe } from './maintenanceProbe';
+export type { ProbeContext, SelectorOp, UrlInterceptOp, RedisPusher } from './maintenanceProbe';
+export { createProxiedPage, PROXY_INTERCEPT_METHODS } from './pageProxy';
+export { SelectorRegistry } from './selectorRegistry';
+export type { ResolvedSelector } from './selectorRegistry';
+export { sanitizeSnapshot } from './snapshotSanitizer';

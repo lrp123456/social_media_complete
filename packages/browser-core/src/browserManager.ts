@@ -2,6 +2,8 @@ import { chromium, Browser, Page } from 'patchright';
 import { Platform } from '../types';
 import { HumanActions } from './humanActions';
 import { rootLogger } from '../logger';
+import { createProxiedPage } from './pageProxy';
+import { MaintenanceProbe } from './maintenanceProbe';
 import fs from 'fs';
 import path from 'path';
 const logger = rootLogger.child({ name: 'browserManager' });
@@ -140,8 +142,16 @@ export class BrowserManager {
   private userSessions: Map<string, UserSession> = new Map();
   private debugModeEnabled: boolean = false;
   private openers: Map<string, WindowOpener> = new Map();
+  private currentWindowId?: string;
   /** 外部注册的 vendor 解析器：根据 windowId(externalId) 返回 vendor 名称 */
   private vendorResolver: ((windowId: string) => Promise<string | null>) | null = null;
+
+  private maybeProxyPage(page: Page): Page {
+    if (MaintenanceProbe.isEnabled()) {
+      return createProxiedPage(page, this.currentWindowId ?? 'unknown');
+    }
+    return page;
+  }
 
   constructor(apiPort: number = 50000, apiKey: string = '') {
     this.apiHost = `http://127.0.0.1:${apiPort}`;
@@ -265,6 +275,7 @@ export class BrowserManager {
   }
 
   async connect(windowId: string, spaceId: string, platform: Platform = 'douyin', vendor?: string): Promise<{ browser: Browser; page: Page }> {
+    this.currentWindowId = windowId;
     const resolvedVendor = await this.resolveVendor(windowId, vendor);
     const sessionKey = `${windowId}_${platform}`;
 
@@ -344,7 +355,7 @@ export class BrowserManager {
             existingSession.lastActiveAt = Date.now();
 
             logger.info({ windowId, platform }, 'Created new tab after reused page loading failure');
-            return { browser: existingSession.browser, page: newPage };
+            return { browser: existingSession.browser, page: this.maybeProxyPage(newPage) };
           }
 
           logger.info({ windowId, sessionKey, reuseCount: existingSession.reuseCount, maxReuse: existingSession.maxReuse }, 'Reusing existing platform tab (Keep-Alive)');
@@ -367,14 +378,14 @@ export class BrowserManager {
               }
 
               logger.info({ windowId, platform, newMaxReuse: existingSession.maxReuse }, 'New platform tab created for rotation');
-              return { browser: existingSession.browser, page: newPage };
+              return { browser: existingSession.browser, page: this.maybeProxyPage(newPage) };
             } catch (rotateError: any) {
               logger.warn({ windowId, error: rotateError.message }, 'Tab rotation failed, continuing with existing page');
             }
           }
 
           existingSession.page = platformPage;
-          return { browser: existingSession.browser, page: platformPage };
+          return { browser: existingSession.browser, page: this.maybeProxyPage(platformPage) };
         }
 
         logger.info({ windowId, platform }, 'No platform-specific tab found in existing session, creating new tab');
@@ -387,7 +398,7 @@ export class BrowserManager {
           existingSession.lastActiveAt = Date.now();
 
           logger.info({ windowId, platform, newMaxReuse: existingSession.maxReuse }, 'New platform tab created in existing browser');
-          return { browser: existingSession.browser, page: newPage };
+          return { browser: existingSession.browser, page: this.maybeProxyPage(newPage) };
         } catch (createError: any) {
           logger.warn({ windowId, error: createError.message }, 'Failed to create new tab, reconnecting');
           this.userSessions.delete(sessionKey);
@@ -493,7 +504,7 @@ export class BrowserManager {
 
         logger.info({ windowId, sessionKey, platform, maxReuse }, 'Connected to fingerprint browser (Keep-Alive session)');
 
-        return { browser, page };
+        return { browser, page: this.maybeProxyPage(page) };
       } catch (error: any) {
         lastError = error;
         logger.warn({ windowId, attempt: attempt + 1, error: error.message }, 'Connection attempt failed');

@@ -1,5 +1,6 @@
 import { Page, CDPSession } from 'patchright';
 import { rootLogger } from '../logger';
+import { MaintenanceProbe } from './maintenanceProbe';
 const logger = rootLogger.child({ name: 'interceptor' });
 
 export interface InterceptedResponse {
@@ -236,6 +237,63 @@ export class RequestInterceptor {
   setValidationConfig(pattern: string, config: ValidationConfig): void {
     this.validationConfigs.set(pattern, config);
     logger.info({ pattern, expectedPages: config.expectedPageUrls, requiredFields: config.requiredItemFields }, 'Validation config set');
+  }
+
+  async attachByConfig(page: Page, platform: string, keys: string[], config: Record<string, any>): Promise<string[]> {
+    // 收集所有不重复的 URL pattern
+    const allPatterns: string[] = [];
+    for (const key of keys) {
+      const entry = config[key];
+      if (entry?.url_patterns) {
+        for (const pat of entry.url_patterns) {
+          if (!allPatterns.includes(pat)) {
+            allPatterns.push(pat);
+          }
+        }
+      }
+    }
+
+    // 一次性注册所有 pattern
+    const pageId = await this.register(page, allPatterns);
+
+    // 为每个 pattern 设置独立验证配置
+    for (const key of keys) {
+      const entry = config[key];
+      if (entry?.url_patterns && entry?.validation) {
+        const validationConfig: ValidationConfig = {
+          expectedPageUrls: entry.validation.expected_page_urls || [],
+          requiredItemFields: entry.validation.required_body_fields || [],
+          minItems: entry.validation.min_items,
+          requiredUrlParams: entry.validation.required_url_params,
+        };
+        // requiredBodyFields 别名（供 attachByConfig 调用方使用）
+        (validationConfig as any).requiredBodyFields = entry.validation.required_body_fields || [];
+        for (const pat of entry.url_patterns) {
+          this.setValidationConfig(pat, validationConfig);
+        }
+      }
+    }
+
+    return [pageId];
+  }
+
+  hotReloadRules(config: Record<string, any>): void {
+    for (const key of Object.keys(config)) {
+      const entry = config[key];
+      if (entry?.url_patterns && entry?.validation) {
+        const validationConfig: ValidationConfig = {
+          expectedPageUrls: entry.validation.expected_page_urls || [],
+          requiredItemFields: entry.validation.required_body_fields || [],
+          minItems: entry.validation.min_items,
+          requiredUrlParams: entry.validation.required_url_params,
+        };
+        // requiredBodyFields 别名（供 hotReloadRules 调用方使用）
+        (validationConfig as any).requiredBodyFields = entry.validation.required_body_fields || [];
+        for (const pat of entry.url_patterns) {
+          this.setValidationConfig(pat, validationConfig);
+        }
+      }
+    }
   }
 
   getRejectionLog(limit: number = 50): ValidationRejection[] {
@@ -476,6 +534,20 @@ export class RequestInterceptor {
       // 完整打印第一个item的前30个键值对（字符串化以控制日志大小）
       rawFirstItemStr: firstItem ? JSON.stringify(firstItem).substring(0, 800) : 'NO_ITEMS',
     }, 'Response captured and stored');
+
+    // 探针记录：URL 拦截匹配成功
+    void MaintenanceProbe.recordUrlIntercept({
+      healthKey: pattern,
+      urlPattern: pattern,
+      actualUrl: url,
+      httpStatus: status,
+      result: 'matched',
+      itemsFound: items.length,
+      hasMore: intercepted.hasMore,
+      cursorValue: intercepted.cursor,
+      durationMs: 0,
+      responseSize: JSON.stringify(body).length,
+    });
   }
 
   private async getPageUrl(page: Page): Promise<string> {
@@ -508,6 +580,18 @@ export class RequestInterceptor {
       requestUrl: requestUrl.substring(0, 120),
       detail,
     }, 'API response rejected by validator');
+
+    // 探针记录：验证失败
+    void MaintenanceProbe.recordUrlIntercept({
+      healthKey: pattern,
+      urlPattern: pattern,
+      actualUrl: requestUrl,
+      httpStatus: 0,
+      result: 'validation_failed',
+      validationStep: reason,
+      durationMs: 0,
+      responseSize: 0,
+    });
   }
 
   unregister(pageId: string): void {
