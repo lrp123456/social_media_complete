@@ -45,20 +45,14 @@ router.get('/', async (_req: Request, res: Response) => {
       include: {
         windows: {
           include: {
-            platforms: { select: { platform: true, loginStatus: true, lastVerifiedAt: true } },
+            platforms: { select: { id: true, platform: true, loginStatus: true, lastVerifiedAt: true, monitoringEnabled: true } },
           },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    // 扁平化：将 windows[].platforms 聚合到 operator.platforms
-    const operatorsWithPlatforms = operators.map((op) => ({
-      ...op,
-      platforms: op.windows.flatMap((w: any) => w.platforms || []),
-    }));
-
-    res.json({ success: true, data: operatorsWithPlatforms });
+    res.json({ success: true, data: operators });
   } catch (err) {
     logger.error({ err: (err as Error).message }, '获取操作员列表失败');
     res.status(500).json({ success: false, error: (err as Error).message });
