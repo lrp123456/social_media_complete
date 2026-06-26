@@ -1398,7 +1398,7 @@ export class DouyinCrawler {
         });
 
         return comments;
-      }, { reason: '解析评论 DOM 树', world: 'main', args: [containerCss] });
+      }, { reason: '解析评论 DOM 树', world: 'main', args: [containerCss] }) as CommentNode[];
     } else {
       result = await page.evaluate((sel: string) => {
         const containers = document.querySelectorAll(sel);
@@ -1895,11 +1895,11 @@ export class DouyinCrawler {
             // 无匹配的缓存响应，检查页面 DOM
             const commentInfo: { cidCount: number; textCount: number } = await (async () => {
               if (isAntiDetectionV2()) {
-                return HumanActions.safeEvaluate(page, () => {
+                return await HumanActions.safeEvaluate(page, () => {
                   const commentEls = document.querySelectorAll('[data-cid]');
                   const textEls = document.querySelectorAll('[class*="comment-content-text"]');
                   return { cidCount: commentEls.length, textCount: textEls.length };
-                }, { reason: '检查页面评论 DOM 内容', world: 'main' });
+                }, { reason: '检查页面评论 DOM 内容', world: 'main' }) as { cidCount: number; textCount: number };
               } else {
                 return page.evaluate(() => {
                   const commentEls = document.querySelectorAll('[data-cid]');
