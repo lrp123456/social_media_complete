@@ -122,6 +122,8 @@ services:
       WECOM_BOT_SECRET: ${WECOM_BOT_SECRET:?请在 .env 中设置 WECOM_BOT_SECRET}
       # API Gateway
       API_GATEWAY_KEY: ${API_GATEWAY_KEY:?请在 .env 中设置 API_GATEWAY_KEY}
+      # 反检测模式: legacy (默认) | v2 (原生Locator + 拦截器)
+      ANTI_DETECTION_MODE: ${ANTI_DETECTION_MODE:-v2}
     volumes:
       - ts_api_data:/app/apps/ts-api-gateway/data
 
