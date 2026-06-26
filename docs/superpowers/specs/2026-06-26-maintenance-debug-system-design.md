@@ -1,9 +1,16 @@
 # 视频流程节点监控与维护调试系统设计规格
 
-> **版本**: v1.0  
+> **版本**: v1.1（Oracle 审核修正版）  
 > **日期**: 2026-06-26  
 > **状态**: 待审批  
 > **方案**: 方案A（探针织入）— 当前落地；方案B（声明式引擎）— 未来重构方向
+
+### 变更日志
+
+| 版本 | 日期 | 变更内容 |
+|------|------|---------|
+| v1.0 | 2026-06-26 | 初始设计 |
+| v1.1 | 2026-06-26 | Oracle 审核修正：C1 新增方法作为一级交付物、C2 PageProxy 移至核心包、C3 指定 Redis 传输通道、M1-M5 数据模型修正、m1-m5 次要修正、新增安全清洗层 |
 
 ---
 
@@ -289,14 +296,32 @@
 
 **文件**: `packages/browser-core/src/maintenanceProbe.ts`
 
+> **C1 修正**：`clickWithFallback()`、`findInScope()`、`attachByConfig()` 目前不存在，需作为一级可交付成果实现。
+
+> **m1 修正**：使用 `AsyncLocalStorage` 替代静态字段，支持并发任务上下文隔离。
+
 ```typescript
+import { AsyncLocalStorage } from 'async_hooks';
+
+interface ProbeContext {
+  flow: string
+  platform: string
+  phase: string
+  step: string
+  subStep?: string
+  taskExecutionId?: string
+}
+
 class MaintenanceProbe {
   private static enabled = false
-  private static currentContext: ProbeContext | null = null
+  private static contextStore = new AsyncLocalStorage<ProbeContext>()
 
   // 爬虫在每个子步骤入口调用
   static enterStep(flow: string, platform: string, phase: string, step: string, subStep?: string): void
   static exitStep(): void
+
+  // 获取当前异步链的上下文（并发安全）
+  static getContext(): ProbeContext | undefined
 
   // HumanActions 内部调用 — 选择器操作
   static recordSelectorOp(op: {
@@ -331,12 +356,14 @@ class MaintenanceProbe {
     requestParams?: Record<string, unknown>
     durationMs: number
     responseSize: number
+    videoId?: string       // m4: 关联的内容条目
+    commentCid?: string    // m4: 关联的评论
   }): void
 
-  // PageProxy 调用 — 旁路报警
+  // PageProxy 调用 — 旁路报警（m5: 使用 apply 拦截器）
   static recordBypass(method: string, stack: string | undefined, windowId: string): void
 
-  // Debug 模式下保存快照
+  // Debug 模式下保存快照（m5: 带安全清洗）
   static recordSnapshot(type: 'dom' | 'response' | 'network', data: {
     selectorKey?: string
     urlPattern?: string
@@ -350,57 +377,73 @@ class MaintenanceProbe {
 
 **文件**: `apps/ts-api-gateway/src/services/maintenanceCollector.ts`
 
+> **C3 修正**：探针数据通过 Redis list 传输（`LPUSH` / `BRPOP`），已有基础设施。
+
 ```typescript
 class MaintenanceCollector {
   private buffer: ProbeEvent[] = []
 
-  // 由 MaintenanceProbe 调用，入队
-  enqueue(event: ProbeEvent): void
+  // 由 MaintenanceProbe 通过 Redis LPUSH 推送
+  // Collector 以 5 秒 BRPOP 消费
+  async startConsuming(): Promise<void>
 
   // 定时 flush 到 DB（每 5 秒或满 50 条）
   private async flush(): Promise<void>
 
   // 执行完成后计算健康摘要
   async summarizeExecution(taskExecutionId: string): Promise<void>
+
+  // 回退方案：Redis 不可用时静默丢弃事件
+  private handleRedisFailure(event: ProbeEvent): void
 }
 ```
 
 ### 4.3 `PageProxy` — 旁路报警器
 
-**文件**: `apps/ts-api-gateway/src/lib/pageProxy.ts`
+**文件**: `packages/browser-core/src/pageProxy.ts`（C2 修正：移至核心包）
 
-在 `BrowserManager` 创建 Page 对象时用 ES6 Proxy 拦截，零侵入捕获所有绕过 HumanActions 的调用：
+> **C2 修正**：PageProxy 放在 `packages/browser-core/src/`，在 `BrowserManager.connect()` 内部应用（`newPage()` 之后）。
+
+> **m5 修正**：使用 `apply` 拦截器（仅在实际调用时触发），添加每步旁路上限（100 条），排除非选择器旁路（`waitForTimeout`、`screenshot`）。
 
 ```typescript
-const PROXY_INTERCEPT_METHODS = [
-  'evaluate', 'evaluateHandle', '$', '$$', 'locator',
-  'goto', 'screenshot', 'waitForTimeout', 'waitForSelector', 'keyboard'
-];
+const PROXY_INTERCEPT_METHODS = ['evaluate', 'evaluateHandle', '$', '$$', 'locator'];
+// 排除：goto（导航）、screenshot（调试）、waitForTimeout（等待）、keyboard（输入）
 
 function createProxiedPage(rawPage: Page, windowId: string): Page {
-  return new Proxy(rawPage, {
+  // 对返回函数的方法使用 apply 拦截器
+  const handler: ProxyHandler<any> = {
     get(target, prop, receiver) {
-      if (PROXY_INTERCEPT_METHODS.includes(prop as string)) {
-        MaintenanceProbe.recordBypass(prop as string, new Error().stack, windowId);
+      const value = Reflect.get(target, prop, receiver);
+      if (PROXY_INTERCEPT_METHODS.includes(prop as string) && typeof value === 'function') {
+        return new Proxy(value, {
+          apply(fnTarget, thisArg, args) {
+            // 仅在实际调用时记录旁路
+            MaintenanceProbe.recordBypass(prop as string, new Error().stack, windowId);
+            return Reflect.apply(fnTarget, thisArg, args);
+          }
+        });
       }
-      return Reflect.get(target, prop, receiver);
+      return value;
     }
-  });
+  };
+  return new Proxy(rawPage, handler);
 }
 ```
-
-旁路数据写入 `maintenance_selector_record`，标记 `selectorSource: 'bypass_detected'`，`result: 'bypass_detected'`。
 
 ### 4.4 集成点（修改现有代码的位置）
 
 | 文件 | 修改点 | 新增行数 |
 |------|--------|---------|
+| `humanActions.ts` | **新增** `clickWithFallback()` 方法（C1） | ~80 行 |
+| `humanActions.ts` | **新增** `findInScope()` 方法（C1） | ~60 行 |
+| `interceptor.ts` | **新增** `attachByConfig()` 方法（C1） | ~40 行 |
 | `humanActions.ts` | `clickWithFallback()` 内部调用 `recordSelectorOp()` | ~20 行 |
 | `humanActions.ts` | `findInScope()` 内部调用 `recordSelectorOp()`（含防蜜罐字段） | ~15 行 |
 | `humanActions.ts` | `safeEvaluate()` 异常时调用 `recordSelectorOp()` | ~8 行 |
 | `interceptor.ts` | `attachByConfig()` 后调用 `recordUrlIntercept()` | ~15 行 |
 | `interceptor.ts` | `extractItems()` / validation 失败时调用 `recordUrlIntercept()` | ~10 行 |
-| `browserManager.ts` | `createProxiedPage()` 替代直接返回 page | ~5 行 |
+| `browserManager.ts` | `createProxiedPage()` 替代直接返回 page（C2） | ~5 行 |
 | 爬虫文件 | 每子步骤入口 `MaintenanceProbe.enterStep()` | ~1-2 行/子步骤 |
 
 ---
@@ -426,6 +469,8 @@ config_snapshot (独立，不关联执行)
 
 ### 5.2 `maintenance_execution` — 执行健康摘要
 
+> **M1 修正**：添加与 `TaskExecution` 的 `@relation` + 级联删除。`isDebugMode` 以 `TaskExecution` 为准。
+
 ```prisma
 model MaintenanceExecution {
   id              String    @id @default(cuid())
@@ -433,6 +478,7 @@ model MaintenanceExecution {
   platform        String    @db.VarChar(32)
   flowType        String    @map("flow_type") @db.VarChar(16)   // monitor | publish | reply
   windowId        String    @map("window_id") @db.VarChar(128)
+  userId          Int?      @map("user_id")                     // M3: 操作员筛选
   overallHealth   String    @default("healthy") @db.VarChar(16) // healthy | degraded | failed
   totalSteps      Int       @default(0) @map("total_steps")
   healthySteps    Int       @default(0) @map("healthy_steps")
@@ -443,14 +489,15 @@ model MaintenanceExecution {
   failedSelectors Int       @default(0) @map("failed_selectors")
   totalUrlChecks  Int       @default(0) @map("total_url_checks")
   passedUrlChecks Int       @default(0) @map("passed_url_checks")
-  debugMode       Boolean   @default(false) @map("debug_mode")
   startedAt       DateTime  @default(now()) @map("started_at")
   completedAt     DateTime? @map("completed_at")
 
-  steps MaintenanceStep[]
+  taskExecution TaskExecution @relation(fields: [taskExecutionId], references: [id], onDelete: Cascade)
+  steps         MaintenanceStep[]
 
   @@index([platform, startedAt], name: "idx_maint_exec_platform_time")
   @@index([overallHealth], name: "idx_maint_exec_health")
+  @@index([userId], name: "idx_maint_exec_user")                   // M3
   @@map("maintenance_executions")
 }
 ```
@@ -487,12 +534,14 @@ model MaintenanceStep {
 
 ### 5.4 `maintenance_selector_record` — 选择器操作记录
 
+> **M4 修正**：`selectorUsed` 改为 `@db.Text`，避免长 CSS/XPath 溢出。
+
 ```prisma
 model MaintenanceSelectorRecord {
   id                 String    @id @default(cuid())
   stepId             String    @map("step_id")
   selectorKey        String    @map("selector_key") @db.VarChar(128)
-  selectorUsed       String    @map("selector_used") @db.VarChar(256)
+  selectorUsed       String    @map("selector_used") @db.Text        // M4: 改为 Text
   selectorSource     String    @map("selector_source") @db.VarChar(20) // primary | fallback_1 | fallback_2 | bypass_detected
   result             String    @db.VarChar(20) // found | not_found | timeout | error | honeypot_blocked | scope_not_found | bypass_detected
   durationMs         Int?      @map("duration_ms")
@@ -516,6 +565,8 @@ model MaintenanceSelectorRecord {
 
 ### 5.5 `maintenance_url_record` — URL 拦截记录
 
+> **m4 修正**：添加可空 `videoId` / `commentCid` 字段，关联内容条目。
+
 ```prisma
 model MaintenanceUrlRecord {
   id              String    @id @default(cuid())
@@ -532,6 +583,8 @@ model MaintenanceUrlRecord {
   extractionValid Boolean?  @map("extraction_valid")
   missingFields   String?   @map("missing_fields") @db.Text
   requestParams   String?   @map("request_params") @db.Text
+  videoId         String?   @map("video_id") @db.VarChar(64)     // m4: 关联视频
+  commentCid      String?   @map("comment_cid") @db.VarChar(64)  // m4: 关联评论
   durationMs      Int?      @map("duration_ms")
   responseSize    Int?      @map("response_size")
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -540,6 +593,7 @@ model MaintenanceUrlRecord {
 
   @@index([stepId], name: "idx_maint_url_step")
   @@index([healthKey, result], name: "idx_maint_url_healthkey_result")
+  @@index([videoId], name: "idx_maint_url_video")                  // m4
   @@map("maintenance_url_records")
 }
 ```
@@ -569,6 +623,9 @@ model DebugSnapshot {
 
 ### 5.7 `config_snapshot` — 配置快照
 
+> **m2 修正**：添加 `@@index([platform, createdAt])` 优化时间序列查询。
+> **m3 修正**：CAS 使用 `UPDATE ... WHERE version = $v` 原子操作。
+
 ```prisma
 model ConfigSnapshot {
   id           String    @id @default(cuid())
@@ -583,6 +640,7 @@ model ConfigSnapshot {
   createdAt    DateTime  @default(now()) @map("created_at")
 
   @@index([platform, configType, isActive], name: "idx_config_snap_active")
+  @@index([platform, createdAt], name: "idx_config_snap_platform_time")  // m2
   @@map("config_snapshots")
 }
 ```
@@ -869,6 +927,57 @@ MaintenanceProbe.exitStep();
 - 探针开销 < 3%（JSON 序列化 + 异步写入）
 - Debug 模式下额外开销 < 10%（快照采样率 20%）
 - MaintenanceCollector 异步批量 flush，不阻塞主流程
+
+### 11.4 安全约束（m5 修正）
+
+> **m5 修正**：Debug 快照存储前必须进行令牌清洗。
+
+Debug 快照（DOM HTML / 响应体 JSON）可能包含认证令牌（`csrf_token`、`session_key`、`authorization`、`ticket`）。存储前必须经过正则清洗层：
+
+```typescript
+const TOKEN_PATTERNS = [
+  /csrf_token['":\s]*['"]([\w-]+)['"]/gi,
+  /session_id['":\s]*['"]([\w-]+)['"]/gi,
+  /authorization['":\s]*['"](Bearer\s+[\w-]+)['"]/gi,
+  /ticket['":\s]*['"]([\w-]+)['"]/gi,
+  /X-Token['":\s]*['"]([\w-]+)['"]/gi,
+];
+
+function sanitizeSnapshot(content: string, mimeType: string): string {
+  let sanitized = content;
+  for (const pattern of TOKEN_PATTERNS) {
+    sanitized = sanitized.replace(pattern, (match) => match.replace(/([\w-]{4})[\w-]+/, '$1***REDACTED***'));
+  }
+  return sanitized;
+}
+```
+
+日志记录哪些模式被清洗，但不存储原始令牌。
+
+### 11.5 selectors.json 迁移策略（M2 修正）
+
+> **M2 修正**：现有 `selectors.json` 结构（`platforms.douyin.menus.menu_home`）与新结构（`douyin.monitor.menu_creator_home`）不兼容。
+
+**迁移策略**：保留旧结构兼容层，逐步迁移：
+
+1. 新字段（`strategy`、`anti_honeypot`、`scope`）作为可选字段添加到现有条目
+2. 不进行破坏性重组，现有 `menus`/`buttons`/`regions`/`textboxes` 分类保留
+3. 新增 `apiMonitors` 顶级键（与现有 `urlMonitors` 并存，逐步合并）
+4. `SelectorReader` 同时支持新旧字段，优先读取新字段
+5. 编写迁移脚本将旧结构逐步转换为新结构（可选，非阻塞）
+
+### 11.6 探针数据传输通道（C3 修正）
+
+```
+MaintenanceProbe (浏览器进程)
+    ↓ Redis LPUSH (probe_events list)
+MaintenanceCollector (API Gateway 进程)
+    ↓ BRPOP 消费 (5 秒轮询)
+    ↓ 批量 flush
+Prisma DB
+```
+
+回退方案：Redis 不可用时，`MaintenanceProbe` 静默丢弃事件（不阻塞业务流程）。
 
 ---
 
