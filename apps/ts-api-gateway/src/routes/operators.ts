@@ -456,16 +456,17 @@ router.post('/windows/create', async (req: Request, res: Response) => {
 // 平台管理
 // ============================================================
 
-/** POST /api/v1/operators/:id/platforms — 为操作员添加平台（在所有绑定窗口下创建 PlatformAccount） */
+/** POST /api/v1/operators/:id/platforms — 为操作员添加平台（指定窗口或所有绑定窗口） */
 router.post('/:id/platforms', async (req: Request, res: Response) => {
   try {
     const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
     const bodySchema = z.object({
       platform: z.enum(['douyin', 'kuaishou', 'xiaohongshu', 'bilibili', 'baijiahao', 'tencent', 'tiktok']),
+      windowId: z.number().int().positive().optional(),
     });
 
     const { id } = paramsSchema.parse(req.params);
-    const { platform } = bodySchema.parse(req.body);
+    const { platform, windowId } = bodySchema.parse(req.body);
 
     // 平台账号属于窗口：获取操作员所有绑定窗口
     const operator = await prisma.operator.findUnique({
@@ -480,9 +481,18 @@ router.post('/:id/platforms', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '请先绑定窗口再加平台账号' });
     }
 
-    // 为每个绑定窗口 upsert PlatformAccount（唯一键 windowId+platform）
+    // 如果指定了 windowId，只操作该窗口
+    const targetWindows = windowId
+      ? operator.windows.filter(w => w.id === windowId)
+      : operator.windows;
+
+    if (targetWindows.length === 0) {
+      return res.status(400).json({ success: false, error: '指定窗口未绑定到此操作员' });
+    }
+
+    // 为每个目标窗口 upsert PlatformAccount（唯一键 windowId+platform）
     const created: any[] = [];
-    for (const window of operator.windows) {
+    for (const window of targetWindows) {
       const account = await prisma.platformAccount.upsert({
         where: { idx_platform_account_window_platform: { windowId: window.id, platform } },
         update: { loginStatus: 'unknown' },
@@ -508,19 +518,23 @@ router.post('/:id/platforms', async (req: Request, res: Response) => {
   }
 });
 
-/** DELETE /api/v1/operators/:id/platforms/:platform — 移除操作员所有窗口下的该平台账号 */
+/** DELETE /api/v1/operators/:id/platforms/:platform — 移除操作员指定窗口下的该平台账号 */
 router.delete('/:id/platforms/:platform', async (req: Request, res: Response) => {
   try {
     const schema = z.object({
       id: z.coerce.number().int().positive(),
       platform: z.string().min(1),
+      windowId: z.coerce.number().int().positive().optional(),
     });
 
-    const { id, platform } = schema.parse(req.params);
+    const { id, platform, windowId } = schema.parse({ ...req.params, windowId: req.query.windowId });
 
-    // 查出操作员所有绑定窗口下的该平台账号 ID
+    // 查出目标窗口下的该平台账号 ID
+    const whereCondition: any = { window: { boundOperatorId: id }, platform };
+    if (windowId) whereCondition.windowId = windowId;
+
     const accountsToDelete = await prisma.platformAccount.findMany({
-      where: { window: { boundOperatorId: id }, platform },
+      where: whereCondition,
       select: { id: true },
     });
     const accountIds = accountsToDelete.map((a) => a.id);
@@ -530,7 +544,7 @@ router.delete('/:id/platforms/:platform', async (req: Request, res: Response) =>
       await prisma.platformAccount.deleteMany({
         where: { id: { in: accountIds } },
       });
-      logger.info({ operatorId: id, platform, deletedCount: accountIds.length }, '已清理对应的平台账号');
+      logger.info({ operatorId: id, platform, windowId, deletedCount: accountIds.length }, '已清理对应的平台账号');
       // 注：BullMQ 残留任务由调度器在下次轮询时按 platform_accounts 自然重试，无需主动清理
     }
 

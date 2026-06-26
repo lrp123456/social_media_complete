@@ -1538,8 +1538,8 @@ export function useUnbindWindow() {
 export function useAddPlatform() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { operatorId: number; platform: string }) =>
-      api.post(`/operators/${data.operatorId}/platforms`, { platform: data.platform }).then((r) => r.data),
+    mutationFn: (data: { operatorId: number; platform: string; windowId: number }) =>
+      api.post(`/operators/${data.operatorId}/platforms`, { platform: data.platform, windowId: data.windowId }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['operators'] }),
   });
 }
@@ -1547,8 +1547,8 @@ export function useAddPlatform() {
 export function useRemovePlatform() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: { operatorId: number; platform: string }) =>
-      api.delete(`/operators/${data.operatorId}/platforms/${data.platform}`).then((r) => r.data),
+    mutationFn: (data: { operatorId: number; platform: string; windowId: number }) =>
+      api.delete(`/operators/${data.operatorId}/platforms/${data.platform}`, { params: { windowId: data.windowId } }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['operators'] }),
   });
 }

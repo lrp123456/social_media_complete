@@ -297,7 +297,7 @@ function OperatorDetail({
                         onClick={() => {
                           if (!newPlatformKey) return;
                           addPlatform.mutate(
-                            { operatorId: operator.id, platform: newPlatformKey },
+                            { operatorId: operator.id, platform: newPlatformKey, windowId: w.id },
                             {
                               onSuccess: () => { setAddPlatformForWindow(null); setNewPlatformKey(''); },
                               onError: (err: any) => {
@@ -339,7 +339,7 @@ function OperatorDetail({
                               );
                             }}
                             onRemove={() => removePlatform.mutate(
-                              { operatorId: operator.id, platform: plat.platform },
+                              { operatorId: operator.id, platform: plat.platform, windowId: w.id },
                               {
                                 onError: (err: any) => {
                                   alert(`移除平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
