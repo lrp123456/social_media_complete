@@ -2069,7 +2069,7 @@ export class DouyinCrawler {
                 return { totalMatches, leafMatches, positions };
               });
             }
-          })();
+          })() as { totalMatches: number; leafMatches: number; positions: Array<{ text: string; top: number; visible: boolean }> };
           logger.info({ awemeId: item.awemeId, rootsWithReplies, btnTotalMatches: btnDiagnostic.totalMatches, btnLeafMatches: btnDiagnostic.leafMatches, btnPositions: btnDiagnostic.positions }, '[Phase3] Pre-SmartScroll expand button diagnostic');
 
           logger.info({ awemeId: item.awemeId, rootsWithReplies }, '[Phase3] Starting smart scroll and expand');
@@ -2800,17 +2800,11 @@ export class DouyinCrawler {
 
       // 回顶部：hover 到主内容区域 → 鼠标滚轮向上滚
       const scrollT0 = Date.now();
-      await HumanActions.withCDPContext(page, async (ctx) => {
-        const viewport = await ctx.cdp.getLayoutViewport();
-        const hoverX = Math.round(viewport.clientWidth * 0.6 + (Math.random() - 0.5) * 100);
-        const hoverY = Math.round(viewport.clientHeight * 0.4 + (Math.random() - 0.5) * 100);
-        await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
-        await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+      await HumanActions.safeEvaluate(page, () => {
         for (let i = 0; i < 20; i++) {
-          await ctx.mouse.dispatchWheel(0, -(300 + Math.random() * 200));
-          await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
+          window.scrollBy(0, -(300 + Math.random() * 200));
         }
-      });
+      }, { reason: '回顶部-模拟鼠标滚轮', world: 'main' });
       await HumanActions.wait(page, 500, 1000);
       logger.info({ scrollMs: Date.now() - scrollT0 }, '[Drawer] Scroll-to-top completed');
 
@@ -3137,7 +3131,7 @@ export class DouyinCrawler {
             if (isAntiDetectionV2()) {
               return HumanActions.safeEvaluate(page, () => {
                 const els = document.querySelectorAll('[class*="loading"]');
-                for (const el of els) {
+                for (const el of Array.from(els)) {
                   if (el.textContent?.includes('没有更多视频')) return true;
                 }
                 return false;
@@ -3145,7 +3139,7 @@ export class DouyinCrawler {
             } else {
               return page.evaluate(() => {
                 const els = document.querySelectorAll('[class*="loading"]');
-                for (const el of els) {
+                for (const el of Array.from(els)) {
                   if (el.textContent?.includes('没有更多视频')) return true;
                 }
                 return false;
@@ -3225,7 +3219,7 @@ export class DouyinCrawler {
             const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
             const results: Array<{ id: string; commentCount: number }> = [];
 
-            for (const item of items) {
+            for (const item of Array.from(items)) {
               const text = item.textContent || '';
 
               const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
@@ -3262,7 +3256,7 @@ export class DouyinCrawler {
             const items = document.querySelectorAll('[class*="douyin-creator-interactive-list-items"] > div, [class*="video-item"], [class*="work-item"]');
             const results: Array<{ id: string; commentCount: number }> = [];
 
-            for (const item of items) {
+            for (const item of Array.from(items)) {
               const text = item.textContent || '';
 
               const commentMatch = text.match(/评论数[：:]\s*(\d+)/);
@@ -3295,7 +3289,7 @@ export class DouyinCrawler {
             return results;
           });
         }
-      })();
+      })() as Array<{ id: string; commentCount: number }>;
 
       if (videoItems && videoItems.length > 0) {
         logger.info({ count: videoItems.length }, '[Douyin-Drawer] Extracted comment counts from drawer DOM');
@@ -3334,59 +3328,7 @@ export class DouyinCrawler {
       '.drawer__content',
     ];
 
-    await HumanActions.withCDPContext(page, async (ctx) => {
-      // 0. 刷新 CDP DOM 树（抽屉刚打开，旧树可能找不到抽屉容器）
-      await ctx.dom.refreshDocument();
-
-      // 1. 找到抽屉滚动容器
-      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
-      for (const sel of drawerSelectors) {
-        const nodeId = await ctx.cdp.querySelector(sel);
-        if (nodeId && nodeId > 0) {
-          const box = await ctx.cdp.getBoxModel(nodeId);
-          if (box && box.width > 0 && box.height > 0) {
-            containerRect = {
-              x: box.content[0],
-              y: box.content[1],
-              width: box.width,
-              height: box.height,
-            };
-            logger.info({ selector: sel }, '[Drawer] Found scrollable drawer container');
-            break;
-          }
-        }
-      }
-
-      if (!containerRect) {
-        logger.warn('[Drawer] No scrollable drawer container found');
-        return;
-      }
-
-      // 2. hover 到抽屉容器底部区域（滚动方向向下，鼠标靠近底部更容易触发滚动）
-      const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
-      const hoverY = Math.round(containerRect.y + containerRect.height * (0.6 + Math.random() * 0.2));
-      await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
-      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
-
-      // 3. 分段滚动：每次滚 150-250px，段间等待 500-800ms 让无限滚动加载新内容
-      const segments = 2 + Math.floor(Math.random() * 2); // 2-3 段
-      for (let seg = 0; seg < segments; seg++) {
-        const segAmount = 150 + Math.random() * 100;
-        let remaining = segAmount;
-        while (remaining > 0) {
-          const step = Math.min(50 + Math.random() * 50, remaining);
-          await ctx.mouse.dispatchWheel(0, step);
-          remaining -= step;
-          await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
-        }
-        // 段间等待，让无限滚动触发加载
-        if (seg < segments - 1) {
-          await new Promise(r => setTimeout(r, 500 + Math.random() * 300));
-        }
-      }
-
-      logger.info({ segments }, '[Drawer] Drawer scrolled incrementally via hover + wheel');
-    });
+    await HumanActions.cdpSmartScroll(page, drawerSelectors, 500, 'down');
 
     await HumanActions.wait(page, 1000, 2000);
   }
@@ -3477,15 +3419,16 @@ export class DouyinCrawler {
           return null;
         });
       }
-    })();
+    })() as { x: number; y: number; text: string } | null;
 
     if (!btnPos) return null;
 
-    await HumanActions.withCDPContext(page, async (ctx) => {
-      await ctx.mouse.moveTo({ x: btnPos.x, y: btnPos.y });
-      await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
-      await ctx.mouse.clickAt(btnPos.x, btnPos.y);
-    });
+    await HumanActions.safeEvaluate(page, (coords: {x: number, y: number}) => {
+      const el = document.elementFromPoint(coords.x, coords.y);
+      if (el instanceof HTMLElement) {
+        el.click();
+      }
+    }, { reason: '点击展开按钮', world: 'main', args: [{ x: btnPos.x, y: btnPos.y }] });
 
     logger.info({ text: btnPos.text, x: btnPos.x, y: btnPos.y }, '[Expand] Clicked expand button');
     return btnPos.text;
@@ -3516,77 +3459,16 @@ export class DouyinCrawler {
       '[class*="tabs-pane-active"]',
     ];
 
-    return await HumanActions.withCDPContext(page, async (ctx) => {
-      // 0. 刷新 CDP DOM 树（抽屉关闭后页面结构变化，旧树找不到容器）
-      const t1 = Date.now();
-      await ctx.dom.refreshDocument();
-      const t2 = Date.now();
-      logger.info({ refreshMs: t2 - t1 }, '[scrollCommentArea] refreshDocument');
-
-      // 1. 找到评论滚动容器
-      let containerRect: { x: number; y: number; width: number; height: number } | null = null;
-      for (const sel of selectors) {
-        const nodeId = await ctx.cdp.querySelector(sel);
-        if (nodeId && nodeId > 0) {
-          const box = await ctx.cdp.getBoxModel(nodeId);
-          if (box && box.width > 0 && box.height > 0) {
-            containerRect = {
-              x: box.content[0],
-              y: box.content[1],
-              width: box.width,
-              height: box.height,
-            };
-            break;
-          }
-        }
-      }
-
-      const t3 = Date.now();
-      logger.info({ queryMs: t3 - t2 }, '[scrollCommentArea] querySelector loop');
-
-      if (!containerRect) {
-        logger.warn('[scrollCommentArea] Container not found, falling back to cdpSmartScroll');
-        await HumanActions.cdpSmartScroll(page, selectors, direction === 'top' ? 99999 : direction === 'bottom' ? 99999 : Math.abs(direction), direction === 'top' ? 'up' : 'down');
-        return true;
-      }
-
-      // 2. hover 到容器中心（带随机偏移，模拟人类鼠标位置）
-      const hoverX = Math.round(containerRect.x + containerRect.width * (0.3 + Math.random() * 0.4));
-      const hoverY = Math.round(containerRect.y + containerRect.height * (0.3 + Math.random() * 0.4));
-      await ctx.mouse.moveTo({ x: hoverX, y: hoverY });
-      const t4 = Date.now();
-      logger.info({ hoverMs: t4 - t3 }, '[scrollCommentArea] mouse hover');
-      await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
-
-      // 3. 模拟鼠标滚轮（减少 CDP 调用次数，每次滚动量增大）
-      if (direction === 'top') {
-        // 5-8 次向上滚，每次 1000-2000px（CDP mouseWheel 支持大 delta）
-        const scrollCount = 5 + Math.floor(Math.random() * 3);
-        for (let i = 0; i < scrollCount; i++) {
-          await ctx.mouse.dispatchWheel(0, -(1000 + Math.random() * 1000));
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-        }
-      } else if (direction === 'bottom') {
-        const scrollCount = 5 + Math.floor(Math.random() * 3);
-        for (let i = 0; i < scrollCount; i++) {
-          await ctx.mouse.dispatchWheel(0, 1000 + Math.random() * 1000);
-          await new Promise(r => setTimeout(r, 50 + Math.random() * 100));
-        }
-      } else {
-        const dir = direction >= 0 ? 1 : -1;
-        let remaining = Math.abs(direction);
-        while (remaining > 0) {
-          const step = Math.min(200 + Math.random() * 200, remaining);
-          await ctx.mouse.dispatchWheel(0, step * dir);
-          remaining -= step;
-          await new Promise(r => setTimeout(r, 30 + Math.random() * 50));
-        }
-      }
-
-      await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
-      logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
-      return true;
-    });
+    if (direction === 'top') {
+      await HumanActions.cdpSmartScroll(page, selectors, 99999, 'up');
+    } else if (direction === 'bottom') {
+      await HumanActions.cdpSmartScroll(page, selectors, 99999, 'down');
+    } else {
+      await HumanActions.cdpSmartScroll(page, selectors, Math.abs(direction), direction >= 0 ? 'down' : 'up');
+    }
+    await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+    logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
+    return true;
   }
 
   /**
@@ -3673,7 +3555,7 @@ export class DouyinCrawler {
           return { found: false };
         });
       }
-    })();
+    })() as { found: boolean; count?: number; scrollNeeded?: number };
 
     if (preScrollResult.found && preScrollResult.scrollNeeded) {
       const scrollPx = preScrollResult.scrollNeeded;
@@ -3778,7 +3660,7 @@ export class DouyinCrawler {
               return { totalMatches, leafMatches, viewportFiltered, containerFiltered, diagnostics };
             });
           }
-        })();
+        })() as { totalMatches: number; leafMatches: number; viewportFiltered: number; containerFiltered: number; diagnostics: Array<{ text: string; top: number; bottom: number; containerTop: number; containerBottom: number; reason: string }> };
 
         // Log diagnostics for debugging expand button detection
         if (expandRound === 0 && expandResult.totalMatches > 0) {
@@ -3842,20 +3724,18 @@ export class DouyinCrawler {
               return null;
             });
           }
-        })();
+        })() as { x: number; y: number; text: string } | null;
 
         if (btnPos) {
-          // CDP 鼠标点击：先 hover 到按钮 → 等待 → 点击
-          const cdpClicked = await HumanActions.withCDPContext(page, async (ctx) => {
-            await ctx.mouse.moveTo({ x: btnPos.x, y: btnPos.y });
-            await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
-            await ctx.mouse.clickAt(btnPos.x, btnPos.y);
-            return true;
-          });
-          if (cdpClicked) {
-            clicked = 1;
-            logger.info({ text: btnPos.text, x: btnPos.x, y: btnPos.y }, '[SmartScroll] Expand button clicked via CDP');
-          }
+          // 通过 safeEvaluate 在页面上下文点击
+          await HumanActions.safeEvaluate(page, (coords: {x: number, y: number}) => {
+            const el = document.elementFromPoint(coords.x, coords.y);
+            if (el instanceof HTMLElement) {
+              el.click();
+            }
+          }, { reason: '点击展开按钮', world: 'main', args: [{ x: btnPos.x, y: btnPos.y }] });
+          clicked = 1;
+          logger.info({ text: btnPos.text, x: btnPos.x, y: btnPos.y }, '[SmartScroll] Expand button clicked via safeEvaluate');
         }
         if (clicked === 0) break;
 
@@ -4226,7 +4106,7 @@ export class DouyinCrawler {
       logger.info({ x: Math.round(foundCoords.x), y: Math.round(foundCoords.y) }, '[Reply] Target located, clicking reply');
 
       // ── 2. hover 触发按钮显示 ──
-      await HumanActions.withCDPContext(page, async (ctx) => {
+      await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
         await ctx.mouse.moveTo({ x: foundCoords.x, y: foundCoords.y });
         await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
       });
@@ -4275,12 +4155,12 @@ export class DouyinCrawler {
       if (!clicked) {
         logger.warn('[Reply] 回复按钮不在视口中');
         // 回退：直接用坐标点击
-        await HumanActions.withCDPContext(page, async (ctx) => {
+        await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
           await ctx.mouse.clickAt(foundCoords.x, foundCoords.y);
         });
       } else {
         await snap('click_reply_btn', { x: clicked.x, y: clicked.y });
-        await HumanActions.withCDPContext(page, async (ctx) => {
+        await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
           await ctx.mouse.moveTo({ x: clicked.x, y: clicked.y });
           await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
           await ctx.mouse.clickAt(clicked.x, clicked.y);
@@ -4798,7 +4678,7 @@ export class DouyinCrawler {
       }
 
       if (sendBtn && !submitClicked) {
-        await HumanActions.withCDPContext(page, async (ctx) => {
+        await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
           await ctx.mouse.moveTo({ x: sendBtn.x, y: sendBtn.y });
           await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
           await ctx.mouse.clickAt(sendBtn.x, sendBtn.y);
@@ -4849,7 +4729,7 @@ export class DouyinCrawler {
           }
         })();
         if (fallbackBtn) {
-          await HumanActions.withCDPContext(page, async (ctx) => {
+          await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
             await ctx.mouse.moveTo({ x: fallbackBtn.x, y: fallbackBtn.y });
             await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
             await ctx.mouse.clickAt(fallbackBtn.x, fallbackBtn.y);
@@ -5551,13 +5431,13 @@ export class DouyinCrawler {
     await HumanActions.wait(page, 200, 400);
 
     // hover 根评论
-    await HumanActions.withCDPContext(page, async (ctx) => {
+    await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
       await ctx.mouse.moveTo({ x: rootInfo.rect.x + rootInfo.rect.w / 2, y: rootInfo.rect.y + rootInfo.rect.h / 2 });
       await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
     });
 
     if (rootInfo.loadMoreText.type === 'expand') {
-      await HumanActions.withCDPContext(page, async (ctx) => {
+      await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
         await ctx.mouse.moveTo({ x: rootInfo.loadMoreText!.x, y: rootInfo.loadMoreText!.y });
         await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
         await ctx.mouse.clickAt(rootInfo.loadMoreText!.x, rootInfo.loadMoreText!.y);
@@ -5823,7 +5703,7 @@ export class DouyinCrawler {
 
     if (!btnPos) return false;
 
-    await HumanActions.withCDPContext(page, async (ctx) => {
+    await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
       await ctx.mouse.moveTo({ x: btnPos.x, y: btnPos.y });
       await new Promise(r => setTimeout(r, 80 + Math.random() * 120));
       await ctx.mouse.clickAt(btnPos.x, btnPos.y);
