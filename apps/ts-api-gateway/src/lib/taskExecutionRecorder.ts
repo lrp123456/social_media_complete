@@ -91,31 +91,19 @@ export async function recordSelectorTry(
   },
 ): Promise<void> {
   try {
-    const exec = await prisma.taskExecution.findUnique({
-      where: { id: executionId },
-      select: { isDebugMode: true },
-    });
-    if (!exec?.isDebugMode) return;
+    const { MaintenanceProbe } = await import('@social-media/browser-core');
+    if (!MaintenanceProbe.isEnabled()) return;
 
-    const hits = data.selectors.filter(s => s.hit);
-    const status = hits.length === 0 ? 'failed'
-      : hits.some(s => !s.isPrimary) ? 'fallback' : 'success';
-
-    const currentIdx = stepCounter.get(executionId) ?? 0;
-    stepCounter.set(executionId, currentIdx + 1);
-
-    await prisma.taskExecutionStep.create({
-      data: {
-        executionId,
-        phase: data.phase,
-        stepIndex: currentIdx,
-        label,
-        status,
-        selectorTries: data.selectors as any,
-        mouseAction: data.mouseAction ?? null,
-        extra: (data.extra as any) ?? null,
-      },
-    });
+    for (const sel of data.selectors) {
+      const source = sel.isPrimary ? 'primary' : 'fallback_1';
+      await MaintenanceProbe.recordSelectorOp({
+        selectorKey: label,
+        selectorUsed: sel.selector,
+        selectorSource: source as any,
+        result: sel.hit ? 'found' : 'not_found',
+        durationMs: 0,
+      });
+    }
   } catch (err: any) {
     logger.warn({ executionId, label, error: err.message }, 'recordSelectorTry failed (non-fatal)');
   }

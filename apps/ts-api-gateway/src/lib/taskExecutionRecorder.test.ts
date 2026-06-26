@@ -10,12 +10,21 @@ const mockPrisma = {
   taskExecutionStep: { create: jest.fn() },
 };
 
+// Module-level mocks for MaintenanceProbe (used by recordSelectorTry)
+const mockProbe = {
+  isEnabled: jest.fn().mockReturnValue(false),
+  recordSelectorOp: jest.fn(),
+};
+
 jest.mock('./prisma', () => ({ prisma: mockPrisma }));
 jest.mock('./logger', () => ({
   createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }),
 }));
 jest.mock('../services/maintenanceCollector', () => ({
   getMaintenanceCollector: () => ({ summarizeExecution: jest.fn().mockResolvedValue(undefined) }),
+}));
+jest.mock('@social-media/browser-core', () => ({
+  MaintenanceProbe: mockProbe,
 }));
 
 import { startExecution, updatePhase, recordSelectorTry, finishExecution } from './taskExecutionRecorder';
@@ -49,24 +58,33 @@ describe('taskExecutionRecorder', () => {
     });
   });
 
-  it('recordSelectorTry is no-op when debug disabled', async () => {
-    mockPrisma.taskExecution.findUnique.mockResolvedValue({ isDebugMode: false });
+  it('recordSelectorTry is no-op when probe disabled', async () => {
+    mockProbe.isEnabled.mockReturnValue(false);
     await recordSelectorTry('exec-1', 'label', { phase: 'test', selectors: [] });
-    expect(mockPrisma.taskExecutionStep.create).not.toHaveBeenCalled();
+    expect(mockProbe.recordSelectorOp).not.toHaveBeenCalled();
   });
 
-  it('recordSelectorTry writes step when debug enabled', async () => {
-    mockPrisma.taskExecution.findUnique.mockResolvedValue({ isDebugMode: true });
+  it('recordSelectorTry calls recordSelectorOp when probe enabled', async () => {
+    mockProbe.isEnabled.mockReturnValue(true);
     await recordSelectorTry('exec-1', 'click-btn', {
       phase: '执行回复',
       selectors: [{ selector: '.primary', hit: false, isPrimary: true }, { selector: '.fallback', hit: true, isPrimary: false }],
       mouseAction: 'click(412,287)',
     });
-    expect(mockPrisma.taskExecutionStep.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        executionId: 'exec-1', label: 'click-btn', status: 'fallback',
-        selectorTries: [{ selector: '.primary', hit: false, isPrimary: true }, { selector: '.fallback', hit: true, isPrimary: false }],
-      }),
+    expect(mockProbe.recordSelectorOp).toHaveBeenCalledTimes(2);
+    expect(mockProbe.recordSelectorOp).toHaveBeenNthCalledWith(1, {
+      selectorKey: 'click-btn',
+      selectorUsed: '.primary',
+      selectorSource: 'primary',
+      result: 'not_found',
+      durationMs: 0,
+    });
+    expect(mockProbe.recordSelectorOp).toHaveBeenNthCalledWith(2, {
+      selectorKey: 'click-btn',
+      selectorUsed: '.fallback',
+      selectorSource: 'fallback_1',
+      result: 'found',
+      durationMs: 0,
     });
   });
 

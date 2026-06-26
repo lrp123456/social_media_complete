@@ -9,6 +9,8 @@ import { createLogger } from '../lib/logger';
 import { isDebugModeEnabled, createReplySessionId, createManifest, saveDebugSnapshot, finishManifest, DebugManifest } from '../lib/replyDebugLogger';
 import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import { isDescriptionMatch } from './timeParser';
+import { MaintenanceProbe } from '@social-media/browser-core';
+import { bootstrapProbe, teardownProbe } from './probeBootstrap';
 import { isAntiDetectionV2 } from '../lib/antiDetectionMode';
 import { getCommentCrawlDecision, getRootCidSetForIncremental, shouldCompareReplyCounts, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import fs from 'fs';
@@ -189,30 +191,35 @@ export class DouyinCrawler {
   }
 
   async navigateToCreatorHome(page: Page): Promise<void> {
-    const currentUrl = page.url();
+    MaintenanceProbe.enterStep('monitor', 'douyin', 'Phase1', 'navigateToCreatorHome');
+    try {
+      const currentUrl = page.url();
 
-    if (currentUrl.includes('creator.douyin.com')) {
-      logger.info({ currentUrl }, 'Already on douyin creator page, skipping navigation');
-    } else {
-      logger.info('Navigating to douyin creator home via click-based menu');
-      // 尝试点击"创作者服务平台"链接（防风控）, 失败时回退到 goto
-      const clicked = await resolveAndClick(page, 'nav.to-creator', 'douyin', { timeout: 10000 });
-      if (clicked) {
-        await HumanActions.wait(page, 2000, 4000);
-        await HumanActions.pageLoadBehavior(page);
+      if (currentUrl.includes('creator.douyin.com')) {
+        logger.info({ currentUrl }, 'Already on douyin creator page, skipping navigation');
       } else {
-        logger.warn('Click-based nav to creator failed, falling back to page.goto');
-        // page.goto 回退导航，HumanActions 无对应方法（specced as intentional exception）
-        await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
-        HumanActions.clearCDPContext(page);
-        await HumanActions.wait(page, 2000, 4000);
-        await HumanActions.pageLoadBehavior(page);
+        logger.info('Navigating to douyin creator home via click-based menu');
+        // 尝试点击"创作者服务平台"链接（防风控）, 失败时回退到 goto
+        const clicked = await resolveAndClick(page, 'nav.to-creator', 'douyin', { timeout: 10000 });
+        if (clicked) {
+          await HumanActions.wait(page, 2000, 4000);
+          await HumanActions.pageLoadBehavior(page);
+        } else {
+          logger.warn('Click-based nav to creator failed, falling back to page.goto');
+          // page.goto 回退导航，HumanActions 无对应方法（specced as intentional exception）
+          await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
+          HumanActions.clearCDPContext(page);
+          await HumanActions.wait(page, 2000, 4000);
+          await HumanActions.pageLoadBehavior(page);
+        }
       }
-    }
 
-    this.currentMenuSection = 'unknown';
-    await BrowserManager.logPageHtml(page, 'after_navigateToCreatorHome');
-    logger.info({ currentUrl: page.url() }, 'Ready on creator page');
+      this.currentMenuSection = 'unknown';
+      await BrowserManager.logPageHtml(page, 'after_navigateToCreatorHome');
+      logger.info({ currentUrl: page.url() }, 'Ready on creator page');
+    } finally {
+      MaintenanceProbe.exitStep();
+    }
   }
 
   async registerListener(page: Page, patterns: string[]): Promise<void> {
@@ -268,6 +275,8 @@ export class DouyinCrawler {
   }
 
   async fetchVideoListFromSource(page: Page, source: QuerySource): Promise<VideoInfo[]> {
+    MaintenanceProbe.enterStep('monitor', 'douyin', 'Phase1', 'fetchVideoListFromSource');
+    try {
     const pattern = source === 'work_list' ? WORK_LIST_PATTERN : ITEM_LIST_PATTERN;
 
     this.interceptor.clear(pattern);
@@ -439,6 +448,9 @@ export class DouyinCrawler {
     this.awemeIdToViewCount = awemeIdToViewCount;
     this.awemeIdToIsPinned = awemeIdToIsPinned;
     return filtered;
+    } finally {
+      MaintenanceProbe.exitStep();
+    }
   }
 
   /**
@@ -1882,6 +1894,7 @@ export class DouyinCrawler {
     const startTime = Date.now();
 
     logger.info({ queueLength: queue.length }, '[Phase3] Starting comment queue processing');
+    MaintenanceProbe.enterStep('monitor', 'douyin', 'Phase3', 'processCommentsQueue');
 
     this.page = page;
     logger.info({ existingListener: this.commentListenerPageId }, '[Phase3] Using pre-registered comment listener from Phase2');
@@ -2640,6 +2653,7 @@ export class DouyinCrawler {
       }
     } finally {
       logger.info('[Phase3] Comment queue processing finished');
+      MaintenanceProbe.exitStep();
     }
 
     const elapsed = Date.now() - startTime;
@@ -4106,6 +4120,10 @@ export class DouyinCrawler {
       subReplyCount: target.subReplyCount,
     }, '[Reply] Starting douyin reply (triple-criteria)');
 
+    // ── 维护调试探针 ──
+    const dExec = executionId ? await prisma.taskExecution.findUnique({ where: { id: executionId }, select: { isDebugMode: true } }) : null;
+    await bootstrapProbe({ isDebugMode: dExec?.isDebugMode ?? false, taskExecutionId: executionId ?? undefined });
+
     // ── 调试模式初始化 ──
     const debugEnabled = await isDebugModeEnabled();
     let manifest: DebugManifest | null = null;
@@ -4885,6 +4903,8 @@ export class DouyinCrawler {
       logger.error({ error: err.message, text: target.text.slice(0, 30) }, '[Reply] Douyin reply failed');
       if (manifest) finishManifest(manifest, false);
       return false;
+    } finally {
+      await teardownProbe();
     }
   }
 
