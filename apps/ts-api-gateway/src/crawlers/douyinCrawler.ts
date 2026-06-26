@@ -164,6 +164,7 @@ export class DouyinCrawler {
     logger.info('Starting warm-up route - navigating to douyin.com homepage first');
 
     try {
+      // page.goto 是导航基础设施，HumanActions 无对应方法（specced as intentional exception）
       await page.goto(DOUYIN_HOME, { waitUntil: 'domcontentloaded' });
       await HumanActions.wait(page, 3000, 5000);
 
@@ -201,6 +202,7 @@ export class DouyinCrawler {
         await HumanActions.pageLoadBehavior(page);
       } else {
         logger.warn('Click-based nav to creator failed, falling back to page.goto');
+        // page.goto 回退导航，HumanActions 无对应方法（specced as intentional exception）
         await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
         HumanActions.clearCDPContext(page);
         await HumanActions.wait(page, 2000, 4000);
@@ -1042,20 +1044,46 @@ export class DouyinCrawler {
         'input[type="number"]',
       ];
       let filled = false;
-      for (const sel of inputSelectors) {
-        const inputs = await page.$$(sel);
-        for (const input of inputs) {
-          const isVisible = await input.isVisible().catch(() => false);
-          if (!isVisible) continue;
-          const currentValue = await input.inputValue().catch(() => '');
-          if (currentValue.length > 0) continue; // 跳过已填的
-          await input.fill(code);
+      if (isAntiDetectionV2()) {
+        // v2: safeEvaluate 找到可见空输入框 + HumanActions.fill 逐字延迟输入
+        const foundSelector = await HumanActions.safeEvaluate(page, function(sels: string[]) {
+          for (var si = 0; si < sels.length; si++) {
+            var sel = sels[si];
+            var inputs = document.querySelectorAll(sel);
+            for (var ii = 0; ii < inputs.length; ii++) {
+              var el = inputs[ii] as HTMLInputElement;
+              if (el.offsetParent === null) continue; // 不可见
+              if (el.value && el.value.length > 0) continue;
+              el.focus();
+              return sel;
+            }
+          }
+          return null;
+        }, { reason: '查找验证码输入框', world: 'main', args: [inputSelectors] }) as string | null;
+
+        if (foundSelector) {
+          await HumanActions.fill(page, foundSelector, code);
           await HumanActions.wait(page, 500, 1000);
           filled = true;
-          logger.info({ selector: sel }, '[SecondVerify] Code filled');
-          break;
+          logger.info({ selector: foundSelector }, '[SecondVerify] Code filled (v2)');
         }
-        if (filled) break;
+      } else {
+        // legacy
+        for (const sel of inputSelectors) {
+          const inputs = await page.$$(sel);
+          for (const input of inputs) {
+            const isVisible = await input.isVisible().catch(() => false);
+            if (!isVisible) continue;
+            const currentValue = await input.inputValue().catch(() => '');
+            if (currentValue.length > 0) continue; // 跳过已填的
+            await input.fill(code);
+            await HumanActions.wait(page, 500, 1000);
+            filled = true;
+            logger.info({ selector: sel }, '[SecondVerify] Code filled');
+            break;
+          }
+          if (filled) break;
+        }
       }
       if (!filled) {
         logger.error('[SecondVerify] No suitable input found for verify code');
@@ -1075,8 +1103,12 @@ export class DouyinCrawler {
       }
       if (!submitted) {
         // 尝试 CSS 选择器
-        const btn = await page.$('button[type="submit"], button[class*="submit"], button[class*="confirm"]');
-        if (btn) { await btn.click(); submitted = true; }
+        if (isAntiDetectionV2()) {
+          submitted = await HumanActions.cdpClick(page, 'button[type="submit"], button[class*="submit"], button[class*="confirm"]', { timeout: 3000 });
+        } else {
+          const btn = await page.$('button[type="submit"], button[class*="submit"], button[class*="confirm"]');
+          if (btn) { await btn.click(); submitted = true; }
+        }
       }
       return submitted;
     } catch (err: any) {
@@ -1265,13 +1297,25 @@ export class DouyinCrawler {
       await HumanActions.wait(page, 500, 1000);
 
       // 提取子回复 DOM 文本
-      const subReplies = await page.$$eval('[class*="reply-list"] > div, [class*="reply-list"] > * > div, [class*="sub-comment"] > div, [class*="sub-comment"] > * > div', (els) =>
-        els.map((el) => {
-          const text = el.textContent?.trim() || '';
-          const replyToMatch = text.match(/回复\s*@?(\S+)/);
-          return { text, replyToName: replyToMatch?.[1] || '' };
-        })
-      );
+      let subReplies: Array<{ text: string; replyToName: string }>;
+      if (isAntiDetectionV2()) {
+        subReplies = await HumanActions.safeEvaluate(page, () => {
+          const els = document.querySelectorAll('[class*="reply-list"] > div, [class*="reply-list"] > * > div, [class*="sub-comment"] > div, [class*="sub-comment"] > * > div');
+          return Array.from(els).map((el) => {
+            const text = el.textContent?.trim() || '';
+            const replyToMatch = text.match(/回复\s*@?(\S+)/);
+            return { text, replyToName: replyToMatch?.[1] || '' };
+          });
+        }, { reason: '提取子回复DOM文本', world: 'main' }) as Array<{ text: string; replyToName: string }>;
+      } else {
+        subReplies = await page.$$eval('[class*="reply-list"] > div, [class*="reply-list"] > * > div, [class*="sub-comment"] > div, [class*="sub-comment"] > * > div', (els) =>
+          els.map((el) => {
+            const text = el.textContent?.trim() || '';
+            const replyToMatch = text.match(/回复\s*@?(\S+)/);
+            return { text, replyToName: replyToMatch?.[1] || '' };
+          })
+        );
+      }
 
       replies.push(...subReplies);
       logger.info({ rootCid, replyCount: subReplies.length }, '[ExpandRepliesForRoot] Extracted sub-replies');
@@ -1490,7 +1534,21 @@ export class DouyinCrawler {
     let htmlPath: string | null = null;
 
     try {
-      const screenshotBuffer = await page.screenshot({ fullPage: true, type: 'png' });
+      let screenshotBuffer: Buffer;
+      if (isAntiDetectionV2()) {
+        // v2: 通过 CDP Page.captureScreenshot 截图（复用 HumanActions CDP 长连接）
+        const cdpCtx = (HumanActions as any).getCDPContext
+          ? await (HumanActions as any).getCDPContext(page)
+          : null;
+        if (cdpCtx) {
+          const cdpResult = await cdpCtx.cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+          screenshotBuffer = Buffer.from(cdpResult.data, 'base64');
+        } else {
+          screenshotBuffer = await page.screenshot({ fullPage: true, type: 'png' });
+        }
+      } else {
+        screenshotBuffer = await page.screenshot({ fullPage: true, type: 'png' });
+      }
       screenshotPath = path.join(sceneDir, `${baseName}.png`);
       fs.writeFileSync(screenshotPath, screenshotBuffer);
       logger.info({ screenshotPath, sizeKB: Math.round(screenshotBuffer.length / 1024) }, 'Risk scene screenshot saved');
