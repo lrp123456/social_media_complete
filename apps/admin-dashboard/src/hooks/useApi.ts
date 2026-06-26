@@ -1416,7 +1416,15 @@ export type Operator = {
   phone?: string;
   role: 'admin' | 'operator';
   enabled: boolean;
-  windows: Array<{ id: number; externalId: string; browserVendor: string; windowName: string }>;
+  windows: Array<{
+    id: number;
+    externalId: string;
+    browserVendor: string;
+    windowName: string;
+    platforms: Array<{ id: number; platform: string; loginStatus: string; lastVerifiedAt?: string; monitoringEnabled: boolean }>;
+  }>;
+  // 派生字段：所有窗口平台账号的并集，供发布矩阵等"操作员×平台"视图使用。
+  // 主从面板等需要按窗口区分的场景请用 windows[].platforms。
   platforms: Array<{ platform: string; loginStatus: string; lastVerifiedAt?: string }>;
   createdAt: string;
 };
@@ -1436,7 +1444,16 @@ export type BrowserWindowItem = {
 export function useOperators() {
   return useQuery<Operator[]>({
     queryKey: ['operators'],
-    queryFn: () => api.get('/operators').then((r) => r.data),
+    queryFn: () =>
+      api.get('/operators').then((r) => {
+        // 后端返回 operator→windows[]→platforms[] 三级嵌套（无顶层 platforms）。
+        // 派生顶层 platforms（所有窗口平台并集）供发布矩阵等视图使用。
+        const ops = r.data?.data ?? r.data ?? [];
+        return (Array.isArray(ops) ? ops : []).map((op: any) => ({
+          ...op,
+          platforms: (op.windows ?? []).flatMap((w: any) => w.platforms ?? []),
+        })) as Operator[];
+      }),
   });
 }
 
