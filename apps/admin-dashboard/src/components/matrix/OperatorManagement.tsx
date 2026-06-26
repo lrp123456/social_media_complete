@@ -171,13 +171,13 @@ function OperatorDetail({
           <MaterialIcon icon="person" size="md" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-label-md text-on-surface font-bold">{operator.displayName}</h3>
-            <span className="text-xs text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full font-mono">
-              {operator.wechatUserId}
-            </span>
-            {!operator.enabled && <StatusPill tone="error">已禁用</StatusPill>}
-          </div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <h3 className="text-label-md text-on-surface font-bold">{operator.displayName}</h3>
+                        <span className="text-xs text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full font-mono truncate max-w-[200px] inline-block">
+                          {operator.wechatUserId}
+                        </span>
+                        {!operator.enabled && <StatusPill tone="error">已禁用</StatusPill>}
+                      </div>
           <p className="text-body-sm text-on-surface-variant mt-0.5">
             {operator.windows.length} 个窗口 · {operator.platforms.length} 个平台
           </p>
@@ -726,7 +726,7 @@ export default function OperatorManagement() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 text-xs text-on-surface-variant mt-0.5">
-                        <span className="font-mono">{op.wechatUserId}</span>
+                        <span className="font-mono truncate max-w-[180px] inline-block">{op.wechatUserId}</span>
                         <span>{op.windows.length}个窗口</span>
                       </div>
                     </div>
