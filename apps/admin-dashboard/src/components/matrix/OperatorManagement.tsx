@@ -130,6 +130,242 @@ function PlatformRow({
 }
 
 // ============================================================
+// Operator Detail Panel (right column)
+// ============================================================
+
+function OperatorDetail({
+  operator,
+  unboundWindows,
+  windows,
+  capabilitiesData,
+  bindWindow,
+  unbindWindow,
+  addPlatform,
+  removePlatform,
+  verifyLogin,
+  verifyingPlatforms,
+  setVerifyingPlatforms,
+}: {
+  operator: Operator;
+  unboundWindows: BrowserWindowItem[];
+  windows: BrowserWindowItem[];
+  capabilitiesData?: PlatformCapability[];
+  bindWindow: any;
+  unbindWindow: any;
+  addPlatform: any;
+  removePlatform: any;
+  verifyLogin: any;
+  verifyingPlatforms: Set<string>;
+  setVerifyingPlatforms: React.Dispatch<React.SetStateAction<Set<string>>>;
+}) {
+  const [selectedBindWindowId, setSelectedBindWindowId] = useState<number | ''>('');
+  const [addPlatformForWindow, setAddPlatformForWindow] = useState<number | null>(null);
+  const [newPlatformKey, setNewPlatformKey] = useState('');
+
+  // Resolve full window info for each bound window id
+  const boundWindows = operator.windows.map((w) => {
+    const full = windows.find((x) => x.id === w.id);
+    return { ...w, browserVendor: full?.browserVendor || w.browserVendor, externalId: full?.externalId || '' };
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Operator header */}
+      <div className="flex items-center gap-3 px-5 py-4 rounded-xl bg-surface-container-lowest border border-outline-variant">
+        <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary flex items-center justify-center shrink-0">
+          <MaterialIcon icon="person" size="md" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-label-md text-on-surface font-bold">{operator.displayName}</h3>
+            <span className="text-xs text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full font-mono">
+              {operator.wechatUserId}
+            </span>
+            {!operator.enabled && <StatusPill tone="error">已禁用</StatusPill>}
+          </div>
+          <p className="text-body-sm text-on-surface-variant mt-0.5">
+            {operator.windows.length} 个窗口 · {operator.platforms.length} 个平台
+          </p>
+        </div>
+      </div>
+
+      {/* Add window binding */}
+      <div className="flex items-center gap-2">
+        <select
+          className="form-input text-sm py-1.5 flex-1"
+          value={selectedBindWindowId}
+          onChange={(e) => setSelectedBindWindowId(e.target.value ? Number(e.target.value) : '')}
+        >
+          <option value="">选择可用窗口…</option>
+          {unboundWindows.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.windowName || w.externalId} ({w.browserVendor})
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={() => {
+            if (selectedBindWindowId) {
+              bindWindow.mutate(
+                { windowId: selectedBindWindowId, operatorId: operator.id },
+                {
+                  onSuccess: () => setSelectedBindWindowId(''),
+                  onError: (err: any) => {
+                    alert(`绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                  },
+                },
+              );
+            }
+          }}
+          disabled={!selectedBindWindowId || bindWindow.isPending}
+          className="btn-primary text-sm flex items-center gap-1"
+        >
+          <MaterialIcon icon="add" size="sm" />
+          添加窗口
+        </button>
+      </div>
+
+      {/* Bound windows list */}
+      {boundWindows.length === 0 ? (
+        <div className="bento-card text-center py-8 rounded-xl border border-dashed border-outline-variant/50">
+          <MaterialIcon icon="open_in_new" size="2xl" className="text-outline mb-2 opacity-30" />
+          <p className="text-body-sm text-on-surface-variant">该操作员尚未绑定窗口</p>
+          <p className="text-xs text-on-surface-variant/60 mt-1">请从上方下拉框选择一个可用窗口</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {boundWindows.map((w) => {
+            const isAddingPlatform = addPlatformForWindow === w.id;
+            const usedPlatforms = w.platforms.map((p) => p.platform);
+            const availablePlatforms = PLATFORM_OPTIONS.filter((p) => !usedPlatforms.includes(p.key));
+
+            return (
+              <div
+                key={w.id}
+                className="rounded-xl bg-surface-container-lowest border border-outline-variant overflow-hidden"
+              >
+                {/* Window header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-outline-variant bg-surface-container/40">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MaterialIcon icon="open_in_new" size="sm" className="text-primary shrink-0" />
+                    <span className="font-mono text-label-md text-on-surface truncate">{w.windowName || w.externalId}</span>
+                    <span className="text-xs text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded">
+                      {w.browserVendor}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => unbindWindow.mutate(w.id, {
+                      onError: (err: any) => {
+                        alert(`解绑窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                      },
+                    })}
+                    disabled={unbindWindow.isPending}
+                    className="text-xs text-error hover:underline flex items-center gap-1"
+                  >
+                    <MaterialIcon icon="link_off" size="xs" />
+                    解绑
+                  </button>
+                </div>
+
+                {/* Window platforms */}
+                <div className="px-4 py-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-label-md text-on-surface-variant">平台账号</h4>
+                    {availablePlatforms.length > 0 && (
+                      <button
+                        onClick={() => setAddPlatformForWindow(isAddingPlatform ? null : w.id)}
+                        className="text-xs text-primary hover:underline flex items-center gap-1"
+                      >
+                        <MaterialIcon icon="add" size="xs" />
+                        {isAddingPlatform ? '取消' : '添加平台'}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Add platform inline */}
+                  {isAddingPlatform && (
+                    <div className="flex items-center gap-2 mb-3 p-2 bg-surface-container rounded-lg border border-outline-variant">
+                      <select
+                        className="form-input text-sm py-1 flex-1"
+                        value={newPlatformKey}
+                        onChange={(e) => setNewPlatformKey(e.target.value)}
+                      >
+                        <option value="">选择平台…</option>
+                        {availablePlatforms.map((p) => (
+                          <option key={p.key} value={p.key}>{p.label}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => {
+                          if (!newPlatformKey) return;
+                          addPlatform.mutate(
+                            { operatorId: operator.id, platform: newPlatformKey },
+                            {
+                              onSuccess: () => { setAddPlatformForWindow(null); setNewPlatformKey(''); },
+                              onError: (err: any) => {
+                                alert(`添加平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                              },
+                            },
+                          );
+                        }}
+                        disabled={!newPlatformKey || addPlatform.isPending}
+                        className="btn-primary text-xs px-3 py-1"
+                      >
+                        {addPlatform.isPending ? '添加中…' : '确认'}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Platform rows */}
+                  {w.platforms.length === 0 ? (
+                    <p className="text-body-sm text-on-surface-variant text-center py-4">该窗口暂无平台账号</p>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {w.platforms.map((plat) => {
+                        const capability = capabilitiesData?.find((c) => c.platform === plat.platform);
+                        const verifyKey = `${operator.id}_${w.id}_${plat.platform}`;
+                        return (
+                          <PlatformRow
+                            key={plat.platform}
+                            platform={plat.platform}
+                            loginStatus={plat.loginStatus}
+                            onVerify={() => {
+                              setVerifyingPlatforms(prev => new Set(prev).add(verifyKey));
+                              verifyLogin.mutate(
+                                { operatorId: operator.id, platform: plat.platform },
+                                { onSettled: () => setVerifyingPlatforms(prev => {
+                                  const next = new Set(prev);
+                                  next.delete(verifyKey);
+                                  return next;
+                                })},
+                              );
+                            }}
+                            onRemove={() => removePlatform.mutate(
+                              { operatorId: operator.id, platform: plat.platform },
+                              {
+                                onError: (err: any) => {
+                                  alert(`移除平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+                                },
+                              },
+                            )}
+                            verifying={verifyingPlatforms.has(verifyKey)}
+                            capability={capability}
+                          />
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // Main Component
 // ============================================================
 
@@ -162,21 +398,19 @@ export default function OperatorManagement() {
   const createLinkRequest = useCreateLinkRequest();
 
   // UI State
+  const [selectedOperatorId, setSelectedOperatorId] = useState<number | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [addPlatformForOp, setAddPlatformForOp] = useState<number | null>(null);
-  const [newPlatformKey, setNewPlatformKey] = useState('');
-  const [selectedVendor, setSelectedVendor] = useState('bitbrowser');
 
   // 页面加载时自动同步所有厂商的窗口（容错：某厂商不可用不影响其他）
   useEffect(() => {
     syncWindows.mutate('all');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [showWindowList, setShowWindowList] = useState(false);
   const [showCreateWindow, setShowCreateWindow] = useState(false);
   const [newWindowName, setNewWindowName] = useState('');
+  const [selectedVendor, setSelectedVendor] = useState('bitbrowser');
   const [verifyingPlatforms, setVerifyingPlatforms] = useState<Set<string>>(new Set());
 
   // Link request state
@@ -257,7 +491,7 @@ export default function OperatorManagement() {
     setFormWechatId(op.wechatUserId);
     setFormDisplayName(op.displayName);
     setFormPhone(op.phone || '');
-    setShowAddForm(false);
+    setShowAddForm(true);
   };
 
   const handleDelete = (id: number) => {
@@ -269,32 +503,23 @@ export default function OperatorManagement() {
     });
   };
 
-  const handleBindWindow = (operatorId: number, windowId: number) => {
-    bindWindow.mutate(
-      { windowId, operatorId },
-      {
-        onError: (err: any) => {
-          alert(`绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-        },
-      },
-    );
-  };
+  // Derived data
+  const selectedOperator = operators.find((op) => op.id === selectedOperatorId) || null;
 
-  const handleAddPlatform = (operatorId: number) => {
-    if (!newPlatformKey) return;
-    addPlatform.mutate(
-      { operatorId, platform: newPlatformKey },
-      {
-        onSuccess: () => { setAddPlatformForOp(null); setNewPlatformKey(''); },
-        onError: (err: any) => {
-          alert(`添加平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-        },
-      },
-    );
-  };
+  // Windows not bound to any operator
+  const boundOperatorIds = new Set(operators.flatMap((op) => op.windows.map((w) => w.id)));
+  const unboundWindows = windows.filter((w) => !boundOperatorIds.has(w.id) && w.status === 'available');
 
-  // Unbound windows for binding dropdown
-  const unboundWindows = windows.filter((w) => w.status === 'available');
+  // All windows not bound to the selected operator
+  const unboundForSelected = selectedOperator
+    ? windows.filter((w) => {
+        const isBoundToSelected = selectedOperator.windows.some((ow) => ow.id === w.id);
+        const isBoundToOther = operators.some(
+          (op) => op.id !== selectedOperator.id && op.windows.some((ow) => ow.id === w.id),
+        );
+        return !isBoundToSelected && !isBoundToOther && w.status === 'available';
+      })
+    : [];
 
   return (
     <div className="space-y-4">
@@ -303,7 +528,7 @@ export default function OperatorManagement() {
         <div>
           <h2 className="text-headline-md text-on-surface">操作员管理</h2>
           <p className="text-body-sm text-on-surface-variant mt-1">
-            每个操作员对应一个企业微信用户，绑定窗口后在窗口下管理平台账号。
+            每个操作员对应一个企业微信用户，可绑定多个窗口，每个窗口独立管理平台账号。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -324,172 +549,6 @@ export default function OperatorManagement() {
           </button>
         </div>
       </div>
-
-      {/* Window list toggle */}
-      <div className="flex items-center gap-2 text-body-sm text-on-surface-variant">
-        <button
-          onClick={() => setShowWindowList(!showWindowList)}
-          className="text-xs text-primary hover:underline flex items-center gap-1"
-        >
-          <MaterialIcon icon="visibility" size="xs" />
-          {showWindowList ? '隐藏窗口列表' : `查看可用窗口 (${windows.length})`}
-        </button>
-      </div>
-
-      {/* Window list (collapsible) */}
-      {showWindowList && (
-        <div className="p-3 bg-surface-container rounded-xl border border-outline-variant">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="text-label-md text-on-surface-variant">窗口管理</h4>
-            <button
-              onClick={() => syncWindows.mutate(selectedVendor)}
-              disabled={syncWindows.isPending}
-              className="btn-ghost text-xs flex items-center gap-1"
-            >
-              <MaterialIcon icon="sync" size="xs" className={syncWindows.isPending ? 'animate-spin-slow' : ''} />
-              同步
-            </button>
-          </div>
-
-          {/* BitBrowser section */}
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-on-surface-variant">BitBrowser</span>
-              <span className="text-xs text-on-surface-variant">
-                {limits.bitbrowser.current}/{limits.bitbrowser.max}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-              {windows
-                .filter((w) => w.browserVendor === 'bitbrowser')
-                .map((w) => (
-                  <div
-                    key={w.id}
-                    className={cn(
-                      'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs',
-                      w.status === 'bound'
-                        ? 'border-primary/30 bg-primary/5'
-                        : 'border-outline-variant bg-surface',
-                    )}
-                  >
-                    <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
-                      <select
-                        className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
-                        value={w.boundOperatorId ?? ''}
-                        onChange={(e) => {
-                          const opId = e.target.value ? Number(e.target.value) : null;
-                          if (opId) {
-                            bindWindow.mutate({ windowId: w.id, operatorId: opId });
-                          }
-                        }}
-                      >
-                        <option value="">选择操作员…</option>
-                        {operators.map((op: Operator) => (
-                          <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
-                        ))}
-                      </select>
-                    </div>
-                    {w.status === 'bound' && w.boundOperatorId && (
-                      <button
-                        onClick={() => unbindWindow.mutate(w.id)}
-                        disabled={unbindWindow.isPending}
-                        className="text-on-surface-variant hover:text-error text-xs"
-                        title="解绑"
-                      >
-                        <MaterialIcon icon="link_off" size="xs" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              {/* Placeholder slots */}
-              {Array.from({ length: Math.max(0, limits.bitbrowser.max - limits.bitbrowser.current) }).map((_, i) => (
-                <button
-                  key={`bit-placeholder-${i}`}
-                  onClick={() => { setShowCreateWindow(true); setSelectedVendor('bitbrowser'); }}
-                  className="flex items-center justify-center gap-1 px-3 py-2 rounded-lg border border-dashed border-outline-variant/60 text-xs text-on-surface-variant/50 hover:border-primary/40 hover:text-primary/70 hover:bg-primary/5 transition-colors"
-                >
-                  <MaterialIcon icon="add" size="xs" />
-                  <span>添加窗口</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* RoxyBrowser section */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-medium text-on-surface-variant">RoxyBrowser</span>
-              <span className="text-xs text-on-surface-variant">
-                {limits.roxybrowser.current}/{limits.roxybrowser.max}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
-              {windows
-                .filter((w) => w.browserVendor === 'roxybrowser')
-                .map((w) => (
-                  <div
-                    key={w.id}
-                    className={cn(
-                      'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs',
-                      w.status === 'bound'
-                        ? 'border-primary/30 bg-primary/5'
-                        : 'border-outline-variant bg-surface',
-                    )}
-                  >
-                    <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
-                      <select
-                        className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
-                        value={w.boundOperatorId ?? ''}
-                        onChange={(e) => {
-                          const opId = e.target.value ? Number(e.target.value) : null;
-                          if (opId) {
-                            bindWindow.mutate({ windowId: w.id, operatorId: opId });
-                          }
-                        }}
-                      >
-                        <option value="">选择操作员…</option>
-                        {operators.map((op: Operator) => (
-                          <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
-                        ))}
-                      </select>
-                    </div>
-                    {w.status === 'bound' && w.boundOperatorId && (
-                      <button
-                        onClick={() => unbindWindow.mutate(w.id)}
-                        disabled={unbindWindow.isPending}
-                        className="text-on-surface-variant hover:text-error text-xs"
-                        title="解绑"
-                      >
-                        <MaterialIcon icon="link_off" size="xs" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              {/* Placeholder slots */}
-              {Array.from({ length: Math.max(0, limits.roxybrowser.max - limits.roxybrowser.current) }).map((_, i) => (
-                <button
-                  key={`roxy-placeholder-${i}`}
-                  onClick={() => { setShowCreateWindow(true); setSelectedVendor('roxybrowser'); }}
-                  className="flex items-center justify-center gap-1 px-3 py-2 rounded-lg border border-dashed border-outline-variant/60 text-xs text-on-surface-variant/50 hover:border-primary/40 hover:text-primary/70 hover:bg-primary/5 transition-colors"
-                >
-                  <MaterialIcon icon="add" size="xs" />
-                  <span>添加窗口</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Total count */}
-          <div className="mt-3 pt-2 border-t border-outline-variant/50 flex items-center justify-between text-xs text-on-surface-variant">
-            <span>总计窗口</span>
-            <span>{limits.total.current}/{limits.total.max}</span>
-          </div>
-        </div>
-      )}
 
       {/* Create Window Form (inline) */}
       {showCreateWindow && (
@@ -609,224 +668,202 @@ export default function OperatorManagement() {
         </div>
       )}
 
-      {/* Loading state */}
-      {isLoading && (
-        <div className="space-y-3">
-          {Array.from({ length: 2 }).map((_, i) => (
-            <div key={i} className="bento-card animate-pulse h-48 rounded-xl" />
-          ))}
-        </div>
-      )}
+      {/* ================================================================ */}
+      {/* Master-Detail Layout */}
+      {/* ================================================================ */}
+      <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4 items-start">
 
-      {/* Empty state */}
-      {!isLoading && operators.length === 0 && (
-        <div className="bento-card text-center py-12 rounded-xl">
-          <MaterialIcon icon="people" size="3xl" className="text-outline mb-3 opacity-40" />
-          <p className="text-body-sm text-on-surface-variant">暂无操作员，点击"新增操作员"开始</p>
-        </div>
-      )}
+        {/* ---- Left Column: Operator List ---- */}
+        <div className="space-y-2">
+          <h3 className="text-label-md text-on-surface-variant px-1">操作员列表</h3>
 
-      {/* Operator Cards */}
-      {operators.map((op) => {
-        const boundWindow = op.windows[0] || null;
-        const isDeleting = deletingId === op.id;
-        const isAddingPlatform = addPlatformForOp === op.id;
-        const usedPlatforms = op.platforms.map((p) => p.platform);
-        const availablePlatforms = PLATFORM_OPTIONS.filter((p) => !usedPlatforms.includes(p.key));
-
-        return (
-          <div
-            key={op.id}
-            className={cn(
-              'bento-card rounded-xl border overflow-hidden transition-all',
-              isDeleting ? 'border-error/50 bg-error/5' : 'border-outline-variant bg-surface-container-lowest',
-            )}
-          >
-            {/* Card Header: User info + Window + Actions */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-outline-variant">
-              <div className="flex items-center gap-4 flex-1 min-w-0">
-                {/* User avatar/icon */}
-                <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary flex items-center justify-center shrink-0">
-                  <MaterialIcon icon="person" size="md" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-label-md text-on-surface font-bold truncate">{op.displayName}</h3>
-                    <span className="text-xs text-on-surface-variant bg-surface-container px-2 py-0.5 rounded-full font-mono shrink-0">
-                      {op.wechatUserId}
-                    </span>
-                    {!op.enabled && (
-                      <StatusPill tone="error">已禁用</StatusPill>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3 mt-1 text-body-sm text-on-surface-variant">
-                    {/* Bound window */}
-                    {boundWindow ? (
-                      <span className="flex items-center gap-1">
-                        <MaterialIcon icon="open_in_new" size="xs" />
-                        <span className="font-mono">{boundWindow.windowName || boundWindow.externalId}</span>
-                        <span className="text-xs opacity-60">({boundWindow.browserVendor})</span>
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1 text-warning">
-                        <MaterialIcon icon="link_off" size="xs" />
-                        未绑定窗口
-                      </span>
-                    )}
-                    {/* Platform count */}
-                    <span className="flex items-center gap-1">
-                      <MaterialIcon icon="apps" size="xs" />
-                      {op.platforms.length} 个平台
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                {/* Bind window dropdown */}
-                {!boundWindow && unboundWindows.length > 0 && (
-                  <select
-                    className="form-input text-xs py-1 px-2 w-40"
-                    value=""
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        const wid = Number(e.target.value);
-                        bindWindow.mutate(
-                          { windowId: wid, operatorId: op.id },
-                          {
-                            onError: (err: any) => {
-                              alert(`绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-                            },
-                          },
-                        );
-                      }
-                    }}
-                  >
-                    <option value="">绑定窗口…</option>
-                    {unboundWindows.map((w) => (
-                      <option key={w.id} value={w.id}>
-                        {w.windowName || w.externalId} ({w.browserVendor})
-                      </option>
-                    ))}
-                  </select>
-                )}
-                {boundWindow && (
-                  <button
-                    onClick={() => unbindWindow.mutate(boundWindow.id, {
-                      onError: (err: any) => {
-                        alert(`解绑窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-                      },
-                    })}
-                    className="btn-ghost text-xs px-2 py-1"
-                    title="解绑窗口"
-                  >
-                    <MaterialIcon icon="link_off" size="sm" />
-                  </button>
-                )}
-                <button onClick={() => startEdit(op)} className="btn-ghost px-2 py-1" title="编辑操作员">
-                  <MaterialIcon icon="edit" size="sm" />
-                </button>
-                {isDeleting ? (
-                  <div className="flex items-center gap-1 ml-1">
-                    <button
-                      onClick={() => handleDelete(op.id)}
-                      className="text-xs bg-error text-white px-2 py-1 rounded hover:bg-error/90"
-                      disabled={deleteOperator.isPending}
-                    >
-                      {deleteOperator.isPending ? '删除中…' : '确认删除'}
-                    </button>
-                    <button onClick={() => setDeletingId(null)} className="text-xs text-on-surface-variant hover:text-on-surface px-1">
-                      取消
-                    </button>
-                  </div>
-                ) : (
-                  <button onClick={() => setDeletingId(op.id)} className="btn-ghost px-2 py-1 text-error" title="删除用户">
-                    <MaterialIcon icon="delete" size="sm" />
-                  </button>
-                )}
-              </div>
+          {/* Loading skeleton */}
+          {isLoading && (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-16 bg-surface-container rounded-xl animate-pulse" />
+              ))}
             </div>
+          )}
 
-            {/* Card Body: Platform List */}
-            <div className="px-5 py-4">
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="text-label-md text-on-surface-variant">平台管理</h4>
-                {availablePlatforms.length > 0 && (
-                  <button
-                    onClick={() => setAddPlatformForOp(isAddingPlatform ? null : op.id)}
-                    className="text-xs text-primary hover:underline flex items-center gap-1"
-                  >
-                    <MaterialIcon icon="add" size="xs" />
-                    {isAddingPlatform ? '取消' : '添加平台'}
-                  </button>
-                )}
-              </div>
+          {/* Empty state */}
+          {!isLoading && operators.length === 0 && (
+            <div className="bento-card text-center py-8 rounded-xl border border-dashed border-outline-variant/50">
+              <MaterialIcon icon="people" size="2xl" className="text-outline mb-2 opacity-30" />
+              <p className="text-body-sm text-on-surface-variant">暂无操作员</p>
+              <p className="text-xs text-on-surface-variant/60 mt-1">点击上方"新增操作员"开始</p>
+            </div>
+          )}
 
-              {/* Add platform inline */}
-              {isAddingPlatform && (
-                <div className="flex items-center gap-2 mb-3 p-2 bg-surface-container rounded-lg border border-outline-variant">
-                  <select
-                    className="form-input text-sm py-1 flex-1"
-                    value={newPlatformKey}
-                    onChange={(e) => setNewPlatformKey(e.target.value)}
-                  >
-                    <option value="">选择平台…</option>
-                    {availablePlatforms.map((p) => (
-                      <option key={p.key} value={p.key}>{p.label}</option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => handleAddPlatform(op.id)}
-                    disabled={!newPlatformKey || addPlatform.isPending}
-                    className="btn-primary text-xs px-3 py-1"
-                  >
-                    {addPlatform.isPending ? '添加中…' : '确认'}
-                  </button>
-                </div>
-              )}
+          {/* Operator list items */}
+          {!isLoading && operators.map((op) => {
+            const isSelected = selectedOperatorId === op.id;
+            const isDeleting = deletingId === op.id;
 
-              {/* Platform rows */}
-              {op.platforms.length === 0 ? (
-                <p className="text-body-sm text-on-surface-variant text-center py-4">暂无平台，请点击"添加平台"</p>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                  {op.platforms.map((plat) => {
-                    const capability = capabilitiesData?.find((c) => c.platform === plat.platform);
-                    return (
-                      <PlatformRow
-                        key={plat.platform}
-                        platform={plat.platform}
-                        loginStatus={plat.loginStatus}
-                        onVerify={() => {
-                          const key = `${op.id}_${plat.platform}`;
-                          setVerifyingPlatforms(prev => new Set(prev).add(key));
-                          verifyLogin.mutate(
-                            { operatorId: op.id, platform: plat.platform },
-                            { onSettled: () => setVerifyingPlatforms(prev => {
-                              const next = new Set(prev);
-                              next.delete(key);
-                              return next;
-                            })},
-                          );
-                        }}
-                        onRemove={() => removePlatform.mutate(
-                          { operatorId: op.id, platform: plat.platform },
-                          {
-                            onError: (err: any) => {
-                              alert(`移除平台失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-                            },
-                          },
+            return (
+              <div key={op.id} className="space-y-1">
+                <button
+                  onClick={() => {
+                    setSelectedOperatorId(op.id);
+                    // Close add form when selecting an operator
+                    if (showAddForm && !editingId) setShowAddForm(false);
+                  }}
+                  className={cn(
+                    'w-full text-left px-4 py-3 rounded-xl border transition-all',
+                    isSelected
+                      ? 'bg-primary-container/30 border-primary/40 shadow-sm'
+                      : 'bg-surface-container-lowest border-outline-variant hover:border-primary/30 hover:bg-surface-container/60',
+                    isDeleting && 'border-error/50 bg-error/5',
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={cn(
+                      'w-9 h-9 rounded-full flex items-center justify-center shrink-0',
+                      isSelected ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface-variant',
+                    )}>
+                      <MaterialIcon icon="person" size="sm" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={cn(
+                          'text-label-md truncate',
+                          isSelected ? 'text-primary font-bold' : 'text-on-surface font-medium',
+                        )}>
+                          {op.displayName}
+                        </span>
+                        {!op.enabled && (
+                          <StatusPill tone="error">禁用</StatusPill>
                         )}
-                        verifying={verifyingPlatforms.has(`${op.id}_${plat.platform}`)}
-                        capability={capability}
-                      />
-                    );
-                  })}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-on-surface-variant mt-0.5">
+                        <span className="font-mono">{op.wechatUserId}</span>
+                        <span>{op.windows.length}个窗口</span>
+                      </div>
+                    </div>
+                  </div>
+                </button>
+                {/* Inline actions for this operator */}
+                <div className={cn(
+                  'flex items-center gap-1 px-4 pb-1',
+                  isSelected ? 'flex' : 'hidden',
+                )}>
+                  <button
+                    onClick={() => startEdit(op)}
+                    className="text-xs text-primary hover:underline flex items-center gap-0.5"
+                  >
+                    <MaterialIcon icon="edit" size="xs" />
+                    编辑
+                  </button>
+                  <span className="text-outline-variant">|</span>
+                  {isDeleting ? (
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleDelete(op.id)}
+                        className="text-xs text-error hover:underline"
+                        disabled={deleteOperator.isPending}
+                      >
+                        {deleteOperator.isPending ? '删除中…' : '确认删除'}
+                      </button>
+                      <span className="text-outline-variant">|</span>
+                      <button
+                        onClick={() => setDeletingId(null)}
+                        className="text-xs text-on-surface-variant hover:underline"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => setDeletingId(op.id)}
+                      className="text-xs text-error hover:underline flex items-center gap-0.5"
+                    >
+                      <MaterialIcon icon="delete" size="xs" />
+                      删除
+                    </button>
+                  )}
                 </div>
-              )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ---- Right Column: Operator Detail ---- */}
+        <div>
+          {!selectedOperator ? (
+            <div className="bento-card text-center py-16 rounded-xl border border-dashed border-outline-variant/50">
+              <MaterialIcon icon="chevron_left" size="3xl" className="text-outline mb-3 opacity-30" />
+              <p className="text-body-sm text-on-surface-variant">请从左侧选择一个操作员</p>
+              <p className="text-xs text-on-surface-variant/60 mt-1">选择后在此查看详情、管理窗口和平台账号</p>
+            </div>
+          ) : (
+            <OperatorDetail
+              operator={selectedOperator}
+              unboundWindows={unboundForSelected}
+              windows={windows}
+              capabilitiesData={capabilitiesData}
+              bindWindow={bindWindow}
+              unbindWindow={unbindWindow}
+              addPlatform={addPlatform}
+              removePlatform={removePlatform}
+              verifyLogin={verifyLogin}
+              verifyingPlatforms={verifyingPlatforms}
+              setVerifyingPlatforms={setVerifyingPlatforms}
+            />
+          )}
+        </div>
+      </div>
+
+      {/* ================================================================ */}
+      {/* Bottom: Unbound Window Pool */}
+      {/* ================================================================ */}
+      <div className="rounded-xl bg-surface-container-lowest border border-outline-variant overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-outline-variant bg-surface-container/40">
+          <h3 className="text-label-md text-on-surface flex items-center gap-2">
+            <MaterialIcon icon="dashboard" size="sm" className="text-on-surface-variant" />
+            未绑定窗口池
+          </h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-on-surface-variant">
+              可用: {unboundWindows.length} 个
+            </span>
+            <button
+              onClick={() => setShowCreateWindow(!showCreateWindow)}
+              className="btn-ghost text-xs flex items-center gap-1"
+            >
+              <MaterialIcon icon="add" size="xs" />
+              创建窗口
+            </button>
+          </div>
+        </div>
+
+        {unboundWindows.length === 0 ? (
+          <div className="text-center py-8">
+            <MaterialIcon icon="check_circle" size="2xl" className="text-outline mb-2 opacity-30" />
+            <p className="text-body-sm text-on-surface-variant">所有窗口已绑定</p>
+            <p className="text-xs text-on-surface-variant/60 mt-1">创建新窗口后会自动出现在此池中</p>
+          </div>
+        ) : (
+          <div className="p-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+              {unboundWindows.map((w) => {
+                // Group by vendor
+                return (
+                  <div
+                    key={w.id}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg border border-outline-variant bg-surface text-xs"
+                  >
+                    <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
+                      <p className="text-on-surface-variant/60 text-[10px]">{w.browserVendor}</p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
-        );
-      })}
+        )}
+      </div>
     </div>
   );
 }
