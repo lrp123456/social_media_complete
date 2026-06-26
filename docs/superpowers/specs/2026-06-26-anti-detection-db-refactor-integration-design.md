@@ -94,6 +94,8 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 仅类型修改，不改运行时逻辑。按错误类型分批：
 
+仅修本次两设计涉及文件（operators.ts + douyinCrawler.ts，共 71 个错误）。tencentCrawler/kuaishouCrawler/oss/test 的预存错误（与本次两设计无关）不在范围。仅类型修改，不改运行时逻辑。按错误类型分批：
+
 | 错误类型 | 数量 | 修复模式 |
 |---|---|---|
 | safeEvaluate 返回 unknown | ~20 | 补 `as ExpectedType`（string/boolean/对象\|null） |
@@ -190,7 +192,7 @@ operators.ts 迁移: operatorPlatform → platformAccount（按窗口） + login
 
 ### 7.1 编译验证
 
-- `cd apps/ts-api-gateway && npx tsc --noEmit` → 0 错误。
+- `cd apps/ts-api-gateway && npx tsc --noEmit` → `operators.ts` 与 `douyinCrawler.ts` 零错误（其余预存错误不在范围）。
 - `npx prisma generate` → 无 `prisma.user` 类型残留。
 - `pnpm build:dashboard` → 通过。
 
@@ -234,7 +236,7 @@ operators.ts 迁移: operatorPlatform → platformAccount（按窗口） + login
 1. 前端双区块落地：独立「新增操作员」入口 + 窗口侧「绑定操作员」下拉，方向正确。
 2. `User` 模型从 schema 删除，物理 `users` 表删除，服务重启不重建。
 3. `operators.ts` 无 `prisma.operatorPlatform` 调用残留，平台操作全部走 `prisma.platformAccount`（按窗口），`loginVerification` 用 windowId+platform。
-4. `cd apps/ts-api-gateway && npx tsc --noEmit` 输出 0 错误。
+4. `cd apps/ts-api-gateway && npx tsc --noEmit` 在 `operators.ts` 与 `douyinCrawler.ts` 上零错误（其余文件预存错误不在本次范围）。
 5. 端到端：建操作员→绑窗口→加平台账号→验证登录→platform_accounts 写入正常、表格有数据、verify-login/verify-all 不崩溃。
 6. `npx jest` 全绿，抖音三功能不回归。
 7. 业务代码无 `prisma.user` / `prisma.operatorPlatform` 残留。

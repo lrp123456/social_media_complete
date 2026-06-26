@@ -1,0 +1,1029 @@
+# 反检测收口与数据库重构融合落地实施计划
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 补齐反检测收口与 DB 重构两设计合并 master 后未真正生效的缺口——删 users 孤儿表/模型、operators.ts 平台操作迁移到 PlatformAccount、douyinCrawler.ts 编译清零、前端双区块重构——使两设计真正可用。
+
+**Architecture:** 后端核心契约已真实落地，缺口在"schema 收尾 + 后端未迁移调用方 + 前端可见层"。按依赖顺序：先删 User 模型重生成 Prisma Client → 迁移 operators.ts 的 operatorPlatform 调用到 platformAccount → 清零 douyinCrawler.ts 类型错误 → 重构前端双区块 → 端到端验证。
+
+**Tech Stack:** TypeScript + Prisma 6 + Next.js 14 + React Query + Patchright + BullMQ
+
+**对应 spec:** `docs/superpowers/specs/2026-06-26-anti-detection-db-refactor-integration-design.md`
+
+**范围约束:** tsc 清零仅限 `operators.ts` + `douyinCrawler.ts`（共 71 错误）。tencentCrawler/kuaishouCrawler/oss/test 的预存错误（103 个，与本次两设计无关）不动。
+
+---
+
+## 文件结构
+
+| 文件 | 职责 | 本次改动 |
+|---|---|---|
+| `prisma/schema.prisma` | 数据模型定义 | 删 `model User`（第 17-34 行） |
+| `apps/ts-api-gateway/src/routes/operators.ts` | 操作员/窗口/平台/登录验证路由 | 7 处 operatorPlatform→platformAccount、loginVerification 用 windowId、verify-all 重构、删 monitorQueue 残留导入 |
+| `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts` | 抖音评论采集 | 58 处类型断言修复 |
+| `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx` | 用户管理页 | 拆双区块、操作员表单去窗口字段、窗口卡片加绑定操作员下拉 |
+
+---
+
+## Task 1: 删除 User 模型并重生成 Prisma Client
+
+**Files:**
+- Modify: `prisma/schema.prisma` (第 17-34 行)
+
+- [ ] **Step 1: 删除 User 模型定义**
+
+删除 `prisma/schema.prisma` 中第 17-34 行整段：
+
+```prisma
+model User {
+  id                  Int      @id @default(autoincrement())
+  fingerprintWindowId String   @map("fingerprint_window_id")
+  wechatUserid        String   @map("wechat_userid")
+  platform            String   @default("douyin")
+  status              String   @default("init") // init | active | blocked | cooldown
+  consecutiveNoUpdate Int      @default(0) @map("consecutive_no_update")
+  cooldownUntil       BigInt   @default(0) @map("cooldown_until")
+  monitoringEnabled   Boolean  @default(true) @map("monitoring_enabled")
+  platformAuthorId    String?  @map("platform_author_id") // 抖音uid / 快手userId
+  platformAuthorName  String?  @map("platform_author_name") // 作者昵称
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  skipPinnedVideos    Json?    @map("skip_pinned_videos")
+
+  @@unique([fingerprintWindowId, platform], name: "idx_users_window_platform")
+  @@map("users")
+}
+```
+
+同时删除其上方注释行 `// 一、核心业务表（来自 my_folder TS 项目）` 下紧邻 User 模型的部分（保留章节注释标题）。
+
+- [ ] **Step 2: 重生成 Prisma Client**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && npx prisma generate
+```
+Expected: 输出 `✔ Generated Prisma Client`，无错误。
+
+- [ ] **Step 3: 验证业务代码无 prisma.user 类型残留**
+
+Run:
+```bash
+grep -rn "prisma\.user\b" apps/ packages/ --include="*.ts" | grep -v node_modules | grep -v "\.test\."
+```
+Expected: 无输出（0 命中）。
+
+- [ ] **Step 4: 删除物理 users 表**
+
+Run:
+```bash
+docker exec sm-postgres psql -U sm_admin -d social_media -c "DROP TABLE IF EXISTS users;"
+```
+Expected: 输出 `DROP TABLE`。
+
+- [ ] **Step 5: 验证 users 表已删除**
+
+Run:
+```bash
+docker exec sm-postgres psql -U sm_admin -d social_media -t -c "SELECT to_regclass('users');"
+```
+Expected: 空输出（表不存在）。
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add prisma/schema.prisma
+git commit -m "refactor(db): 删除 User 模型与 users 孤儿表
+
+DB 重构 spec 4.1 收尾：User 模型完全孤立（无 @relation 引用）、
+users 表 0 数据、外键已指向 platform_accounts。删除模型 + 物理表，
+prisma generate 后业务代码无 prisma.user 残留。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 2: 修复 operators.ts 残留导入（monitorQueue）
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 8 行, 第 527-538 行)
+
+`monitorQueue` 在整个代码库已不存在（DB 重构删除），但 operators.ts 仍导入并使用它清理 BullMQ 任务。需移除导入，BullMQ 清理改用现有可用的队列引用或直接跳过（platform_accounts 删除时由调度器自然重试）。
+
+- [ ] **Step 1: 查看当前导入与使用**
+
+第 8 行：
+```typescript
+import { monitorQueue, resetSchedulerTimer } from '../services/monitorService';
+```
+
+第 527-538 行（在 DELETE platform 路由内）：
+```typescript
+      // 清理 BullMQ 中该用户的待处理监控任务
+      const staleJobs = await monitorQueue.getJobs(['waiting', 'delayed']);
+      let removedJobs = 0;
+      for (const job of staleJobs) {
+        if (accountIds.includes(job.data.userId)) {
+          await job.remove().catch(() => {});
+          removedJobs++;
+        }
+      }
+      if (removedJobs > 0) {
+        logger.info({ operatorId: id, platform, removedJobs }, '已清理 BullMQ 残留任务');
+      }
+```
+
+- [ ] **Step 2: 修改导入行（移除 monitorQueue）**
+
+将第 8 行改为：
+```typescript
+import { resetSchedulerTimer } from '../services/monitorService';
+```
+
+- [ ] **Step 3: 移除 BullMQ 清理代码块**
+
+删除第 527-538 行整段（`// 清理 BullMQ 中该用户的待处理监控任务` 到 `}`），替换为注释说明。删除后该段应为：
+
+```typescript
+      logger.info({ operatorId: id, platform, deletedCount: accountIds.length }, '已清理对应的监控用户记录');
+      // 注：BullMQ 残留任务由调度器在下次轮询时按 platform_accounts 自然重试，无需主动清理
+```
+
+- [ ] **Step 4: 验证 monitorQueue 引用清零**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && grep -n "monitorQueue" apps/ts-api-gateway/src/routes/operators.ts
+```
+Expected: 无输出。
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "fix(operators): 移除已不存在的 monitorQueue 残留导入
+
+DB 重构删除 monitorService 队列导出后，operators.ts 仍导入 monitorQueue
+导致编译错误。BullMQ 残留任务改由调度器自然重试。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 3: 迁移"添加平台"接口到 PlatformAccount
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 465-496 行, POST `/:id/platforms`)
+
+旧逻辑在已删除的 OperatorPlatform 上建绑定。新语义：平台账号属窗口，需遍历操作员绑定窗口为每个窗口 upsert PlatformAccount。无绑定窗口则提示先绑窗口。
+
+- [ ] **Step 1: 替换 POST /:id/platforms 整个路由处理体**
+
+将第 465-496 行替换为：
+
+```typescript
+/** POST /api/v1/operators/:id/platforms — 为操作员添加平台（在所有绑定窗口下创建 PlatformAccount） */
+router.post('/:id/platforms', async (req: Request, res: Response) => {
+  try {
+    const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
+    const bodySchema = z.object({
+      platform: z.enum(['douyin', 'kuaishou', 'xiaohongshu', 'bilibili', 'baijiahao', 'tencent', 'tiktok']),
+    });
+
+    const { id } = paramsSchema.parse(req.params);
+    const { platform } = bodySchema.parse(req.body);
+
+    // 平台账号属于窗口：获取操作员所有绑定窗口
+    const operator = await prisma.operator.findUnique({
+      where: { id },
+      include: { windows: { where: { status: 'bound' } } },
+    });
+
+    if (!operator) {
+      return res.status(404).json({ success: false, error: '操作员不存在' });
+    }
+    if (operator.windows.length === 0) {
+      return res.status(400).json({ success: false, error: '请先绑定窗口再加平台账号' });
+    }
+
+    // 为每个绑定窗口 upsert PlatformAccount（唯一键 windowId+platform）
+    const created: any[] = [];
+    for (const window of operator.windows) {
+      const account = await prisma.platformAccount.upsert({
+        where: { idx_platform_account_window_platform: { windowId: window.id, platform } },
+        update: { loginStatus: 'unknown' },
+        create: {
+          windowId: window.id,
+          windowExternalId: window.externalId,
+          platform,
+          wechatUserid: operator.wechatUserId,
+          loginStatus: 'unknown',
+          monitoringEnabled: false,
+        },
+      });
+      created.push(account);
+    }
+
+    res.status(201).json({ success: true, data: { platform, accounts: created } });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: err.errors });
+    }
+    logger.error({ err: (err as Error).message }, '添加平台失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+```
+
+- [ ] **Step 2: 验证编译无 operatorPlatform 错误（此接口）**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "operators.ts(47[6-9]\|operators.ts(48[0-9]"
+```
+Expected: 无输出。
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "refactor(operators): 添加平台接口迁移到 PlatformAccount
+
+平台账号属于窗口（DB spec 3.2）。旧逻辑在已删的 OperatorPlatform 建绑定，
+改为遍历操作员绑定窗口 upsert PlatformAccount(windowId+platform)。
+无绑定窗口时提示先绑窗口。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 4: 迁移"删除平台"接口到 PlatformAccount
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 498-549 行, DELETE `/:id/platforms/:platform`)
+
+旧逻辑先删 operatorPlatform 再删 platformAccount（重复）。新逻辑直接删 platformAccount，FK 级联处理 Video/Comment。
+
+- [ ] **Step 1: 替换 DELETE /:id/platforms/:platform 路由处理体**
+
+将第 498-549 行替换为：
+
+```typescript
+/** DELETE /api/v1/operators/:id/platforms/:platform — 移除操作员所有窗口下的该平台账号 */
+router.delete('/:id/platforms/:platform', async (req: Request, res: Response) => {
+  try {
+    const schema = z.object({
+      id: z.coerce.number().int().positive(),
+      platform: z.string().min(1),
+    });
+
+    const { id, platform } = schema.parse(req.params);
+
+    // 查出操作员所有绑定窗口下的该平台账号 ID
+    const accountsToDelete = await prisma.platformAccount.findMany({
+      where: { window: { boundOperatorId: id }, platform },
+      select: { id: true },
+    });
+    const accountIds = accountsToDelete.map((a) => a.id);
+
+    // 删除 PlatformAccount — FK 级联会处理 Video/Comment 等子表
+    if (accountIds.length > 0) {
+      await prisma.platformAccount.deleteMany({
+        where: { id: { in: accountIds } },
+      });
+      logger.info({ operatorId: id, platform, deletedCount: accountIds.length }, '已清理对应的平台账号');
+      // 注：BullMQ 残留任务由调度器在下次轮询时按 platform_accounts 自然重试，无需主动清理
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ success: false, errors: err.errors });
+    }
+    logger.error({ err: (err as Error).message }, '移除平台失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+```
+
+- [ ] **Step 2: 验证编译无 operatorPlatform 错误（此接口）**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "operators.ts(51[0-9]"
+```
+Expected: 无输出。
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "refactor(operators): 删除平台接口迁移到 PlatformAccount
+
+移除对已删 OperatorPlatform 的 delete 调用，直接删 PlatformAccount，
+FK 级联处理子表。去重重复删除逻辑。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 5: 迁移 verify-login 到 PlatformAccount + LoginVerification
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 555-691 行)
+
+旧逻辑用 operatorPlatform 更新 loginStatus/lastVerifiedAt、loginVerification 传 operatorId。新逻辑：loginStatus 写入各窗口的 PlatformAccount，LoginVerification 用 windowId+platform 写入实际验证窗口。
+
+- [ ] **Step 1: 替换 verify-login 路由内的状态更新与日志记录**
+
+定位第 580-583 行（`// 更新状态为检查中`），替换：
+```typescript
+    // 更新状态为检查中
+    await prisma.operatorPlatform.update({
+      where: { idx_operator_platform: { operatorId: id, platform } },
+      data: { loginStatus: 'checking' },
+    });
+```
+为：
+```typescript
+    // 更新状态为检查中（所有绑定窗口的该平台账号）
+    await prisma.platformAccount.updateMany({
+      where: { window: { boundOperatorId: id }, platform },
+      data: { loginStatus: 'checking' },
+    });
+```
+
+- [ ] **Step 2: 替换"获取上次登录状态"段**
+
+定位第 633-637 行，替换：
+```typescript
+    // 获取之前的登录状态，用于检测状态变化
+    const previousPlatform = await prisma.operatorPlatform.findUnique({
+      where: { idx_operator_platform: { operatorId: id, platform } },
+      select: { loginStatus: true },
+    });
+    const previousStatus = previousPlatform?.loginStatus || 'unknown';
+```
+为：
+```typescript
+    // 获取之前的登录状态（取任一窗口的该平台账号），用于检测状态变化
+    const previousAccount = await prisma.platformAccount.findFirst({
+      where: { window: { boundOperatorId: id }, platform },
+      select: { loginStatus: true },
+    });
+    const previousStatus = previousAccount?.loginStatus || 'unknown';
+```
+
+- [ ] **Step 3: 替换"更新平台登录状态"段**
+
+定位第 640-643 行，替换：
+```typescript
+    // 更新平台登录状态（即使验证失败也会执行）
+    await prisma.operatorPlatform.update({
+      where: { idx_operator_platform: { operatorId: id, platform } },
+      data: { loginStatus, lastVerifiedAt: new Date() },
+    });
+```
+为：
+```typescript
+    // 更新平台登录状态到所有绑定窗口的该平台账号（即使验证失败也会执行）
+    await prisma.platformAccount.updateMany({
+      where: { window: { boundOperatorId: id }, platform },
+      data: { loginStatus, lastVerifiedAt: new Date() },
+    });
+```
+
+- [ ] **Step 4: 替换 LoginVerification 记录段**
+
+定位第 665-673 行，替换：
+```typescript
+    // 记录验证日志
+    await prisma.loginVerification.create({
+      data: {
+        operatorId: id,
+        platform,
+        status: loginStatus,
+        detail: JSON.stringify({ detail: bestResult.detail }),
+      },
+    });
+```
+为（按最佳结果所在窗口记录；若无从 bestWindowExternalId 反查则用首个窗口）：
+```typescript
+    // 记录验证日志（LoginVerification 以 windowId+platform 为单元，DB spec 3.9）
+    const verifyWindow = operator.windows.find((w) => w.externalId === bestWindowExternalId) || operator.windows[0];
+    if (verifyWindow) {
+      await prisma.loginVerification.create({
+        data: {
+          windowId: verifyWindow.id,
+          platform,
+          status: loginStatus,
+          detail: JSON.stringify({ detail: bestResult.detail }),
+        },
+      });
+    }
+```
+
+- [ ] **Step 5: 验证编译无 operatorPlatform/loginVerification 错误（verify-login）**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "operators.ts(5[78][0-9]\|operators.ts(6[0-9][0-9])"
+```
+Expected: 无 operatorPlatform / operatorId 相关错误。
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "refactor(operators): verify-login 迁移到 PlatformAccount + LoginVerification(windowId)
+
+loginStatus 写入各窗口 PlatformAccount（updateMany），LoginVerification
+改用 windowId+platform（DB spec 3.9），移除 operatorId。移除对已删
+OperatorPlatform 的全部调用。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 6: 重构 verify-all 到窗口级 PlatformAccount
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 693-762 行)
+
+旧逻辑 `include: { platforms: true }`（Operator 已无 platforms 关系）并遍历 `op.platforms`。新逻辑：平台归属窗口，遍历每个窗口的 `window.platforms`（PlatformAccount），按窗口更新。
+
+- [ ] **Step 1: 替换 verify-all 路由处理体**
+
+将第 693-762 行替换为：
+
+```typescript
+/** POST /api/v1/operators/verify-all — 批量验证所有操作员的所有平台（按窗口） */
+router.post('/verify-all', async (_req: Request, res: Response) => {
+  try {
+    const operators = await prisma.operator.findMany({
+      where: { enabled: true },
+      include: {
+        windows: {
+          where: { status: 'bound' },
+          include: { platforms: true },
+        },
+      },
+    });
+
+    const results: Array<{ operatorId: number; platform: string; status: string }> = [];
+    // 跟踪登录状态变化的 (externalId, platform) 对
+    const changedPairs = new Set<string>();
+
+    for (const op of operators) {
+      if (op.windows.length === 0) continue;
+
+      // 遍历所有窗口，逐窗口 try/catch；平台账号归属窗口
+      for (const window of op.windows) {
+        for (const account of window.platforms) {
+          try {
+            const result = await checkPlatformLogin(
+              window.browserVendor as BrowserVendor,
+              window.externalId,
+              account.platform,
+            );
+            const loginStatus = result.loggedIn ? 'logged_in' : 'not_logged_in';
+
+            // 检查状态变化
+            const previousStatus = account.loginStatus || 'unknown';
+            const statusChangedToLoggedIn = previousStatus !== 'logged_in' && loginStatus === 'logged_in';
+            if (statusChangedToLoggedIn) {
+              changedPairs.add(`${window.externalId}_${account.platform}`);
+              logger.info({ operatorId: op.id, platform: account.platform, previousStatus, windowId: window.id }, '批量验证：登录状态变化为已登录');
+
+              // 同时将 PlatformAccount.status 从 'login_required' 恢复为 'active'
+              await prisma.platformAccount.updateMany({
+                where: {
+                  windowId: window.id,
+                  platform: account.platform,
+                  status: { in: ['login_required', 'risk_control'] },
+                },
+                data: { status: 'active' },
+              }).catch(() => {});
+            }
+
+            // 更新该窗口该平台账号的登录状态
+            await prisma.platformAccount.updateMany({
+              where: { windowId: window.id, platform: account.platform },
+              data: { loginStatus, lastVerifiedAt: new Date() },
+            });
+
+            results.push({ operatorId: op.id, platform: account.platform, status: loginStatus });
+          } catch (err) {
+            results.push({ operatorId: op.id, platform: account.platform, status: 'error' });
+          }
+        }
+      }
+    }
+
+    // 如果有平台状态变化为已登录，重置对应 (externalId, platform) 的调度器
+    for (const pairKey of changedPairs) {
+      const lastUnderscore = pairKey.lastIndexOf('_');
+      const externalId = pairKey.substring(0, lastUnderscore);
+      const platform = pairKey.substring(lastUnderscore + 1);
+      logger.info({ externalId, platform }, '批量验证：重置调度器');
+      resetSchedulerTimer(externalId, platform);
+    }
+
+    res.json({ success: true, data: results });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '批量验证失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+```
+
+- [ ] **Step 2: 验证 operators.ts 全部编译错误清零**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "operators.ts"
+```
+Expected: 无输出（0 错误）。
+
+- [ ] **Step 3: 验证 operatorPlatform 引用清零**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && grep -n "operatorPlatform" apps/ts-api-gateway/src/routes/operators.ts
+```
+Expected: 无输出。
+
+- [ ] **Step 4: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "refactor(operators): verify-all 重构为窗口级 PlatformAccount
+
+Operator 已无 platforms 关系（平台归属窗口）。改为 include windows.platforms，
+遍历每个窗口的 PlatformAccount 验证并按窗口更新 loginStatus。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 7: 修复 douyinCrawler.ts NodeList 迭代错误
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`
+
+TS2488 错误：NodeList 需 `Array.from()` 包裹才能迭代。
+
+- [ ] **Step 1: 定位所有 TS2488 错误行**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts.*TS2488"
+```
+记录所有行号。
+
+- [ ] **Step 2: 逐处修复 NodeList 迭代**
+
+对每个报错行，按模式修复：
+
+`for (const el of all)` → `for (const el of Array.from(all))`
+
+`containers.forEach((c: Element) => {...})` → `Array.from(containers).forEach((c: Element) => {...})`
+
+`for (const child of el.children)` → `for (const child of Array.from(el.children))`
+
+逐行用 Edit 工具修改，每处保留原缩进与逻辑。
+
+- [ ] **Step 3: 验证 TS2488 清零**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts.*TS2488" || echo "ok"
+```
+Expected: `ok`
+
+- [ ] **Step 4: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/crawlers/douyinCrawler.ts
+git commit -m "fix(douyinCrawler): NodeList 迭代用 Array.from 包裹
+
+TS2488：tsconfig target 不支持 NodeList 原生迭代，统一 Array.from 包裹。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 8: 修复 douyinCrawler.ts safeEvaluate 返回类型断言
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`
+
+`safeEvaluate` 返回 `unknown`，调用方需 `as Type` 断言。涉及 TS2322/TS2339/TS18046/TS2698 等。
+
+- [ ] **Step 1: 定位 safeEvaluate 调用导致类型错误的行**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts" | grep -E "TS2322|TS18046|TS2698|TS2345"
+```
+记录行号与期望类型。
+
+- [ ] **Step 2: 逐处添加类型断言**
+
+对每个报错行，在 `safeEvaluate(...)` 调用末尾 `opts)` 后补 `as ExpectedType`。模式：
+
+```typescript
+// 原
+const rootCid = await HumanActions.safeEvaluate(page, fn, opts);
+// 改
+const rootCid = await HumanActions.safeEvaluate(page, fn, opts) as string;
+```
+
+常见期望类型（按上下文判断）：
+- 返回字符串 → `as string`
+- 返回布尔 → `as boolean`
+- 返回数组 → `as SomeType[]`
+- 返回坐标对象 → `as { x: number; y: number } | null`
+- 返回诊断对象 → `as { length: number } | {}`（并在使用前加 `'length' in obj` 守卫）
+
+对 spread 错误（TS2698）：`{ ...verifyResult }` → `{ ...(verifyResult as Record<string, unknown>) }`
+
+逐行用 Edit 工具修改。
+
+- [ ] **Step 3: 验证类型断言错误减少**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts" | grep -E "TS2322|TS18046|TS2698|TS2345" | wc -l
+```
+Expected: `0`
+
+- [ ] **Step 4: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/crawlers/douyinCrawler.ts
+git commit -m "fix(douyinCrawler): safeEvaluate 返回 unknown 补类型断言
+
+safeEvaluate 返回 unknown，调用方按上下文补 as Type 断言（string/boolean/
+对象|null 等），spread 用 Record 断言。仅类型修改不改运行时逻辑。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 9: 修复 douyinCrawler.ts 空对象与 innerText 错误
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`
+
+TS2339：`{}` 类型属性访问、`Element` 无 `innerText`。
+
+- [ ] **Step 1: 定位剩余 TS2339 错误**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts.*TS2339"
+```
+记录行号。
+
+- [ ] **Step 2: 修复空对象属性访问**
+
+对返回 `{}` 的 safeEvaluate，在函数表达式加返回类型注解 + 调用处 `as Type`，使用前加类型守卫。模式：
+
+```typescript
+// 原
+const btnDiagnostic = await HumanActions.safeEvaluate(page, () => {
+  return btn ? { length: btn.textContent?.length || 0 } : {};
+});
+btnDiagnostic.length  // 错误
+// 改
+const btnDiagnostic = await HumanActions.safeEvaluate(page, (): { length: number } | {} => {
+  return btn ? { length: btn.textContent?.length || 0 } : {};
+}, { reason: '...' }) as { length: number } | {};
+if ('length' in btnDiagnostic) {
+  // 使用 btnDiagnostic.length
+}
+```
+
+对返回坐标 `{ x, y }` 的，注解为 `as { x: number; y: number } | null`，使用前判空。
+
+- [ ] **Step 3: 修复 Element.innerText**
+
+对 `el.innerText` 报错（el 为 `Element`），改为 `(el as HTMLElement).innerText`。
+
+- [ ] **Step 4: 验证 douyinCrawler.ts 全部错误清零**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "douyinCrawler.ts" || echo "ok"
+```
+Expected: `ok`
+
+- [ ] **Step 5: 运行测试验证功能不回归**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && OSS_ACCESS_KEY_ID=dummy OSS_ACCESS_KEY_SECRET=dummy npx jest 2>&1 | tail -20
+```
+Expected: 全部测试通过。
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/crawlers/douyinCrawler.ts
+git commit -m "fix(douyinCrawler): 空对象属性访问与 Element.innerText 类型修复
+
+safeEvaluate 返回空对象补返回类型注解+断言+类型守卫；Element 转
+HTMLElement 访问 innerText。仅类型修改。douyinCrawler.ts 编译零错误。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 10: 前端双区块重构——操作员管理区块
+
+**Files:**
+- Modify: `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`
+
+拆分单一组件为双区块。本任务先做区块 A「操作员管理」：操作员表单去掉窗口字段，作为独立新增入口。
+
+- [ ] **Step 1: 读取当前组件结构与状态**
+
+读取 `OperatorManagement.tsx` 第 130-360 行，确认现有状态：`formWechatId/formDisplayName/formPhone/formWindowId/editingId/showAddForm`。
+
+- [ ] **Step 2: 操作员表单移除"绑定窗口"字段**
+
+定位"添加/编辑表单"内第 589-603 行的"绑定窗口（可选）"`<select>` 块，整段删除。操作员表单仅保留：企微ID（含获取ID按钮）、显示名称、手机号。
+
+- [ ] **Step 3: handleCreate 移除窗口绑定逻辑**
+
+定位第 230-254 行 `handleCreate`，移除其中 `formWindowId` 相关分支：
+```typescript
+  const handleCreate = () => {
+    if (!formWechatId.trim() || !formDisplayName.trim()) return;
+    createOperator.mutate(
+      { wechatUserId: formWechatId.trim(), displayName: formDisplayName.trim(), phone: formPhone.trim() || undefined },
+      {
+        onSuccess: () => { resetForm(); },
+        onError: (err: any) => {
+          alert(`创建用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+        },
+      },
+    );
+  };
+```
+
+- [ ] **Step 4: 移除 formWindowId 状态与 unboundWindows（操作员侧）**
+
+删除 `const [formWindowId, setFormWindowId]` 状态声明；删除 `const unboundWindows = windows.filter(...)`（移至窗口区块使用）。`resetForm` 中移除 `setFormWindowId`。
+
+- [ ] **Step 5: 调整区块标题与文案**
+
+将 Header 标题"用户管理"改为"操作员管理"，副文案改为"每个操作员对应一个企业微信用户，绑定窗口后在窗口下管理平台账号"。"添加用户"按钮文案改为"新增操作员"。
+
+- [ ] **Step 6: 验证前端构建**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | tail -15
+```
+Expected: 构建成功，无类型错误。
+
+- [ ] **Step 7: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx
+git commit -m "refactor(admin): 操作员管理区块——表单移除窗口字段，独立新增入口
+
+DB spec 4.9：操作员与窗口解耦。操作员表单仅含企微ID/名称/手机，
+新增操作员不再混填窗口。窗口绑定移至窗口管理区块（下个任务）。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 11: 前端双区块重构——窗口管理绑定操作员下拉
+
+**Files:**
+- Modify: `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`
+
+区块 B「窗口管理」：窗口卡片加「绑定操作员」下拉，方向纠正为"窗口选操作员"。
+
+- [ ] **Step 1: 在窗口卡片加绑定操作员下拉**
+
+定位窗口列表中 BitBrowser/RoxyBrowser 窗口卡片渲染（约第 400-419 行、443-462 行）。在每个窗口卡片 `<div>` 内，操作员名显示处，替换为绑定下拉：
+
+```tsx
+<div key={w.id} className={cn('flex items-center gap-2 px-3 py-2 rounded-lg border text-xs', w.status === 'bound' ? 'border-primary/30 bg-primary/5' : 'border-outline-variant bg-surface')}>
+  <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
+  <div className="min-w-0 flex-1">
+    <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
+    <select
+      className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
+      value={w.boundOperatorId ?? ''}
+      onChange={(e) => {
+        const opId = e.target.value ? Number(e.target.value) : null;
+        if (opId) {
+          bindWindow.mutate({ windowId: w.id, operatorId: opId });
+        }
+      }}
+    >
+      <option value="">选择操作员…</option>
+      {operators.map((op) => (
+        <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
+      ))}
+    </select>
+  </div>
+  {w.status === 'bound' && w.boundOperatorId && (
+    <button
+      onClick={() => unbindWindow.mutate(w.id)}
+      disabled={unbindWindow.isPending}
+      className="text-on-surface-variant hover:text-error text-xs"
+      title="解绑"
+    >
+      <MaterialIcon icon="link_off" size="xs" />
+    </button>
+  )}
+</div>
+```
+
+- [ ] **Step 2: 确认 useBindWindow/useUnbindWindow/useOperators 已存在**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && grep -n "useBindWindow\|useUnbindWindow\|useOperators" apps/admin-dashboard/src/hooks/useApi.ts | head
+```
+Expected: 三个 hook 均存在（核查已确认）。
+
+- [ ] **Step 3: 确认窗口数据含 boundOperatorId 与 operator 关联**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && grep -n "boundOperatorId\|interface BrowserWindowItem" apps/admin-dashboard/src/hooks/useApi.ts | head
+```
+若 BrowserWindowItem 无 boundOperatorId 字段，在类型定义中补 `boundOperatorId: number | null`，并确认后端 GET /windows 返回该字段。
+
+- [ ] **Step 4: 解构 bindWindow/unbindWindow/operators**
+
+确认组件顶部已从 useApi 解构：`useBindWindow`、`useUnbindWindow`、`useOperators`（操作员列表）。若 useOperators 未解构则补上：
+```typescript
+const { data: operators = [] } = useOperators();
+const bindWindow = useBindWindow();
+const unbindWindow = useUnbindWindow();
+```
+
+- [ ] **Step 5: 验证前端构建**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | tail -15
+```
+Expected: 构建成功。
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx
+git commit -m "refactor(admin): 窗口管理区块——绑定操作员下拉，纠正绑定方向
+
+DB spec 4.9：窗口卡片加「绑定操作员」下拉（选项=操作员列表），
+方向从'操作员选窗口'纠正为'窗口选操作员'。已绑定窗口显示解绑按钮。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 12: 端到端验证
+
+**Files:**
+- Verify: 全链路
+
+- [ ] **Step 1: 重新构建并重启容器**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && docker compose up -d --build sm-ts-api sm-admin-dashboard
+```
+Expected: 两个容器重建并启动。
+
+- [ ] **Step 2: 验证后端启动正常（db push 不报错）**
+
+Run:
+```bash
+docker logs sm-ts-api --tail 30 2>&1 | grep -iE "error|listening|ready|started" | tail -10
+```
+Expected: 看到 listening/started，无 users 表相关错误。
+
+- [ ] **Step 3: 验证 users 表未重建**
+
+Run:
+```bash
+docker exec sm-postgres psql -U sm_admin -d social_media -t -c "SELECT to_regclass('users');"
+```
+Expected: 空输出。
+
+- [ ] **Step 4: 验证涉及文件编译零错误**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep -E "operators.ts|douyinCrawler.ts" || echo "ok"
+```
+Expected: `ok`
+
+- [ ] **Step 5: 验证前端双区块渲染**
+
+打开浏览器访问 admin-dashboard，进入"用户管理"tab：
+- 看到「操作员管理」区块，"新增操作员"按钮，表单无窗口字段。
+- 看到「窗口管理」区块，每个窗口卡片有"选择操作员…"下拉。
+
+- [ ] **Step 6: 端到端流程验证**
+
+1. 「新增操作员」→ 填企微ID+名称 → 创建成功，操作员列表出现。
+2. 窗口卡片下拉选刚建的操作员 → 窗口显示操作员名。
+3. 验证 platform_accounts 写入：
+```bash
+docker exec sm-postgres psql -U sm_admin -d social_media -c "SELECT id, window_id, platform, login_status FROM platform_accounts;"
+```
+Expected: 暂无平台账号（需先加平台）。
+4. 调用添加平台 API（前端或 curl）→ platform_accounts 出现记录。
+5. verify-login → platform_accounts.loginStatus 更新、login_verifications 写入 windowId+platform：
+```bash
+docker exec sm-postgres psql -U sm_admin -d social_media -c "SELECT window_id, platform, status FROM login_verifications;"
+```
+Expected: 无 operatorId 列，含 window_id。
+
+- [ ] **Step 7: 运行测试套件**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && OSS_ACCESS_KEY_ID=dummy OSS_ACCESS_KEY_SECRET=dummy npx jest 2>&1 | tail -10
+```
+Expected: 全部通过。
+
+- [ ] **Step 8: 最终 Commit（如有验证中的小修）**
+
+```bash
+git add -A
+git commit -m "test: 端到端验证通过——两设计融合落地
+
+删 users 孤儿、operators.ts 迁移 PlatformAccount、douyinCrawler 编译清零、
+前端双区块。建操作员→绑窗口→加平台→验证登录链路通畅。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## 自校验
+
+**1. Spec 覆盖：**
+
+| spec 改动域 | 对应 Task |
+|---|---|
+| 改动域2 删 users 孤儿 | Task 1 |
+| 改动域5 operators.ts 迁移（monitorQueue/operatorPlatform/loginVerification/verify-all） | Task 2,3,4,5,6 |
+| 改动域3 编译清零（douyinCrawler） | Task 7,8,9 |
+| 改动域1 前端双区块 | Task 10,11 |
+| 端到端验证 | Task 12 |
+| 改动域4 多窗口遍历 | 已核查落地，无 Task |
+
+覆盖完整。
+
+**2. 占位符扫描：** 无 TBD/TODO，每个代码步骤含完整代码。
+
+**3. 类型一致性：**
+- PlatformAccount 唯一键名 `idx_platform_account_window_platform`（Task 3/5/6 一致，来自 schema 第 378 行）
+- `bindWindow({ windowId, operatorId })`（Task 11 与 hooks 一致）
+- LoginVerification 字段 `windowId/platform/status/detail`（Task 5 与 schema 第 384-396 行一致）
+
+---
+
+## 成功标准
+
+1. `User` 模型删除、`users` 物理表删除、重启不重建（Task 1, 12-Step3）。
+2. `operators.ts` 无 `prisma.operatorPlatform` / `monitorQueue` 残留，平台操作走 `platformAccount`，`loginVerification` 用 windowId+platform（Task 2-6, 12-Step4）。
+3. `operators.ts` 与 `douyinCrawler.ts` tsc 零错误（Task 6-Step2, 9-Step4, 12-Step4）。
+4. 前端双区块：独立新增操作员入口 + 窗口侧绑定操作员下拉（Task 10-11, 12-Step5）。
+5. 端到端：建操作员→绑窗口→加平台→验证登录，platform_accounts/login_verifications 写入正确（Task 12-Step6）。
+6. `npx jest` 全绿（Task 9-Step5, 12-Step7）。
