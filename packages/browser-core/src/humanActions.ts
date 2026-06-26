@@ -6,6 +6,8 @@ import { CDPHumanMouse } from './cdpMouse';
 import { CDPScroller, ScrollOptions } from './cdpScroller';
 import { BehaviorNoise } from './behaviorNoise';
 import { rootLogger } from '../logger';
+import { MaintenanceProbe } from './maintenanceProbe';
+import type { ResolvedSelector } from './selectorRegistry';
 const logger = rootLogger.child({ name: 'humanActions' });
 
 interface CDPContext {
@@ -1828,5 +1830,135 @@ export class HumanActions {
       logger.warn({ frameName, containerSelector, error: err.message }, 'cdpScrollContainerInFrame failed');
       return false;
     }
+  }
+
+  // ============================================================
+  // 回退点击 — 主选择器失效时自动回退到备选列表
+  // ============================================================
+
+  /**
+   * 带多级回退的点击。先尝试 primary 选择器，失败后按序尝试 fallbacks。
+   * 每步通过 MaintenanceProbe 记录选择器查找结果。
+   */
+  static async clickWithFallback(
+    page: Page,
+    selector: ResolvedSelector,
+    options: {
+      /** 当 primary 失败、fallback 成功时触发 */
+      onFallbackTriggered?: (failedPrimary: string, successSelector: string, selectorKey: string) => void;
+    } = {},
+  ): Promise<void> {
+    const start = Date.now();
+
+    const record = async (used: string, source: 'primary' | 'fallback_1' | 'fallback_2', result: 'found' | 'not_found') => {
+      await MaintenanceProbe.recordSelectorOp({
+        selectorKey: selector.selectorKey,
+        selectorUsed: used,
+        selectorSource: source,
+        result,
+        durationMs: Date.now() - start,
+      });
+    };
+
+    // ── Primary ──
+    const primaryLoc = page.locator(selector.primary);
+    if ((await primaryLoc.count()) > 0) {
+      await primaryLoc.click();
+      await record(selector.primary, 'primary', 'found');
+      return;
+    }
+    await record(selector.primary, 'primary', 'not_found');
+
+    // ── Fallbacks ──
+    for (let i = 0; i < selector.fallbacks.length; i++) {
+      const fb = selector.fallbacks[i];
+      const fbLoc = page.locator(fb);
+      if ((await fbLoc.count()) > 0) {
+        await fbLoc.click();
+        const source = (i === 0 ? 'fallback_1' : 'fallback_2') as 'fallback_1' | 'fallback_2';
+        await record(fb, source, 'found');
+        if (options.onFallbackTriggered) {
+          options.onFallbackTriggered(selector.primary, fb, selector.selectorKey);
+        }
+        return;
+      }
+      const source = (i === 0 ? 'fallback_1' : 'fallback_2') as 'fallback_1' | 'fallback_2';
+      await record(fb, source, 'not_found');
+    }
+  }
+
+  // ============================================================
+  // 范围限定查找 — 在 scope 内查找元素并反蜜罐检测
+  // ============================================================
+
+  /**
+   * 在 scope 选择器限定的范围内查找目标元素。
+   * 如果 scope 不存在返回 scopeNotFound；如果元素尺寸过小标记为蜜罐。
+   * 每步通过 MaintenanceProbe 记录选择器查找结果。
+   */
+  static async findInScope(
+    page: Page,
+    selector: ResolvedSelector,
+    _options: Record<string, unknown> = {},
+  ): Promise<{ found: boolean; scopeNotFound?: boolean }> {
+    const start = Date.now();
+    const scopeSel = selector.scope;
+    const primarySel = selector.primary;
+
+    // ── 检查 scope ──
+    if (scopeSel) {
+      const scopeLoc = page.locator(scopeSel);
+      if ((await scopeLoc.count()) === 0) {
+        await MaintenanceProbe.recordSelectorOp({
+          selectorKey: selector.selectorKey,
+          selectorUsed: scopeSel,
+          selectorSource: 'primary',
+          result: 'scope_not_found',
+          durationMs: Date.now() - start,
+          scopeSelector: scopeSel,
+        });
+        return { found: false, scopeNotFound: true };
+      }
+    }
+
+    // ── 查找目标 ──
+    const targetLoc = page.locator(primarySel);
+    if ((await targetLoc.count()) === 0) {
+      await MaintenanceProbe.recordSelectorOp({
+        selectorKey: selector.selectorKey,
+        selectorUsed: primarySel,
+        selectorSource: 'primary',
+        result: 'not_found',
+        durationMs: Date.now() - start,
+        scopeSelector: scopeSel,
+      });
+      return { found: false };
+    }
+
+    // ── 反蜜罐：检查物理尺寸 ──
+    const box = await targetLoc.boundingBox();
+    if (box && (box.width < 10 || box.height < 10)) {
+      await MaintenanceProbe.recordSelectorOp({
+        selectorKey: selector.selectorKey,
+        selectorUsed: primarySel,
+        selectorSource: 'primary',
+        result: 'honeypot_blocked',
+        durationMs: Date.now() - start,
+        scopeSelector: scopeSel,
+        honeypotReason: 'too-small',
+      });
+      return { found: false };
+    }
+
+    // ── 成功找到 ──
+    await MaintenanceProbe.recordSelectorOp({
+      selectorKey: selector.selectorKey,
+      selectorUsed: primarySel,
+      selectorSource: 'primary',
+      result: 'found',
+      durationMs: Date.now() - start,
+      scopeSelector: scopeSel,
+    });
+    return { found: true };
   }
 }
