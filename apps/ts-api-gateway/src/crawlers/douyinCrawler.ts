@@ -3892,7 +3892,7 @@ export class DouyinCrawler {
           return HumanActions.safeEvaluate(page, () => {
             const expandable: string[] = [];
             const all = document.querySelectorAll('*');
-            for (const el of all) {
+            for (const el of Array.from(all)) {
               const t = (el.textContent || '').trim();
               if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
               const isLeaf = !Array.from(el.children).some(child =>
@@ -3909,7 +3909,7 @@ export class DouyinCrawler {
           return page.evaluate(() => {
             const expandable: string[] = [];
             const all = document.querySelectorAll('*');
-            for (const el of all) {
+            for (const el of Array.from(all)) {
               const t = (el.textContent || '').trim();
               if (!/^查看\d+条回复$/.test(t) || !(el instanceof HTMLElement)) continue;
               const isLeaf = !Array.from(el.children).some(child =>
@@ -4415,7 +4415,7 @@ export class DouyinCrawler {
             return null;
           }, { btnX: btnCoords.x, btnY: btnCoords.y });
         }
-      })();
+      })() as { x: number; y: number } | null;
 
       // ★ 检测并处理客服悬浮窗遮挡发送按钮
       let submitClicked = false;
@@ -4539,7 +4539,7 @@ export class DouyinCrawler {
             }
           })();
 
-          if (hidden > 0) {
+          if ((hidden as number) > 0) {
             logger.info({ hiddenCount: hidden }, '[Reply] 客服悬浮窗已隐藏');
             await HumanActions.wait(page, 300, 600);
           }
@@ -4724,18 +4724,18 @@ export class DouyinCrawler {
                   }
                 }
               }
-              return null;
-            });
-          }
-        })();
-        if (fallbackBtn) {
-          await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
-            await ctx.mouse.moveTo({ x: fallbackBtn.x, y: fallbackBtn.y });
-            await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
-            await ctx.mouse.clickAt(fallbackBtn.x, fallbackBtn.y);
-          });
-          submitClicked = true;
-          logger.info({ x: fallbackBtn.x, y: fallbackBtn.y }, '[Reply] 通过文本匹配点击了发送按钮');
+            return null;
+          }, { btnX: btnCoords.x, btnY: btnCoords.y });
+        }
+      })() as { x: number; y: number } | null;
+      if (fallbackBtn) {
+        await (HumanActions as any).withCDPContext(page, async (ctx: any) => {
+          await ctx.mouse.moveTo({ x: fallbackBtn.x, y: fallbackBtn.y });
+          await new Promise(r => setTimeout(r, 100 + Math.random() * 200));
+          await ctx.mouse.clickAt(fallbackBtn.x, fallbackBtn.y);
+        });
+        submitClicked = true;
+        logger.info({ x: fallbackBtn.x, y: fallbackBtn.y }, '[Reply] 通过文本匹配点击了发送按钮');
         }
       }
       if (!submitClicked) logger.warn('[Reply] Submit not found, but text was typed');
@@ -4795,7 +4795,7 @@ export class DouyinCrawler {
             return { editableText: 'none' };
           });
         }
-      })();
+      })() as { error?: string; editableText?: string };
       logger.info({ verifyResult, urlChanged, urlAfterSubmit }, '[Reply] 提交后验证');
       await snap('verify_result', { ...verifyResult, urlChanged, urlAfterSubmit });
 
@@ -4988,7 +4988,7 @@ export class DouyinCrawler {
           var containers = document.querySelectorAll(sels[si]);
           for (var ci = 0; ci < containers.length; ci++) {
             var container = containers[ci];
-            var containerText = (container.innerText || '').trim();
+            var containerText = ((container as HTMLElement).innerText || '').trim();
             if (containerText.length < 3) continue;
 
             function bareUsernameText(el: Element): string {
@@ -5062,7 +5062,7 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, { reason: '通过用户名+内容匹配根评论', world: 'main', args: [{ username: targetUsername, text: targetText, subReplyCount: targetSubReplyCount, sels: containerSels }] });
+      }, { reason: '通过用户名+内容匹配根评论', world: 'main', args: [{ username: targetUsername, text: targetText, subReplyCount: targetSubReplyCount, sels: containerSels }] }) as { x: number; y: number; containerSel: string; isExpanded: boolean; subReplyCountInPage: number; } | null;
     } else {
       return await page.evaluate(function(params) {
         var username = params.username;
@@ -5075,7 +5075,7 @@ export class DouyinCrawler {
           var containers = document.querySelectorAll(sels[si]);
           for (var ci = 0; ci < containers.length; ci++) {
             var container = containers[ci];
-            var containerText = (container.innerText || '').trim();
+            var containerText = ((container as HTMLElement).innerText || '').trim();
             if (containerText.length < 3) continue;
 
             function bareUsernameText(el: Element): string {
@@ -5184,7 +5184,7 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, { reason: '在容器内查找回复按钮', world: 'main', args: [containerSel] });
+      }, { reason: '在容器内查找回复按钮', world: 'main', args: [containerSel] }) as { x: number; y: number } | null;
     } else {
       return await page.evaluate(function(sel) {
         var container = document.querySelector(sel);
@@ -5390,7 +5390,7 @@ export class DouyinCrawler {
           return null;
         }, { px: root.x, py: root.y });
       }
-    })();
+    })() as { rect: { x: number; y: number; w: number; h: number }; loadMoreText: { type: string; x: number; y: number } | null } | null;
 
     if (!rootInfo) {
       logger.warn({ x: root.x, y: root.y }, '[Expand] root wrapper not found via elementFromPoint');
@@ -5533,7 +5533,7 @@ export class DouyinCrawler {
           return { x: Math.round(wr.left + wr.width / 2), y: Math.round(wr.top + wr.height / 2) };
         }
         return null;
-      }, { reason: '在根评论内找目标子评论', world: 'main', args: [{ username: targetUsername, text: targetText, rx: root.x, ry: root.y }] });
+      }, { reason: '在根评论内找目标子评论', world: 'main', args: [{ username: targetUsername, text: targetText, rx: root.x, ry: root.y }] }) as { x: number; y: number } | null;
     } else {
       return await page.evaluate(function(params) {
         var username = params.username;
@@ -5699,7 +5699,7 @@ export class DouyinCrawler {
           return null;
         }, { rx: root.x, ry: root.y });
       }
-    })();
+    })() as { x: number; y: number } | null;
 
     if (!btnPos) return false;
 
@@ -5729,7 +5729,7 @@ export class DouyinCrawler {
               if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
                 var rect = btns[i].getBoundingClientRect();
                 if (rect.width > 0 && rect.height > 0) {
-                  btns[i].click();
+                  (btns[i] as HTMLElement).click();
                   return true;
                 }
               }
@@ -5744,7 +5744,7 @@ export class DouyinCrawler {
               if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
                 var rect = btns[i].getBoundingClientRect();
                 if (rect.width > 0 && rect.height > 0) {
-                  btns[i].click();
+                  (btns[i] as HTMLElement).click();
                   return true;
                 }
               }
@@ -5773,7 +5773,7 @@ export class DouyinCrawler {
           return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
         });
       }
-    })();
+    })() as { st: number; ch: number; sh: number } | null;
     if (!sh) {
       logger.warn('[Reply::Find] Container gone, stopping');
       return false;
@@ -5853,7 +5853,7 @@ export class DouyinCrawler {
           return { x: Math.round(er.left + er.width / 2), y: Math.round(er.top + er.height / 2) };
         }
         return null;
-      }, { reason: '最终全扫回退匹配回复按钮', world: 'main', args: [{ username: targetUsername, text: targetText }] });
+      }, { reason: '最终全扫回退匹配回复按钮', world: 'main', args: [{ username: targetUsername, text: targetText }] }) as { x: number; y: number } | null;
     } else {
       return await page.evaluate(function(params) {
         var username = params.username;
