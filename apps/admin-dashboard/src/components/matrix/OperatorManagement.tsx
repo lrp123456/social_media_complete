@@ -188,13 +188,12 @@ export default function OperatorManagement() {
   const [formWechatId, setFormWechatId] = useState('');
   const [formDisplayName, setFormDisplayName] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [formWindowId, setFormWindowId] = useState<number | null>(null);
+
 
   const resetForm = () => {
     setFormWechatId('');
     setFormDisplayName('');
     setFormPhone('');
-    setFormWindowId(null);
     setShowAddForm(false);
     setEditingId(null);
     setLinkCode('');
@@ -232,20 +231,7 @@ export default function OperatorManagement() {
     createOperator.mutate(
       { wechatUserId: formWechatId.trim(), displayName: formDisplayName.trim(), phone: formPhone.trim() || undefined },
       {
-        onSuccess: (data: any) => {
-          // If a window was selected, bind it
-          if (formWindowId && data?.id) {
-            bindWindow.mutate(
-              { windowId: formWindowId, operatorId: data.id },
-              {
-                onError: (err: any) => {
-                  alert(`用户已创建，但绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-                },
-              },
-            );
-          }
-          resetForm();
-        },
+        onSuccess: () => { resetForm(); },
         onError: (err: any) => {
           alert(`创建用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
         },
@@ -258,29 +244,7 @@ export default function OperatorManagement() {
     updateOperator.mutate(
       { id: editingId, wechatUserId: formWechatId.trim(), displayName: formDisplayName.trim(), phone: formPhone.trim() || undefined },
       {
-        onSuccess: () => {
-          // Handle window binding changes
-          const currentWindow = operators.find((op) => op.id === editingId)?.windows[0];
-          if (formWindowId && formWindowId !== currentWindow?.id) {
-            // Bind new window
-            bindWindow.mutate(
-              { windowId: formWindowId, operatorId: editingId },
-              {
-                onError: (err: any) => {
-                  alert(`用户信息已更新，但绑定窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-                },
-              },
-            );
-          } else if (!formWindowId && currentWindow) {
-            // Unbind current window
-            unbindWindow.mutate(currentWindow.id, {
-              onError: (err: any) => {
-                alert(`用户信息已更新，但解绑窗口失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
-              },
-            });
-          }
-          resetForm();
-        },
+        onSuccess: () => { resetForm(); },
         onError: (err: any) => {
           alert(`更新用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
         },
@@ -293,7 +257,6 @@ export default function OperatorManagement() {
     setFormWechatId(op.wechatUserId);
     setFormDisplayName(op.displayName);
     setFormPhone(op.phone || '');
-    setFormWindowId(op.windows[0]?.id || null);
     setShowAddForm(false);
   };
 
@@ -338,9 +301,9 @@ export default function OperatorManagement() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-headline-md text-on-surface">用户管理</h2>
+          <h2 className="text-headline-md text-on-surface">操作员管理</h2>
           <p className="text-body-sm text-on-surface-variant mt-1">
-            每个用户绑定一个窗口，窗口内管理多个平台账号。用户ID为企业微信ID。
+            每个操作员对应一个企业微信用户，绑定窗口后在窗口下管理平台账号。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -357,7 +320,7 @@ export default function OperatorManagement() {
             className="btn-primary flex items-center gap-1.5"
           >
             <MaterialIcon icon="add" size="sm" />
-            添加用户
+            新增操作员
           </button>
         </div>
       </div>
@@ -412,9 +375,32 @@ export default function OperatorManagement() {
                     <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
                     <div className="min-w-0 flex-1">
                       <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
-                      {w.operator && <p className="text-on-surface-variant truncate">{w.operator.displayName}</p>}
+                      <select
+                        className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
+                        value={w.boundOperatorId ?? ''}
+                        onChange={(e) => {
+                          const opId = e.target.value ? Number(e.target.value) : null;
+                          if (opId) {
+                            bindWindow.mutate({ windowId: w.id, operatorId: opId });
+                          }
+                        }}
+                      >
+                        <option value="">选择操作员…</option>
+                        {operators.map((op: Operator) => (
+                          <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
+                        ))}
+                      </select>
                     </div>
-                    {w.status === 'bound' && <span className="w-2 h-2 rounded-full bg-primary shrink-0" />}
+                    {w.status === 'bound' && w.boundOperatorId && (
+                      <button
+                        onClick={() => unbindWindow.mutate(w.id)}
+                        disabled={unbindWindow.isPending}
+                        className="text-on-surface-variant hover:text-error text-xs"
+                        title="解绑"
+                      >
+                        <MaterialIcon icon="link_off" size="xs" />
+                      </button>
+                    )}
                   </div>
                 ))}
               {/* Placeholder slots */}
@@ -455,9 +441,32 @@ export default function OperatorManagement() {
                     <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
                     <div className="min-w-0 flex-1">
                       <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
-                      {w.operator && <p className="text-on-surface-variant truncate">{w.operator.displayName}</p>}
+                      <select
+                        className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
+                        value={w.boundOperatorId ?? ''}
+                        onChange={(e) => {
+                          const opId = e.target.value ? Number(e.target.value) : null;
+                          if (opId) {
+                            bindWindow.mutate({ windowId: w.id, operatorId: opId });
+                          }
+                        }}
+                      >
+                        <option value="">选择操作员…</option>
+                        {operators.map((op: Operator) => (
+                          <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
+                        ))}
+                      </select>
                     </div>
-                    {w.status === 'bound' && <span className="w-2 h-2 rounded-full bg-primary shrink-0" />}
+                    {w.status === 'bound' && w.boundOperatorId && (
+                      <button
+                        onClick={() => unbindWindow.mutate(w.id)}
+                        disabled={unbindWindow.isPending}
+                        className="text-on-surface-variant hover:text-error text-xs"
+                        title="解绑"
+                      >
+                        <MaterialIcon icon="link_off" size="xs" />
+                      </button>
+                    )}
                   </div>
                 ))}
               {/* Placeholder slots */}
@@ -532,8 +541,8 @@ export default function OperatorManagement() {
       {/* Add / Edit Form (inline) */}
       {(showAddForm || editingId) && (
         <div className="p-4 bg-surface-container-lowest rounded-xl border border-primary/30 shadow-sm">
-          <h3 className="text-label-md text-on-surface mb-3">{editingId ? '编辑用户' : '添加新用户'}</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          <h3 className="text-label-md text-on-surface mb-3">{editingId ? '编辑操作员' : '新增操作员'}</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <div>
               <label className="text-body-sm text-on-surface-variant block mb-1">企业微信用户ID *</label>
               <div className="flex gap-2">
@@ -586,21 +595,6 @@ export default function OperatorManagement() {
                 placeholder="例如: 13800138000"
               />
             </div>
-            <div>
-              <label className="text-body-sm text-on-surface-variant block mb-1">绑定窗口（可选）</label>
-              <select
-                className="form-input w-full"
-                value={formWindowId || ''}
-                onChange={(e) => setFormWindowId(e.target.value ? Number(e.target.value) : null)}
-              >
-                <option value="">暂不绑定</option>
-                {unboundWindows.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.windowName || w.externalId} ({w.browserVendor})
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
           <div className="flex justify-end gap-2 mt-3">
             <button className="btn-ghost" onClick={resetForm}>取消</button>
@@ -628,7 +622,7 @@ export default function OperatorManagement() {
       {!isLoading && operators.length === 0 && (
         <div className="bento-card text-center py-12 rounded-xl">
           <MaterialIcon icon="people" size="3xl" className="text-outline mb-3 opacity-40" />
-          <p className="text-body-sm text-on-surface-variant">暂无用户，点击"添加用户"开始</p>
+          <p className="text-body-sm text-on-surface-variant">暂无操作员，点击"新增操作员"开始</p>
         </div>
       )}
 
@@ -728,7 +722,7 @@ export default function OperatorManagement() {
                     <MaterialIcon icon="link_off" size="sm" />
                   </button>
                 )}
-                <button onClick={() => startEdit(op)} className="btn-ghost px-2 py-1" title="编辑用户">
+                <button onClick={() => startEdit(op)} className="btn-ghost px-2 py-1" title="编辑操作员">
                   <MaterialIcon icon="edit" size="sm" />
                 </button>
                 {isDeleting ? (
