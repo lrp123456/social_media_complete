@@ -55,6 +55,7 @@
 | 数据搬迁脚本（Phase 0-3） | 未编写未执行，但 users 表 0 行，平凡满足零丢失 | ⚠️ 无数据可搬 |
 | **删除 users 表 + User 模型（spec 4.1）** | User 模型仍在 schema 第17行，users 物理表仍在（0行孤儿） | ❌ 未落地 |
 | **前端"操作员管理"+"窗口管理"双页（spec 4.9）** | 只有单一"用户管理"混合组件，方向反（操作员选窗口），无独立新增操作员入口、无窗口侧绑定操作员下拉 | ❌ 未落地 |
+| **operators.ts 平台操作迁移到 PlatformAccount（spec 3.2/4.5）** | 7 处 `prisma.operatorPlatform` 调用仍存（行476/484/516/580/633/640/740），OperatorPlatform 表/模型已删、Prisma Client 不含 operatorPlatform → 编译报错且运行时崩溃。添加平台/验证登录/verify-all 等核心流程未迁移到窗口下的 PlatformAccount | ❌ 未落地 |
 
 ### 2.3 物理库实际数据量
 
@@ -105,13 +106,31 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 核查确认 `verify-login`/`verify-all` 已遍历所有窗口（operators.ts 行590/712），spec 3.6 已落地，本域无代码改动。
 
+### 3.5b 改动域 5：operators.ts 平台操作迁移到 PlatformAccount（对齐 DB spec 3.2/4.5/3.9）
+
+**这是最致命的缺口**——`operators.ts` 的平台操作仍停留在已删除的 OperatorPlatform 模型，导致编译报错 + 运行时崩溃。OperatorPlatform 表/模型已删、Prisma Client 不含 `operatorPlatform`，但 7 处调用未迁移。需把这些操作改写为操作"窗口下的 PlatformAccount"，对齐"平台账号属于窗口"的四层模型：
+
+| 行号 | 旧调用（operatorPlatform） | 迁移后（platformAccount） |
+|---|---|---|
+| 476-478 | `findUnique` 查 (operatorId,platform) 重复 | 改为对操作员所有绑定窗口的 PlatformAccount 查重：`findFirst({ where: { window: { boundOperatorId: id }, platform } })` |
+| 484-486 | `create` 建平台绑定 | **添加平台语义变更**：平台账号属窗口，不能凭空加在操作员上。此接口改为：遍历操作员绑定窗口，为每个窗口 `upsert` PlatformAccount(windowId, platform, loginStatus:'unknown')；若无绑定窗口则 400 提示"请先绑定窗口" |
+| 516-518 | `delete` 删平台绑定 | 已部分迁移（行509-512 已查 platformAccount），删掉 operatorPlatform.delete，改为直接删 platformAccount（行522已做），去重 |
+| 580-583 | `update` loginStatus=checking | 改为 `platformAccount.updateMany({ where: { window: { boundOperatorId: id }, platform }, data: { loginStatus: 'checking' } })` |
+| 633-636 | `findUnique` 取上次 loginStatus | 改为 `platformAccount.findFirst({ where: { window: { boundOperatorId: id }, platform }, select: { loginStatus: true } })` |
+| 640-643 | `update` 写 loginStatus | 改为 `platformAccount.updateMany({ where: { window: { boundOperatorId: id }, platform }, data: { loginStatus, lastVerifiedAt: new Date() } })` |
+| 740-743 | `update`（verify-all） | 改为 `platformAccount.updateMany({ where: { windowId: window.id, platform: plat.platform }, data: { loginStatus, lastVerifiedAt: new Date() } })` |
+
+**连带缺口（LoginVerification）**：行 666-672 `loginVerification.create` 传 `operatorId`，但 schema 已改为 `windowId+platform`（无 operatorId，DB spec 3.9）。需改为在验证窗口循环内、按实际验证的窗口写入：`create({ data: { windowId: window.id, platform, status: loginStatus, detail } })`，移到 for-window 循环体内。
+
+**关键语义**：verify-login 遍历窗口时，每个窗口验证结果应分别写入该窗口的 PlatformAccount 与 LoginVerification（而非操作员级单一状态）。bestResult 取最佳结果用于响应，但持久化按窗口分别记录。
+
 ### 3.6 执行顺序与依赖
 
 ```
-改动域2(删User模型+prisma generate) ─→ 改动域3(编译清零) ─→ 改动域1(前端) ─→ 端到端验证
+改动域2(删User模型+prisma generate) ─→ 改动域5(operators.ts迁移) ─→ 改动域3(编译清零) ─→ 改动域1(前端) ─→ 端到端验证
 ```
 
-先 DB（影响 Prisma Client 类型）→ 编译清零 → 前端（独立）→ 重启容器端到端验证。
+先 DB（影响 Prisma Client 类型）→ operators.ts 迁移（解 operatorPlatform 编译错误）→ 编译清零（解 douyinCrawler 编译错误）→ 前端（独立）→ 重启容器端到端验证。改动域 5 必须在改动域 3 之前，否则 operators.ts 的编译错误与 douyinCrawler 混在一起难以定位。
 
 ---
 
@@ -129,7 +148,8 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 ### 4.3 后端编译
 
-- `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`：259 行类型错误修复。
+- `apps/ts-api-gateway/src/routes/operators.ts`：7 处 `prisma.operatorPlatform` 调用迁移到 `prisma.platformAccount`；`loginVerification.create` 改用 windowId+platform（改动域 5）。
+- `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts`：259 行类型错误修复（改动域 3）。
 
 ### 4.4 不改动
 
@@ -150,6 +170,7 @@ videos=0  comments=0  task_executions=0  login_verifications=0
        └─ 验证登录 → loginStatus + syncPlatformAuthorId
             └─ 监控调度: getAllActiveUsers() 读 platform_accounts
 删 users: User 模型移除 + DROP TABLE users → db push 同步 → 服务重启
+operators.ts 迁移: operatorPlatform → platformAccount（按窗口） + loginVerification 用 windowId
 编译清零: douyinCrawler.ts 类型断言 → tsc --noEmit 0 错误
 ```
 
@@ -177,6 +198,8 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 - `DROP TABLE users` 后，`users` 表不存在。
 - 重启 sm-ts-api 后服务正常启动，`platform_accounts` 可读写。
+- 添加平台账号 → `platform_accounts` 写入正确（windowId/platform/loginStatus）。
+- verify-login → `platform_accounts.loginStatus` + `login_verifications`（windowId+platform）正确写入，无 operatorId 残留。
 
 ### 7.3 前端验证
 
@@ -210,7 +233,8 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 1. 前端双区块落地：独立「新增操作员」入口 + 窗口侧「绑定操作员」下拉，方向正确。
 2. `User` 模型从 schema 删除，物理 `users` 表删除，服务重启不重建。
-3. `cd apps/ts-api-gateway && npx tsc --noEmit` 输出 0 错误。
-4. 端到端：建操作员→绑窗口→加平台账号→验证登录→platform_accounts 写入正常、表格有数据。
-5. `npx jest` 全绿，抖音三功能不回归。
-6. 业务代码无 `prisma.user` 残留。
+3. `operators.ts` 无 `prisma.operatorPlatform` 调用残留，平台操作全部走 `prisma.platformAccount`（按窗口），`loginVerification` 用 windowId+platform。
+4. `cd apps/ts-api-gateway && npx tsc --noEmit` 输出 0 错误。
+5. 端到端：建操作员→绑窗口→加平台账号→验证登录→platform_accounts 写入正常、表格有数据、verify-login/verify-all 不崩溃。
+6. `npx jest` 全绿，抖音三功能不回归。
+7. 业务代码无 `prisma.user` / `prisma.operatorPlatform` 残留。
