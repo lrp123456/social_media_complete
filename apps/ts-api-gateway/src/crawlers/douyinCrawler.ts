@@ -1122,7 +1122,7 @@ export class DouyinCrawler {
           const containers = document.querySelectorAll('[data-cid]');
           const el = containers[idx] as HTMLElement;
           return el?.dataset?.cid || '';
-        }, { reason: '读取根评论 data-cid', world: 'main', args: [containerIdx] });
+        }, { reason: '读取根评论 data-cid', world: 'main', args: [containerIdx] }) as string;
       } else {
         rootCid = await page.evaluate((idx: number) => {
           const containers = document.querySelectorAll('[data-cid]');
@@ -1179,7 +1179,7 @@ export class DouyinCrawler {
                   return /^查看\d+条回复$/.test(t) && el instanceof HTMLElement && el.children.length === 0;
                 });
                 return !!btn;
-              }, { reason: '检查展开按钮是否存在', world: 'main' });
+              }, { reason: '检查展开按钮是否存在', world: 'main' }) as boolean;
             } else {
               btnFound = await page.evaluate(() => {
                 const all = Array.from(document.querySelectorAll('*'));
