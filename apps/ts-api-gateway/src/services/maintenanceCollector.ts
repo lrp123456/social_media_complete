@@ -359,3 +359,12 @@ export class MaintenanceCollector {
     });
   }
 }
+
+/** Singleton instance for use throughout the app (lazy) */
+let _maintenanceCollector: MaintenanceCollector | null = null;
+export function getMaintenanceCollector(): MaintenanceCollector {
+  if (!_maintenanceCollector) {
+    _maintenanceCollector = new MaintenanceCollector();
+  }
+  return _maintenanceCollector;
+}

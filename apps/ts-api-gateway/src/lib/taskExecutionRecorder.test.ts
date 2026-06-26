@@ -14,6 +14,9 @@ jest.mock('./prisma', () => ({ prisma: mockPrisma }));
 jest.mock('./logger', () => ({
   createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }),
 }));
+jest.mock('../services/maintenanceCollector', () => ({
+  getMaintenanceCollector: () => ({ summarizeExecution: jest.fn().mockResolvedValue(undefined) }),
+}));
 
 import { startExecution, updatePhase, recordSelectorTry, finishExecution } from './taskExecutionRecorder';
 import type { ReplyTaskData } from '../services/unifiedQueue';

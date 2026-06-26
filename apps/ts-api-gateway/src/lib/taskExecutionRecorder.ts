@@ -40,6 +40,22 @@ export async function startExecution(task: PlatformTask, job: Job): Promise<stri
   jobCache.set(execution.id, job);
   startTimeCache.set(execution.id, Date.now());
   logger.info({ executionId: execution.id, taskId: task.taskId, taskType: task.taskType, isDebugMode }, 'Execution started');
+
+  // 维护调试：1:1 关联 MaintenanceExecution
+  try {
+    await prisma.maintenanceExecution.create({
+      data: {
+        taskExecutionId: execution.id,
+        platform: (task as any).platform || 'unknown',
+        flowType: task.taskType,
+        windowId: task.windowId,
+        userId: (task as any).userId ?? null,
+      },
+    });
+  } catch (err: any) {
+    logger.warn({ executionId: execution.id, error: err.message }, 'create MaintenanceExecution failed (non-fatal)');
+  }
+
   return execution.id;
 }
 
@@ -117,6 +133,14 @@ export async function finishExecution(
       where: { id: executionId },
       data: { status, completedAt: new Date(), durationMs, errorMessage: errorMessage ?? null },
     });
+
+    // 维护调试：汇总健康数据
+    try {
+      const { getMaintenanceCollector } = await import('../services/maintenanceCollector');
+      await getMaintenanceCollector().summarizeExecution(executionId);
+    } catch (err: any) {
+      logger.warn({ executionId, error: err.message }, 'summarizeExecution failed (non-fatal)');
+    }
   } catch (err: any) {
     logger.warn({ executionId, error: err.message }, 'finishExecution failed (non-fatal)');
   } finally {
