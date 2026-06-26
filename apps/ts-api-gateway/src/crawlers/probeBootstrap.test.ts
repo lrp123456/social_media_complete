@@ -1,4 +1,12 @@
 import { MaintenanceProbe } from '@social-media/browser-core';
+
+// mock getRedis to avoid @social-media/shared-config dependency in test env
+jest.mock('../lib/redis', () => ({
+  getRedis: () => ({
+    lpush: jest.fn().mockResolvedValue(1),
+  }),
+}));
+
 import { bootstrapProbe, teardownProbe } from './probeBootstrap';
 
 describe('probe bootstrap', () => {
