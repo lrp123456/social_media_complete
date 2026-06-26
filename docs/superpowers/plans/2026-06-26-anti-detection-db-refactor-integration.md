@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 补齐反检测收口与 DB 重构两设计合并 master 后未真正生效的缺口——删 users 孤儿表/模型、operators.ts 平台操作迁移到 PlatformAccount、douyinCrawler.ts 编译清零、前端双区块重构——使两设计真正可用。
+**Goal:** 补齐反检测收口与 DB 重构两设计合并 master 后未真正生效的缺口——删 users 孤儿表/模型、operators.ts 平台操作迁移到 PlatformAccount、douyinCrawler.ts 编译清零、前端主从面板（一操作员多窗口、每窗口独立管平台）——使两设计真正可用。
 
-**Architecture:** 后端核心契约已真实落地，缺口在"schema 收尾 + 后端未迁移调用方 + 前端可见层"。按依赖顺序：先删 User 模型重生成 Prisma Client → 迁移 operators.ts 的 operatorPlatform 调用到 platformAccount → 清零 douyinCrawler.ts 类型错误 → 重构前端双区块 → 端到端验证。
+**Architecture:** 后端核心契约已真实落地，缺口在"schema 收尾 + 后端未迁移调用方 + 前端可见层"。按依赖顺序：先删 User 模型重生成 Prisma Client → 迁移 operators.ts 的 operatorPlatform 调用到 platformAccount → 清零 douyinCrawler.ts 类型错误 → 清理 GET / 扁平化 + 前端类型 → 重构前端主从面板 → 端到端验证。
 
 **Tech Stack:** TypeScript + Prisma 6 + Next.js 14 + React Query + Patchright + BullMQ
 
@@ -19,9 +19,10 @@
 | 文件 | 职责 | 本次改动 |
 |---|---|---|
 | `prisma/schema.prisma` | 数据模型定义 | 删 `model User`（第 17-34 行） |
-| `apps/ts-api-gateway/src/routes/operators.ts` | 操作员/窗口/平台/登录验证路由 | 7 处 operatorPlatform→platformAccount、loginVerification 用 windowId、verify-all 重构、删 monitorQueue 残留导入 |
+| `apps/ts-api-gateway/src/routes/operators.ts` | 操作员/窗口/平台/登录验证路由 | 7 处 operatorPlatform→platformAccount、loginVerification 用 windowId、verify-all 重构、删 monitorQueue 残留导入、删 GET / 扁平化 platforms |
 | `apps/ts-api-gateway/src/crawlers/douyinCrawler.ts` | 抖音评论采集 | 58 处类型断言修复 |
-| `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx` | 用户管理页 | 拆双区块、操作员表单去窗口字段、窗口卡片加绑定操作员下拉 |
+| `apps/admin-dashboard/src/hooks/useApi.ts` | API hooks 与类型 | Operator.windows 补 platforms 嵌套、删顶层扁平 platforms |
+| `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx` | 用户管理页 | 改主从面板：左操作员列表 + 右详情（多窗口、每窗口独立管平台） |
 
 ---
 
@@ -757,24 +758,160 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 ---
 
-## Task 10: 前端双区块重构——操作员管理区块
+## Task 10: 后端清理 GET / 操作员列表的扁平化 platforms 字段
+
+**Files:**
+- Modify: `apps/ts-api-gateway/src/routes/operators.ts` (第 42-66 行)
+
+`GET /` 行 55-59 的"扁平化 `operator.platforms`"是 OperatorPlatform 时代遗留（Operator 已无 platforms 关系）。主从面板统一用 `op.windows[].platforms` 三级嵌套，删除扁平化避免误导。
+
+- [ ] **Step 1: 替换 GET / 路由处理体**
+
+将第 42-66 行替换为（去掉扁平化，直接返回三级嵌套）：
+
+```typescript
+router.get('/', async (_req: Request, res: Response) => {
+  try {
+    const operators = await prisma.operator.findMany({
+      include: {
+        windows: {
+          include: {
+            platforms: { select: { id: true, platform: true, loginStatus: true, lastVerifiedAt: true, monitoringEnabled: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    res.json({ success: true, data: operators });
+  } catch (err) {
+    logger.error({ err: (err as Error).message }, '获取操作员列表失败');
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+```
+
+- [ ] **Step 2: 验证 operators.ts 编译无错**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 | grep "operators.ts" || echo "ok"
+```
+Expected: `ok`
+
+- [ ] **Step 3: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/ts-api-gateway/src/routes/operators.ts
+git commit -m "refactor(operators): GET / 删除遗留扁平化 platforms，返回三级嵌套
+
+Operator 已无 platforms 关系（DB 重构后平台归属窗口）。
+删除 operator.platforms 扁平化，前端主从面板统一用
+op.windows[].platforms 三级嵌套。platforms select 补 id/monitoringEnabled。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 11: 前端类型更新——Operator.windows 补 platforms 嵌套
+
+**Files:**
+- Modify: `apps/admin-dashboard/src/hooks/useApi.ts` (第 1412-1422 行)
+
+`Operator` 类型 `windows` 当前缺 `platforms` 嵌套字段，且顶层 `platforms` 扁平字段应删（对齐后端 Task 10）。
+
+- [ ] **Step 1: 更新 Operator 类型定义**
+
+将第 1412-1422 行替换为：
+
+```typescript
+export type Operator = {
+  id: number;
+  wechatUserId: string;
+  displayName: string;
+  phone?: string;
+  role: 'admin' | 'operator';
+  enabled: boolean;
+  windows: Array<{
+    id: number;
+    externalId: string;
+    browserVendor: string;
+    windowName: string;
+    platforms: Array<{ id: number; platform: string; loginStatus: string; lastVerifiedAt?: string; monitoringEnabled: boolean }>;
+  }>;
+  createdAt: string;
+};
+```
+
+- [ ] **Step 2: 排查顶层 platforms 扁平字段的其他引用**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete && grep -rn "\.platforms" apps/admin-dashboard/src/ --include="*.tsx" --include="*.ts" | grep -v "windows\." | grep -v "useApi.ts"
+```
+Expected: 无输出或仅注释。若有组件仍读 `operator.platforms`，需改为 `operator.windows.flatMap(w => w.platforms)` 或在对应窗口上下文内读 `window.platforms`。
+
+- [ ] **Step 3: 验证前端类型构建**
+
+Run:
+```bash
+cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | grep -iE "error|platforms" | head
+```
+Expected: 无类型错误（Task 12 改组件前可能有遗留引用，记录但本步仅确认类型定义本身正确）。
+
+- [ ] **Step 4: Commit**
+
+```bash
+cd /home/lrp/social_media_complete
+git add apps/admin-dashboard/src/hooks/useApi.ts
+git commit -m "refactor(admin): Operator 类型补 windows[].platforms 嵌套，删顶层扁平字段
+
+对齐后端三级嵌套返回。Operator.windows.platforms 含
+id/platform/loginStatus/lastVerifiedAt/monitoringEnabled。
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+```
+
+---
+
+## Task 12: 前端主从面板重构——左操作员列表 + 右详情
 
 **Files:**
 - Modify: `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`
 
-拆分单一组件为双区块。本任务先做区块 A「操作员管理」：操作员表单去掉窗口字段，作为独立新增入口。
+把单一混合组件改为主从面板：左栏操作员列表（含独立新增入口），右栏选中操作员的窗口+平台账号详情。解决"只能 1:1 绑定"——一个操作员可绑多个窗口，每窗口独立管平台。
 
-- [ ] **Step 1: 读取当前组件结构与状态**
+- [ ] **Step 1: 读取当前组件结构**
 
-读取 `OperatorManagement.tsx` 第 130-360 行，确认现有状态：`formWechatId/formDisplayName/formPhone/formWindowId/editingId/showAddForm`。
+读取 `OperatorManagement.tsx` 全文，确认现有状态（formWechatId/formDisplayName/formPhone/formWindowId/editingId/showAddForm）与现有窗口网格渲染逻辑，本任务将整体重构。
 
-- [ ] **Step 2: 操作员表单移除"绑定窗口"字段**
+- [ ] **Step 2: 引入主从面板布局与状态**
 
-定位"添加/编辑表单"内第 589-603 行的"绑定窗口（可选）"`<select>` 块，整段删除。操作员表单仅保留：企微ID（含获取ID按钮）、显示名称、手机号。
+在组件顶部新增选中操作员状态，解构所需 hooks：
 
-- [ ] **Step 3: handleCreate 移除窗口绑定逻辑**
+```typescript
+const { data: operators = [] } = useOperators();
+const { data: windowsData } = useBrowserWindows('all');
+const windows = windowsData?.windows ?? [];
+const bindWindow = useBindWindow();
+const unbindWindow = useUnbindWindow();
+const addPlatform = useAddPlatform();
+const removePlatform = useRemovePlatform();
+const verifyLogin = useVerifyLogin();
+const [selectedOperatorId, setSelectedOperatorId] = useState<number | null>(null);
+const selectedOperator = operators.find((o) => o.id === selectedOperatorId) || null;
+const unboundWindows = windows.filter((w) => w.status === 'available');
+const [addWindowForOp, setAddWindowForOp] = useState<number | null>(null);
+const [addPlatformForWindow, setAddPlatformForWindow] = useState<number | null>(null);
+const [newPlatformKey, setNewPlatformKey] = useState('');
+```
 
-定位第 230-254 行 `handleCreate`，移除其中 `formWindowId` 相关分支：
+- [ ] **Step 3: 操作员表单移除窗口字段**
+
+删除"添加/编辑表单"内"绑定窗口（可选）"`<select>` 块。操作员表单仅保留：企微ID（含获取ID按钮）、显示名称、手机号。`handleCreate` 移除 `formWindowId` 分支：
+
 ```typescript
   const handleCreate = () => {
     if (!formWechatId.trim() || !formDisplayName.trim()) return;
@@ -783,138 +920,227 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
       {
         onSuccess: () => { resetForm(); },
         onError: (err: any) => {
-          alert(`创建用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
+          alert(`创建操作员失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
         },
       },
     );
   };
 ```
 
-- [ ] **Step 4: 移除 formWindowId 状态与 unboundWindows（操作员侧）**
+删除 `formWindowId` 状态声明及 `resetForm` 中对应行。
 
-删除 `const [formWindowId, setFormWindowId]` 状态声明；删除 `const unboundWindows = windows.filter(...)`（移至窗口区块使用）。`resetForm` 中移除 `setFormWindowId`。
+- [ ] **Step 4: 重构主体为主从面板布局**
 
-- [ ] **Step 5: 调整区块标题与文案**
+替换主体渲染为左右两栏（响应式：md 以下单列堆叠）：
 
-将 Header 标题"用户管理"改为"操作员管理"，副文案改为"每个操作员对应一个企业微信用户，绑定窗口后在窗口下管理平台账号"。"添加用户"按钮文案改为"新增操作员"。
+```tsx
+return (
+  <div className="space-y-4">
+    {/* Header */}
+    <div className="flex items-center justify-between">
+      <div>
+        <h2 className="text-headline-md text-on-surface">操作员管理</h2>
+        <p className="text-body-sm text-on-surface-variant mt-1">
+          每个操作员对应一个企业微信用户，可绑定多个窗口，每个窗口独立管理平台账号。
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <button onClick={() => syncWindows.mutate(selectedVendor)} disabled={syncWindows.isPending} className="btn-ghost flex items-center gap-1.5 text-sm">
+          <MaterialIcon icon="sync" size="sm" className={syncWindows.isPending ? 'animate-spin-slow' : ''} />
+          {syncWindows.isPending ? '同步中…' : '同步窗口'}
+        </button>
+        <button onClick={() => { setShowAddForm(true); setEditingId(null); setFormWechatId(''); setFormDisplayName(''); setFormPhone(''); }} className="btn-primary flex items-center gap-1.5">
+          <MaterialIcon icon="add" size="sm" />
+          新增操作员
+        </button>
+      </div>
+    </div>
 
-- [ ] **Step 6: 验证前端构建**
+    {/* 主从面板 */}
+    <div className="grid grid-cols-1 md:grid-cols-[280px_1fr] gap-4">
+      {/* 左栏：操作员列表 */}
+      <div className="space-y-2">
+        {operators.length === 0 && <p className="text-body-sm text-on-surface-variant p-3">暂无操作员，点击"新增操作员"创建。</p>}
+        {operators.map((op) => (
+          <button
+            key={op.id}
+            onClick={() => setSelectedOperatorId(op.id)}
+            className={cn(
+              'w-full text-left p-3 rounded-xl border transition-colors',
+              selectedOperatorId === op.id ? 'border-primary bg-primary/5' : 'border-outline-variant hover:border-primary/30 bg-surface',
+            )}
+          >
+            <p className="text-body-sm font-medium text-on-surface truncate">{op.displayName}</p>
+            <p className="text-xs text-on-surface-variant truncate">{op.wechatUserId}</p>
+            <p className="text-xs text-on-surface-variant mt-1">{op.windows.length} 个窗口</p>
+          </button>
+        ))}
+      </div>
+
+      {/* 右栏：操作员详情 */}
+      <div>
+        {selectedOperator ? <OperatorDetail /> : (
+          <div className="p-8 text-center text-body-sm text-on-surface-variant border border-dashed border-outline-variant rounded-xl">
+            请从左侧选择一个操作员查看详情
+          </div>
+        )}
+      </div>
+    </div>
+
+    {/* 未绑定窗口池 */}
+    {unboundWindows.length > 0 && (
+      <div className="p-3 bg-surface-container rounded-xl border border-outline-variant">
+        <h4 className="text-label-md text-on-surface-variant mb-2">未绑定窗口池 ({unboundWindows.length})</h4>
+        <div className="flex flex-wrap gap-2">
+          {unboundWindows.map((w) => (
+            <span key={w.id} className="text-xs px-2 py-1 rounded-lg border border-outline-variant bg-surface text-on-surface-variant">
+              {w.windowName || w.externalId} ({w.browserVendor})
+            </span>
+          ))}
+        </div>
+      </div>
+    )}
+
+    {/* 操作员表单（新增/编辑）—— 保留原有 showAddForm 逻辑 */}
+  </div>
+);
+```
+
+- [ ] **Step 5: 实现 OperatorDetail 子组件（窗口+平台账号）**
+
+在 `OperatorManagement` 内或同级定义 `OperatorDetail`，渲染选中操作员的窗口列表与每窗口的平台账号：
+
+```tsx
+function OperatorDetail({ operator, unboundWindows, bindWindow, unbindWindow, addPlatform, removePlatform, verifyLogin }: any) {
+  const [addWindowOpen, setAddWindowOpen] = useState(false);
+  const [pickWindowId, setPickWindowId] = useState<number | null>(null);
+  const [addPlatformForWindow, setAddPlatformForWindow] = useState<number | null>(null);
+  const [newPlatformKey, setNewPlatformKey] = useState('');
+
+  const handleBind = () => {
+    if (!pickWindowId) return;
+    bindWindow.mutate({ windowId: pickWindowId, operatorId: operator.id }, { onSuccess: () => { setAddWindowOpen(false); setPickWindowId(null); } });
+  };
+
+  const handleAddPlatform = (windowId: number) => {
+    if (!newPlatformKey) return;
+    addPlatform.mutate({ operatorId: operator.id, platform: newPlatformKey }, { onSuccess: () => { setAddPlatformForWindow(null); setNewPlatformKey(''); } });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-title-md text-on-surface">{operator.displayName}</h3>
+          <p className="text-xs text-on-surface-variant">企微ID: {operator.wechatUserId} · {operator.windows.length} 个绑定窗口</p>
+        </div>
+        <button onClick={() => setAddWindowOpen(!addWindowOpen)} className="btn-ghost text-xs flex items-center gap-1">
+          <MaterialIcon icon="add" size="xs" />
+          添加窗口
+        </button>
+      </div>
+
+      {/* 添加窗口下拉：从未绑定窗口池选一个 */}
+      {addWindowOpen && (
+        <div className="p-3 bg-surface-container-lowest rounded-xl border border-primary/30">
+          <div className="flex gap-2">
+            <select className="form-input flex-1" value={pickWindowId ?? ''} onChange={(e) => setPickWindowId(e.target.value ? Number(e.target.value) : null)}>
+              <option value="">选择未绑定窗口…</option>
+              {unboundWindows.map((w: any) => (
+                <option key={w.id} value={w.id}>{w.windowName || w.externalId} ({w.browserVendor})</option>
+              ))}
+            </select>
+            <button className="btn-primary text-xs" onClick={handleBind} disabled={!pickWindowId || bindWindow.isPending}>绑定</button>
+            <button className="btn-ghost text-xs" onClick={() => { setAddWindowOpen(false); setPickWindowId(null); }}>取消</button>
+          </div>
+        </div>
+      )}
+
+      {/* 每个绑定窗口：独立管理平台账号 */}
+      {operator.windows.length === 0 && <p className="text-body-sm text-on-surface-variant p-4 border border-dashed border-outline-variant rounded-xl">该操作员尚未绑定窗口，点击"添加窗口"开始。</p>}
+      {operator.windows.map((w: any) => (
+        <div key={w.id} className="p-3 rounded-xl border border-outline-variant bg-surface">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <MaterialIcon icon="open_in_new" size="sm" className="text-primary" />
+              <span className="text-body-sm font-medium text-on-surface">{w.windowName || w.externalId}</span>
+              <span className="text-xs text-on-surface-variant">({w.browserVendor})</span>
+            </div>
+            <button onClick={() => unbindWindow.mutate(w.id)} disabled={unbindWindow.isPending} className="text-xs text-on-surface-variant hover:text-error flex items-center gap-1">
+              <MaterialIcon icon="link_off" size="xs" />
+              解绑
+            </button>
+          </div>
+
+          {/* 该窗口的平台账号（各自独立） */}
+          <div className="space-y-1.5">
+            {(w.platforms || []).map((p: any) => (
+              <PlatformRow
+                key={p.id || p.platform}
+                platform={p.platform}
+                loginStatus={p.loginStatus}
+                onVerify={() => verifyLogin.mutate({ operatorId: operator.id, platform: p.platform })}
+                onRemove={() => removePlatform.mutate({ operatorId: operator.id, platform: p.platform })}
+                verifying={verifyLogin.isPending}
+              />
+            ))}
+            {(w.platforms || []).length === 0 && <p className="text-xs text-on-surface-variant pl-7">该窗口暂无平台账号</p>}
+          </div>
+
+          {/* 添加平台（针对该窗口） */}
+          {addPlatformForWindow === w.id ? (
+            <div className="mt-2 flex gap-2">
+              <select className="form-input flex-1 text-xs" value={newPlatformKey} onChange={(e) => setNewPlatformKey(e.target.value)}>
+                <option value="">选择平台…</option>
+                {PLATFORM_OPTIONS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+              </select>
+              <button className="btn-primary text-xs" onClick={() => handleAddPlatform(w.id)} disabled={!newPlatformKey || addPlatform.isPending}>添加</button>
+              <button className="btn-ghost text-xs" onClick={() => { setAddPlatformForWindow(null); setNewPlatformKey(''); }}>取消</button>
+            </div>
+          ) : (
+            <button onClick={() => setAddPlatformForWindow(w.id)} className="mt-2 text-xs text-primary hover:underline flex items-center gap-1">
+              <MaterialIcon icon="add" size="xs" />
+              添加平台
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+将 `OperatorDetail` 渲染到右栏（传入 operator、unboundWindows、各 mutation）。
+
+- [ ] **Step 6: 移除旧的窗口网格（BitBrowser/RoxyBrowser 分组）**
+
+删除原"查看可用窗口"折叠区与 BitBrowser/RoxyBrowser 分组网格（被主从面板的窗口列表+未绑定窗口池替代）。同步窗口按钮与"添加窗口"创建窗口表单（showCreateWindow）保留。
+
+- [ ] **Step 7: 验证前端构建**
 
 Run:
 ```bash
-cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | tail -15
+cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | tail -20
 ```
 Expected: 构建成功，无类型错误。
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /home/lrp/social_media_complete
 git add apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx
-git commit -m "refactor(admin): 操作员管理区块——表单移除窗口字段，独立新增入口
+git commit -m "refactor(admin): 操作员主从面板——一操作员多窗口，每窗口独立管平台
 
-DB spec 4.9：操作员与窗口解耦。操作员表单仅含企微ID/名称/手机，
-新增操作员不再混填窗口。窗口绑定移至窗口管理区块（下个任务）。
+DB spec 4.9 方案C：左操作员列表 + 右操作员详情。一个操作员可绑多个
+窗口（添加窗口从未绑定池选），每个窗口下独立管理平台账号（添加平台/
+验证登录/移除）。解决原 UI 只能 1:1 绑定的约束。后端 1:N:N 本就支持。
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
 
 ---
 
-## Task 11: 前端双区块重构——窗口管理绑定操作员下拉
-
-**Files:**
-- Modify: `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`
-
-区块 B「窗口管理」：窗口卡片加「绑定操作员」下拉，方向纠正为"窗口选操作员"。
-
-- [ ] **Step 1: 在窗口卡片加绑定操作员下拉**
-
-定位窗口列表中 BitBrowser/RoxyBrowser 窗口卡片渲染（约第 400-419 行、443-462 行）。在每个窗口卡片 `<div>` 内，操作员名显示处，替换为绑定下拉：
-
-```tsx
-<div key={w.id} className={cn('flex items-center gap-2 px-3 py-2 rounded-lg border text-xs', w.status === 'bound' ? 'border-primary/30 bg-primary/5' : 'border-outline-variant bg-surface')}>
-  <MaterialIcon icon="open_in_new" size="xs" className="text-primary shrink-0" />
-  <div className="min-w-0 flex-1">
-    <p className="font-mono text-on-surface truncate">{w.windowName || w.externalId}</p>
-    <select
-      className="mt-0.5 w-full bg-transparent text-on-surface-variant outline-none cursor-pointer"
-      value={w.boundOperatorId ?? ''}
-      onChange={(e) => {
-        const opId = e.target.value ? Number(e.target.value) : null;
-        if (opId) {
-          bindWindow.mutate({ windowId: w.id, operatorId: opId });
-        }
-      }}
-    >
-      <option value="">选择操作员…</option>
-      {operators.map((op) => (
-        <option key={op.id} value={op.id}>{op.displayName}（{op.wechatUserId}）</option>
-      ))}
-    </select>
-  </div>
-  {w.status === 'bound' && w.boundOperatorId && (
-    <button
-      onClick={() => unbindWindow.mutate(w.id)}
-      disabled={unbindWindow.isPending}
-      className="text-on-surface-variant hover:text-error text-xs"
-      title="解绑"
-    >
-      <MaterialIcon icon="link_off" size="xs" />
-    </button>
-  )}
-</div>
-```
-
-- [ ] **Step 2: 确认 useBindWindow/useUnbindWindow/useOperators 已存在**
-
-Run:
-```bash
-cd /home/lrp/social_media_complete && grep -n "useBindWindow\|useUnbindWindow\|useOperators" apps/admin-dashboard/src/hooks/useApi.ts | head
-```
-Expected: 三个 hook 均存在（核查已确认）。
-
-- [ ] **Step 3: 确认窗口数据含 boundOperatorId 与 operator 关联**
-
-Run:
-```bash
-cd /home/lrp/social_media_complete && grep -n "boundOperatorId\|interface BrowserWindowItem" apps/admin-dashboard/src/hooks/useApi.ts | head
-```
-若 BrowserWindowItem 无 boundOperatorId 字段，在类型定义中补 `boundOperatorId: number | null`，并确认后端 GET /windows 返回该字段。
-
-- [ ] **Step 4: 解构 bindWindow/unbindWindow/operators**
-
-确认组件顶部已从 useApi 解构：`useBindWindow`、`useUnbindWindow`、`useOperators`（操作员列表）。若 useOperators 未解构则补上：
-```typescript
-const { data: operators = [] } = useOperators();
-const bindWindow = useBindWindow();
-const unbindWindow = useUnbindWindow();
-```
-
-- [ ] **Step 5: 验证前端构建**
-
-Run:
-```bash
-cd /home/lrp/social_media_complete/apps/admin-dashboard && pnpm build 2>&1 | tail -15
-```
-Expected: 构建成功。
-
-- [ ] **Step 6: Commit**
-
-```bash
-cd /home/lrp/social_media_complete
-git add apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx
-git commit -m "refactor(admin): 窗口管理区块——绑定操作员下拉，纠正绑定方向
-
-DB spec 4.9：窗口卡片加「绑定操作员」下拉（选项=操作员列表），
-方向从'操作员选窗口'纠正为'窗口选操作员'。已绑定窗口显示解绑按钮。
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
-```
-
----
-
-## Task 12: 端到端验证
+## Task 13: 端到端验证
 
 **Files:**
 - Verify: 全链路
@@ -951,23 +1177,27 @@ cd /home/lrp/social_media_complete/apps/ts-api-gateway && npx tsc --noEmit 2>&1 
 ```
 Expected: `ok`
 
-- [ ] **Step 5: 验证前端双区块渲染**
+- [ ] **Step 5: 验证前端主从面板渲染**
 
 打开浏览器访问 admin-dashboard，进入"用户管理"tab：
-- 看到「操作员管理」区块，"新增操作员"按钮，表单无窗口字段。
-- 看到「窗口管理」区块，每个窗口卡片有"选择操作员…"下拉。
+- 左栏「操作员列表」，"新增操作员"按钮，表单无窗口字段。
+- 选中操作员后右栏显示其绑定窗口列表。
+- "添加窗口"下拉列出未绑定窗口，选定后该窗口加入操作员（可重复添加多个窗口）。
+- 每个窗口卡片内显示该窗口平台账号 + "添加平台" + "验证登录"。
+- 底部"未绑定窗口池"列出未绑定操作员的窗口。
 
-- [ ] **Step 6: 端到端流程验证**
+- [ ] **Step 6: 端到端流程验证（一操作员多窗口）**
 
-1. 「新增操作员」→ 填企微ID+名称 → 创建成功，操作员列表出现。
-2. 窗口卡片下拉选刚建的操作员 → 窗口显示操作员名。
-3. 验证 platform_accounts 写入：
+1. 「新增操作员」→ 填企微ID+名称 → 创建成功，左栏出现。
+2. 选中该操作员 → 右栏"添加窗口" → 从未绑定池选窗口A绑定 → 窗口A出现在详情。
+3. 再次"添加窗口" → 选窗口B绑定 → 同一操作员现绑 2 个窗口（验证 1:N）。
+4. 在窗口A卡片"添加平台" → 选抖音 → platform_accounts 写入窗口A的记录：
 ```bash
 docker exec sm-postgres psql -U sm_admin -d social_media -c "SELECT id, window_id, platform, login_status FROM platform_accounts;"
 ```
-Expected: 暂无平台账号（需先加平台）。
-4. 调用添加平台 API（前端或 curl）→ platform_accounts 出现记录。
-5. verify-login → platform_accounts.loginStatus 更新、login_verifications 写入 windowId+platform：
+Expected: window_id 对应窗口A。
+5. 在窗口B卡片"添加平台" → 选快手 → 验证窗口B有独立快手账号，与窗口A的抖音互不影响。
+6. verify-login → platform_accounts.loginStatus 更新、login_verifications 写入 windowId+platform：
 ```bash
 docker exec sm-postgres psql -U sm_admin -d social_media -c "SELECT window_id, platform, status FROM login_verifications;"
 ```
@@ -988,7 +1218,7 @@ git add -A
 git commit -m "test: 端到端验证通过——两设计融合落地
 
 删 users 孤儿、operators.ts 迁移 PlatformAccount、douyinCrawler 编译清零、
-前端双区块。建操作员→绑窗口→加平台→验证登录链路通畅。
+前端主从面板（一操作员多窗口、每窗口独立管平台）。链路通畅。
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 ```
@@ -1004,6 +1234,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | 改动域2 删 users 孤儿 | Task 1 |
 | 改动域5 operators.ts 迁移（monitorQueue/operatorPlatform/loginVerification/verify-all） | Task 2,3,4,5,6 |
 | 改动域3 编译清零（douyinCrawler） | Task 7,8,9 |
+| 改动域1 前端主从面板 + GET/ 扁平化清理 + 类型 | Task 10,11,12 |
 | 改动域1 前端双区块 | Task 10,11 |
 | 端到端验证 | Task 12 |
 | 改动域4 多窗口遍历 | 已核查落地，无 Task |
@@ -1014,16 +1245,19 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 **3. 类型一致性：**
 - PlatformAccount 唯一键名 `idx_platform_account_window_platform`（Task 3/5/6 一致，来自 schema 第 378 行）
-- `bindWindow({ windowId, operatorId })`（Task 11 与 hooks 一致）
+- `bindWindow({ windowId, operatorId })`（Task 12 与 hooks 第 1500 行一致）
 - LoginVerification 字段 `windowId/platform/status/detail`（Task 5 与 schema 第 384-396 行一致）
+- `Operator.windows[].platforms` 嵌套（Task 11 类型 与 Task 10 后端 select 与 Task 12 消费一致，含 id/platform/loginStatus/lastVerifiedAt/monitoringEnabled）
+- `useAddPlatform({ operatorId, platform })`（Task 12 与 hooks 第 1524 行一致）
+- `useVerifyLogin` 入参（Task 12 与 hooks 第 1539 行一致，调用前确认签名）
 
 ---
 
 ## 成功标准
 
-1. `User` 模型删除、`users` 物理表删除、重启不重建（Task 1, 12-Step3）。
-2. `operators.ts` 无 `prisma.operatorPlatform` / `monitorQueue` 残留，平台操作走 `platformAccount`，`loginVerification` 用 windowId+platform（Task 2-6, 12-Step4）。
-3. `operators.ts` 与 `douyinCrawler.ts` tsc 零错误（Task 6-Step2, 9-Step4, 12-Step4）。
-4. 前端双区块：独立新增操作员入口 + 窗口侧绑定操作员下拉（Task 10-11, 12-Step5）。
-5. 端到端：建操作员→绑窗口→加平台→验证登录，platform_accounts/login_verifications 写入正确（Task 12-Step6）。
-6. `npx jest` 全绿（Task 9-Step5, 12-Step7）。
+1. `User` 模型删除、`users` 物理表删除、重启不重建（Task 1, 13-Step3）。
+2. `operators.ts` 无 `prisma.operatorPlatform` / `monitorQueue` 残留，平台操作走 `platformAccount`，`loginVerification` 用 windowId+platform，GET / 无扁平化 platforms（Task 2-6, 10, 13-Step4）。
+3. `operators.ts` 与 `douyinCrawler.ts` tsc 零错误（Task 6-Step2, 9-Step4, 13-Step4）。
+4. 前端主从面板：左操作员列表（独立新增入口）+ 右详情（一操作员可绑多窗口、每窗口独立管平台）（Task 10-12, 13-Step5）。
+5. 端到端：建操作员→绑多窗口→各窗口加平台→验证登录，platform_accounts/login_verifications 写入正确、一操作员多窗口生效（Task 13-Step6）。
+6. `npx jest` 全绿（Task 9-Step5, 13-Step7）。

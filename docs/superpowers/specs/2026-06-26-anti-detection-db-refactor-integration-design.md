@@ -74,14 +74,20 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 补齐三类缺口：前端 4.9 双区块重构 + 删 users 孤儿 + 反检测编译清零。多窗口遍历核查通过无需改动。埋点挂载与前置盲测**不在本 spec 范围**（用户后续有独立埋点设计；盲测需真实环境独立排期）。
 
-### 3.2 改动域 1：前端双区块重构（对齐 DB spec 4.9）
+### 3.2 改动域 1：前端主从面板重构（对齐 DB spec 4.9，方案 C）
 
-把 `OperatorManagement.tsx` 单一混合组件拆成双区块，纠正绑定方向：
+把 `OperatorManagement.tsx` 单一混合组件改为**主从面板**，直接镜像 1:N:N 数据层级，解决当前"只能 1:1 绑定"的 UI 约束：
 
-- **区块 A「操作员管理」**：纯操作员 CRUD。新增/编辑表单仅含企微ID（必填，带"获取ID"企微机器人按钮）/显示名称（必填）/手机号/角色。**去掉"绑定窗口"字段**。这是独立的"新增操作员"入口。
-- **区块 B「窗口管理」**：窗口列表（BitBrowser/RoxyBrowser 分组），每行显示窗口名+供应商，带**「绑定操作员」下拉框**（选项=已建操作员列表），下拉即触发 bindWindow；已绑定窗口显示操作员名+「解绑」按钮；窗口卡片可展开显示该窗口下各平台账号登录态徽标（复用 PlatformRow/LoginBadge）。
+- **左栏「操作员列表」**：操作员条目（企微ID+显示名称+角色），独立「新增操作员」入口。表单仅含企微ID（必填，带"获取ID"企微机器人按钮）/显示名称（必填）/手机号/角色，**不含窗口字段**。选中某操作员高亮。
+- **右栏「操作员详情」**：展示选中操作员的**所有绑定窗口**（可多个，1:N）：
+  - 顶部「添加窗口」按钮 → 下拉选未绑定窗口池中的一个绑定到该操作员（bindWindow），实现一个操作员绑多个窗口。
+  - 每个窗口卡片：窗口名+供应商+「解绑」按钮。卡片内展示**该窗口下各自独立的平台账号**（1:N，登录态徽标，复用 PlatformRow/LoginBadge）+「添加平台」按钮（为该窗口加平台账号）+「验证登录」。
+  - 每窗口的平台账号各自独立管理，互不影响。
+- **底部「未绑定窗口池」**：未绑定任何操作员的窗口单独列出，可从这里绑定。
 
-绑定方向从"操作员选窗口"纠正为"窗口选操作员"。
+后端 `GET /operators` 已返回 `operator → windows[] → platforms[]` 三级嵌套，主从面板直接消费。后端 `bind` 端点无 1:1 约束（每个窗口独立 update boundOperatorId），1:N 本就支持，约束纯在前端。
+
+**连带清理**：后端 `GET /` 行 55-59 的"扁平化 `operator.platforms`"是 OperatorPlatform 时代遗留（Operator 已无 platforms 关系），删除该扁平化，前端统一用 `op.windows[].platforms`。前端 `Operator` 类型 `windows` 字段补 `platforms` 嵌套，删除顶层 `platforms` 扁平字段。
 
 ### 3.3 改动域 2：删 users 孤儿（对齐 DB spec 4.1）
 
@@ -140,8 +146,8 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 
 ### 4.1 前端
 
-- `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`：拆双区块，操作员表单去窗口字段，窗口卡片加绑定操作员下拉。
-- `apps/admin-dashboard/src/hooks/useApi.ts`：确认 useBindWindow/useUnbindWindow/useOperators 已存在（核查已确认），无需新增。
+- `apps/admin-dashboard/src/components/matrix/OperatorManagement.tsx`：改为主从面板——左操作员列表（含独立新增入口），右操作员详情（绑定窗口列表 + 每窗口独立平台账号管理 + 添加窗口/添加平台入口），底部未绑定窗口池。
+- `apps/admin-dashboard/src/hooks/useApi.ts`：`Operator.windows` 补 `platforms` 嵌套字段，删除顶层 `platforms` 扁平字段。
 
 ### 4.2 数据库
 
@@ -165,10 +171,12 @@ videos=0  comments=0  task_executions=0  login_verifications=0
 ## 5. 数据流
 
 ```
-操作员管理(区块A): 新增操作员(企微ID+名称) → POST /operators → operators 表
-窗口管理(区块B): 窗口卡片选操作员下拉 → POST /windows/:id/bind {operatorId}
-                → BrowserWindow.boundOperatorId 更新
-  └─ 窗口下加平台账号 → PlatformAccount(windowId, platform)
+操作员管理(左栏): 新增操作员(企微ID+名称) → POST /operators → operators 表
+操作员详情(右栏): 添加窗口 → 从未绑定窗口池选一个 → POST /windows/:id/bind {operatorId}
+                → BrowserWindow.boundOperatorId 更新（同一操作员可绑多个窗口，1:N）
+  └─ 窗口下加平台账号 → POST /operators/:id/platforms → 遍历窗口 upsert PlatformAccount
+       └─ 各窗口平台账号独立管理，验证登录 → platform_accounts.loginStatus
+后端 GET /operators 返回 operator→windows[]→platforms[] 三级嵌套（删除遗留扁平化）
        └─ 验证登录 → loginStatus + syncPlatformAuthorId
             └─ 监控调度: getAllActiveUsers() 读 platform_accounts
 删 users: User 模型移除 + DROP TABLE users → db push 同步 → 服务重启
@@ -205,10 +213,12 @@ operators.ts 迁移: operatorPlatform → platformAccount（按窗口） + login
 
 ### 7.3 前端验证
 
-- 双区块渲染：操作员管理 + 窗口管理。
+- 主从面板渲染：左操作员列表，右操作员详情。
 - 「新增操作员」表单无窗口字段。
-- 窗口卡片有「绑定操作员」下拉，选定后窗口显示操作员名。
-- 已绑定窗口有「解绑」按钮。
+- 选中操作员后右栏显示其所有绑定窗口（可多个）。
+- 「添加窗口」从未绑定窗口池选一个绑定，一个操作员可绑多个窗口。
+- 每个窗口卡片内显示该窗口独立平台账号 + 「添加平台」+「验证登录」。
+- 未绑定窗口在底部窗口池列出。
 
 ### 7.4 端到端验证
 
@@ -233,7 +243,7 @@ operators.ts 迁移: operatorPlatform → platformAccount（按窗口） + login
 
 ## 9. 成功标准
 
-1. 前端双区块落地：独立「新增操作员」入口 + 窗口侧「绑定操作员」下拉，方向正确。
+1. 前端主从面板落地：左操作员列表（独立新增入口）+ 右操作员详情（绑定多窗口、每窗口独立管平台），一个操作员可绑多个窗口。
 2. `User` 模型从 schema 删除，物理 `users` 表删除，服务重启不重建。
 3. `operators.ts` 无 `prisma.operatorPlatform` 调用残留，平台操作全部走 `prisma.platformAccount`（按窗口），`loginVerification` 用 windowId+platform。
 4. `cd apps/ts-api-gateway && npx tsc --noEmit` 在 `operators.ts` 与 `douyinCrawler.ts` 上零错误（其余文件预存错误不在本次范围）。
