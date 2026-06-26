@@ -3804,7 +3804,7 @@ export class DouyinCrawler {
           return HumanActions.safeEvaluate(page, () => {
             const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
             return container ? { scrollHeight: container.scrollHeight, scrollTop: container.scrollTop, clientHeight: container.clientHeight } : null;
-          }, { reason: '读取评论区滚动高度', world: 'main' });
+          }, { reason: '读取评论区滚动高度', world: 'main' }) as Promise<{ scrollHeight: number; scrollTop: number; clientHeight: number } | null>;
         } else {
           return page.evaluate(() => {
             const container = document.querySelector('.douyin-creator-interactive-tabs-content') as HTMLElement | null;
@@ -3838,7 +3838,7 @@ export class DouyinCrawler {
                   );
                   return isLeaf;
                 }).length;
-              }, { reason: '统计隐藏展开按钮数', world: 'main' });
+              }, { reason: '统计隐藏展开按钮数', world: 'main' }) as Promise<number>;
             } else {
               return page.evaluate(() => {
                 return Array.from(document.querySelectorAll('*')).filter(el => {
@@ -3876,7 +3876,7 @@ export class DouyinCrawler {
           return HumanActions.safeEvaluate(page, () => {
             const containers = document.querySelectorAll('[data-cid]');
             return Array.from(containers).map(el => el.getAttribute('data-cid')).filter(Boolean) as string[];
-          }, { reason: '记录当前页面评论 CID', world: 'main' });
+          }, { reason: '记录当前页面评论 CID', world: 'main' }) as Promise<string[]>;
         } else {
           return page.evaluate(() => {
             const containers = document.querySelectorAll('[data-cid]');
@@ -3904,7 +3904,7 @@ export class DouyinCrawler {
               if (cid) expandable.push(cid);
             }
             return [...new Set(expandable)];
-          }, { reason: '记录仍有展开按钮的 CID', world: 'main' });
+          }, { reason: '记录仍有展开按钮的 CID', world: 'main' }) as Promise<string[]>;
         } else {
           return page.evaluate(() => {
             const expandable: string[] = [];
@@ -4132,7 +4132,7 @@ export class DouyinCrawler {
               if (d < bestDist) { bestDist = d; best = { x: Math.round(cx), y: Math.round(cy) }; }
             }
             return best;
-          }, { reason: '定位回复按钮坐标', world: 'main', args: [foundCoords] });
+          }, { reason: '定位回复按钮坐标', world: 'main', args: [foundCoords] }) as Promise<{ x: number; y: number } | null>;
         } else {
           return page.evaluate(function(coords) {
             var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
