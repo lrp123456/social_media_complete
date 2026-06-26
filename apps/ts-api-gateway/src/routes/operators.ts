@@ -5,7 +5,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
-import { monitorQueue, resetSchedulerTimer } from '../services/monitorService';
+import { resetSchedulerTimer } from '../services/monitorService';
 import {
   syncWindows,
   syncAllWindows,
@@ -462,7 +462,7 @@ router.post('/windows/create', async (req: Request, res: Response) => {
 // 平台管理
 // ============================================================
 
-/** POST /api/v1/operators/:id/platforms — 为操作员添加平台 */
+/** POST /api/v1/operators/:id/platforms — 为操作员添加平台（在所有绑定窗口下创建 PlatformAccount） */
 router.post('/:id/platforms', async (req: Request, res: Response) => {
   try {
     const paramsSchema = z.object({ id: z.coerce.number().int().positive() });
@@ -473,19 +473,38 @@ router.post('/:id/platforms', async (req: Request, res: Response) => {
     const { id } = paramsSchema.parse(req.params);
     const { platform } = bodySchema.parse(req.body);
 
-    const existing = await prisma.operatorPlatform.findUnique({
-      where: { idx_operator_platform: { operatorId: id, platform } },
+    // 平台账号属于窗口：获取操作员所有绑定窗口
+    const operator = await prisma.operator.findUnique({
+      where: { id },
+      include: { windows: { where: { status: 'bound' } } },
     });
 
-    if (existing) {
-      return res.status(409).json({ success: false, error: '该平台已绑定' });
+    if (!operator) {
+      return res.status(404).json({ success: false, error: '操作员不存在' });
+    }
+    if (operator.windows.length === 0) {
+      return res.status(400).json({ success: false, error: '请先绑定窗口再加平台账号' });
     }
 
-    const binding = await prisma.operatorPlatform.create({
-      data: { operatorId: id, platform, loginStatus: 'unknown' },
-    });
+    // 为每个绑定窗口 upsert PlatformAccount（唯一键 windowId+platform）
+    const created: any[] = [];
+    for (const window of operator.windows) {
+      const account = await prisma.platformAccount.upsert({
+        where: { idx_platform_account_window_platform: { windowId: window.id, platform } },
+        update: { loginStatus: 'unknown' },
+        create: {
+          windowId: window.id,
+          windowExternalId: window.externalId,
+          platform,
+          wechatUserid: operator.wechatUserId,
+          loginStatus: 'unknown',
+          monitoringEnabled: false,
+        },
+      });
+      created.push(account);
+    }
 
-    res.status(201).json({ success: true, data: binding });
+    res.status(201).json({ success: true, data: { platform, accounts: created } });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ success: false, errors: err.errors });
@@ -495,7 +514,7 @@ router.post('/:id/platforms', async (req: Request, res: Response) => {
   }
 });
 
-/** DELETE /api/v1/operators/:id/platforms/:platform — 移除操作员平台 */
+/** DELETE /api/v1/operators/:id/platforms/:platform — 移除操作员所有窗口下的该平台账号 */
 router.delete('/:id/platforms/:platform', async (req: Request, res: Response) => {
   try {
     const schema = z.object({
@@ -505,37 +524,20 @@ router.delete('/:id/platforms/:platform', async (req: Request, res: Response) =>
 
     const { id, platform } = schema.parse(req.params);
 
-    // 先查出待删除的平台账号 ID（用于后续清理 BullMQ）
+    // 查出操作员所有绑定窗口下的该平台账号 ID
     const accountsToDelete = await prisma.platformAccount.findMany({
       where: { window: { boundOperatorId: id }, platform },
       select: { id: true },
     });
     const accountIds = accountsToDelete.map((a) => a.id);
 
-    // 删除 operatorPlatform 绑定
-    await prisma.operatorPlatform.delete({
-      where: { idx_operator_platform: { operatorId: id, platform } },
-    });
-
     // 删除 PlatformAccount — FK 级联会处理 Video/Comment 等子表
     if (accountIds.length > 0) {
       await prisma.platformAccount.deleteMany({
         where: { id: { in: accountIds } },
       });
-      logger.info({ operatorId: id, platform, deletedCount: accountIds.length }, '已清理对应的监控用户记录');
-
-      // 清理 BullMQ 中该用户的待处理监控任务
-      const staleJobs = await monitorQueue.getJobs(['waiting', 'delayed']);
-      let removedJobs = 0;
-      for (const job of staleJobs) {
-        if (accountIds.includes(job.data.userId)) {
-          await job.remove().catch(() => {});
-          removedJobs++;
-        }
-      }
-      if (removedJobs > 0) {
-        logger.info({ operatorId: id, platform, removedJobs }, '已清理 BullMQ 残留任务');
-      }
+      logger.info({ operatorId: id, platform, deletedCount: accountIds.length }, '已清理对应的平台账号');
+      // 注：BullMQ 残留任务由调度器在下次轮询时按 platform_accounts 自然重试，无需主动清理
     }
 
     res.json({ success: true });
@@ -576,9 +578,9 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: '操作员未绑定窗口' });
     }
 
-    // 更新状态为检查中
-    await prisma.operatorPlatform.update({
-      where: { idx_operator_platform: { operatorId: id, platform } },
+    // 更新状态为检查中（所有绑定窗口的该平台账号）
+    await prisma.platformAccount.updateMany({
+      where: { window: { boundOperatorId: id }, platform },
       data: { loginStatus: 'checking' },
     });
 
@@ -629,16 +631,16 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
 
     const loginStatus = bestResult.loggedIn ? 'logged_in' : 'not_logged_in';
 
-    // 获取之前的登录状态，用于检测状态变化
-    const previousPlatform = await prisma.operatorPlatform.findUnique({
-      where: { idx_operator_platform: { operatorId: id, platform } },
+    // 获取之前的登录状态（取任一窗口的该平台账号），用于检测状态变化
+    const previousAccount = await prisma.platformAccount.findFirst({
+      where: { window: { boundOperatorId: id }, platform },
       select: { loginStatus: true },
     });
-    const previousStatus = previousPlatform?.loginStatus || 'unknown';
+    const previousStatus = previousAccount?.loginStatus || 'unknown';
 
-    // 更新平台登录状态（即使验证失败也会执行）
-    await prisma.operatorPlatform.update({
-      where: { idx_operator_platform: { operatorId: id, platform } },
+    // 更新平台登录状态到所有绑定窗口的该平台账号（即使验证失败也会执行）
+    await prisma.platformAccount.updateMany({
+      where: { window: { boundOperatorId: id }, platform },
       data: { loginStatus, lastVerifiedAt: new Date() },
     });
 
@@ -662,15 +664,18 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
       }
     }
 
-    // 记录验证日志
-    await prisma.loginVerification.create({
-      data: {
-        operatorId: id,
-        platform,
-        status: loginStatus,
-        detail: JSON.stringify({ detail: bestResult.detail }),
-      },
-    });
+    // 记录验证日志（LoginVerification 以 windowId+platform 为单元，DB spec 3.9）
+    const verifyWindow = operator.windows.find((w) => w.externalId === bestWindowExternalId) || operator.windows[0];
+    if (verifyWindow) {
+      await prisma.loginVerification.create({
+        data: {
+          windowId: verifyWindow.id,
+          platform,
+          status: loginStatus,
+          detail: JSON.stringify({ detail: bestResult.detail }),
+        },
+      });
+    }
 
     res.json({
       success: true,
@@ -690,14 +695,16 @@ router.post('/:id/verify-login', async (req: Request, res: Response) => {
   }
 });
 
-/** POST /api/v1/operators/verify-all — 批量验证所有操作员的所有平台 */
+/** POST /api/v1/operators/verify-all — 批量验证所有操作员的所有平台（按窗口） */
 router.post('/verify-all', async (_req: Request, res: Response) => {
   try {
     const operators = await prisma.operator.findMany({
       where: { enabled: true },
       include: {
-        windows: { where: { status: 'bound' } },
-        platforms: true,
+        windows: {
+          where: { status: 'bound' },
+          include: { platforms: true },
+        },
       },
     });
 
@@ -708,43 +715,44 @@ router.post('/verify-all', async (_req: Request, res: Response) => {
     for (const op of operators) {
       if (op.windows.length === 0) continue;
 
-      // 遍历所有窗口，逐窗口 try/catch
+      // 遍历所有窗口，逐窗口 try/catch；平台账号归属窗口
       for (const window of op.windows) {
-        for (const plat of op.platforms) {
+        for (const account of window.platforms) {
           try {
             const result = await checkPlatformLogin(
               window.browserVendor as BrowserVendor,
               window.externalId,
-              plat.platform,
+              account.platform,
             );
             const loginStatus = result.loggedIn ? 'logged_in' : 'not_logged_in';
 
             // 检查状态变化
-            const previousStatus = plat.loginStatus || 'unknown';
+            const previousStatus = account.loginStatus || 'unknown';
             const statusChangedToLoggedIn = previousStatus !== 'logged_in' && loginStatus === 'logged_in';
             if (statusChangedToLoggedIn) {
-              changedPairs.add(`${window.externalId}_${plat.platform}`);
-              logger.info({ operatorId: op.id, platform: plat.platform, previousStatus, windowId: window.id }, '批量验证：登录状态变化为已登录');
+              changedPairs.add(`${window.externalId}_${account.platform}`);
+              logger.info({ operatorId: op.id, platform: account.platform, previousStatus, windowId: window.id }, '批量验证：登录状态变化为已登录');
 
               // 同时将 PlatformAccount.status 从 'login_required' 恢复为 'active'
               await prisma.platformAccount.updateMany({
                 where: {
                   windowId: window.id,
-                  platform: plat.platform,
+                  platform: account.platform,
                   status: { in: ['login_required', 'risk_control'] },
                 },
                 data: { status: 'active' },
               }).catch(() => {});
             }
 
-            await prisma.operatorPlatform.update({
-              where: { idx_operator_platform: { operatorId: op.id, platform: plat.platform } },
+            // 更新该窗口该平台账号的登录状态
+            await prisma.platformAccount.updateMany({
+              where: { windowId: window.id, platform: account.platform },
               data: { loginStatus, lastVerifiedAt: new Date() },
             });
 
-            results.push({ operatorId: op.id, platform: plat.platform, status: loginStatus });
+            results.push({ operatorId: op.id, platform: account.platform, status: loginStatus });
           } catch (err) {
-            results.push({ operatorId: op.id, platform: plat.platform, status: 'error' });
+            results.push({ operatorId: op.id, platform: account.platform, status: 'error' });
           }
         }
       }
