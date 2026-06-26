@@ -1973,3 +1973,130 @@ export function useUpdateAiReplyConfig() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-reply-config'] }); },
   });
 }
+
+// ============================================================
+// 维护调试 API
+// ============================================================
+
+export type MaintenanceHealth = 'healthy' | 'degraded' | 'failed';
+
+export interface MaintenanceExecution {
+  id: string;
+  taskExecutionId: string;
+  platform: string;
+  flowType: string;
+  windowId: string;
+  overallHealth: MaintenanceHealth;
+  totalSteps: number;
+  healthySteps: number;
+  degradedSteps: number;
+  failedSteps: number;
+  totalSelectors: number;
+  passedSelectors: number;
+  failedSelectors: number;
+  totalUrlChecks: number;
+  passedUrlChecks: number;
+  startedAt: string;
+  completedAt: string | null;
+}
+
+export function useMaintenanceExecutions(params: {
+  platform?: string; healthStatus?: MaintenanceHealth; flowType?: string; limit?: number; offset?: number;
+}) {
+  const qs = new URLSearchParams();
+  if (params.platform) qs.set('platform', params.platform);
+  if (params.healthStatus) qs.set('healthStatus', params.healthStatus);
+  if (params.flowType) qs.set('flowType', params.flowType);
+  if (params.limit) qs.set('limit', String(params.limit));
+  if (params.offset) qs.set('offset', String(params.offset));
+  return useQuery({
+    queryKey: ['maintenance', 'executions', params],
+    queryFn: () => api.get(`/maintenance/executions?${qs.toString()}`).then(r => r.data),
+  });
+}
+
+export function useMaintenanceExecutionDetail(id: string | null) {
+  return useQuery({
+    enabled: !!id,
+    queryKey: ['maintenance', 'execution', id],
+    queryFn: () => api.get(`/maintenance/executions/${id}`).then(r => r.data),
+  });
+}
+
+export function useMaintenanceSteps(executionId: string | null) {
+  return useQuery({
+    enabled: !!executionId,
+    queryKey: ['maintenance', 'steps', executionId],
+    queryFn: () => api.get(`/maintenance/executions/${executionId}/steps`).then(r => r.data),
+  });
+}
+
+export function useSelectorHealth(platform?: string) {
+  const qs = platform ? `?platform=${platform}` : '';
+  return useQuery({
+    queryKey: ['maintenance', 'selectors', 'health', platform],
+    queryFn: () => api.get(`/maintenance/selectors/health${qs}`).then(r => r.data),
+  });
+}
+
+export function useSelectorHistory(key: string, platform?: string) {
+  const qs = platform ? `?platform=${platform}` : '';
+  return useQuery({
+    enabled: !!key,
+    queryKey: ['maintenance', 'selector', 'history', key, platform],
+    queryFn: () => api.get(`/maintenance/selectors/${encodeURIComponent(key)}/history${qs}`).then(r => r.data),
+  });
+}
+
+export function useRetryStep() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { executionId: string; stepId: string }) =>
+      api.post('/maintenance/retry/step', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance'] }),
+  });
+}
+
+export function useConfigSnapshots(platform?: string) {
+  const qs = platform ? `?platform=${platform}` : '';
+  return useQuery({
+    queryKey: ['maintenance', 'config', 'snapshots', platform],
+    queryFn: () => api.get(`/maintenance/config/snapshots${qs}`).then(r => r.data),
+  });
+}
+
+export function useCreateSnapshot() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { platform: string; configType: string; snapshotName: string; configData: any; createdBy?: string }) =>
+      api.post('/maintenance/config/snapshots', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance', 'config'] }),
+  });
+}
+
+export function useRollbackSnapshot() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { id: string; platform: string; configType: string; currentVersion: number }) =>
+      api.post(`/maintenance/config/snapshots/${body.id}/rollback`, {
+        platform: body.platform, configType: body.configType, currentVersion: body.currentVersion,
+      }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance', 'config'] }),
+  });
+}
+
+export function useExportConfig() {
+  return useMutation({
+    mutationFn: (body: { platform: string; configType: string }) =>
+      api.post('/maintenance/config/export', body).then(r => r.data),
+  });
+}
+
+export function useImportConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { platform: string; configType: string; snapshotName: string; configData: any; createdBy?: string }) =>
+      api.post('/maintenance/config/import', body).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance', 'config'] }),
+  });
+}
