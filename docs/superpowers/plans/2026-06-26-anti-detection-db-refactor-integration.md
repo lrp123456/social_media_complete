@@ -1273,7 +1273,7 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 
 | 文件 | v2 分支数 | 状态 | 说明 |
 |------|----------|------|------|
-| `douyinCrawler.ts` | 44 处 `isAntiDetectionV2()` | ✅ ~95% | `page.evaluate()` → `HumanActions.safeEvaluate()` / `HumanActions.exists()` / `HumanActions.readAll()` |
+| `douyinCrawler.ts` | 49 处 `isAntiDetectionV2()` | ✅ 100% | 新增 5 处 v2 分支（含 3 处实际 v2 实现 + 2 处 page.goto 有意豁免） |
 | `platforms/douyin.ts` | 5 处 `isAntiDetectionV2()` | ✅ 发布路径全覆盖 | 填写(click/fill)→点击发布→结果检查 全部走 v2 |
 | `services/loginFlowHelpers.ts` | 4 处 `isAntiDetectionV2()` | ✅ 登录流程全覆盖 | 登录态检查/二维码扫码/SMS 验证码入口 全部走 v2 |
 
@@ -1287,15 +1287,15 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 | 滚动操作 | `HumanActions.cdpSmartScroll()` + `HumanActions.humanScroll()` | 评论区滚动、抽屉滚动、视口滚动 |
 | 键盘输入 | `HumanActions.cdpKeyboard()` | 搜索输入、评论回复输入 |
 
-### ❌ 剩余盲区（5 处，无 v2 分支）
+### ✅ 剩余盲区（5 处，已于 2026-06-26 补齐 v2 分支）
 
-| 位置 | 操作 | 风险等级 | 说明 |
-|------|------|---------|------|
-| `submitVerifyCode()` (~行1033-1086) | `page.$$` + `input.fill()` + `btn.click()` × 6 处 | 🟡 中 | SMS 验证码提交流程，触发频率低（仅需重登录时） |
-| `expandRepliesForRoot()` (~行1268) | `page.$$eval` × 1 处 | 🟢 低 | 子回复 DOM 展开查询，纯读取操作 |
-| `captureRiskScene()` (~行1493) | `page.screenshot()` × 1 处 | 🟢 低 | 风控现场截图，仅调试/审计用 |
-| `warmUp()` (~行167) | `page.goto()` × 1 处 | 🟢 低 | 预热阶段导航到抖音首页，非业务路径 |
-| `navigateToCreatorHome()` (~行204) | `page.goto()` × 1 处 | 🟢 低 | 导航回退路径，仅创作者中心跳转失败时用 |
+| 位置 | 修复方式 | 状态 |
+|------|---------|------|
+| `submitVerifyCode()` | `page.$$` → `safeEvaluate` 查找输入框 + `HumanActions.fill()` 逐字输入；`btn.click()` → `HumanActions.cdpClick()` | ✅ |
+| `expandRepliesForRoot()` | `page.$$eval` → `HumanActions.safeEvaluate(world:'main')` | ✅ |
+| `captureRiskScene()` | `page.screenshot()` → CDP `Page.captureScreenshot`（通过 HumanActions CDP 长连接） | ✅ |
+| `warmUp()` | `page.goto()` 导航——有意豁免（HumanActions 无 goto 封装），添加注释标记 | ✅ |
+| `navigateToCreatorHome()` | `page.goto()` 回退导航——有意豁免，添加注释标记 | ✅ |
 
 ### 非盲区但需关注的裸调用
 
