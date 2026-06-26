@@ -63,6 +63,18 @@ export type FallbackConfig = {
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
+  private static isolatedWorldIds = new WeakMap<Page, number>();
+  private static stepMetricsCollector: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null = null;
+
+  static setStepMetricsCollector(c: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null): void {
+    HumanActions.stepMetricsCollector = c;
+  }
+
+  private static recordActionPath(actionPath: string, extra?: Record<string, any>): void {
+    if (HumanActions.stepMetricsCollector) {
+      HumanActions.stepMetricsCollector.collect({ actionPath, extra });
+    }
+  }
 
   static setTraceCollector(collector: { recordMouseTrace: (point: any) => void } | null): void {
     HumanActions.traceCollector = collector;
@@ -91,6 +103,111 @@ export class HumanActions {
   static async wait(page: Page, minMs: number, maxMs: number): Promise<void> {
     const delay = HumanActions.randomDelay(minMs, maxMs);
     await page.waitForTimeout(delay);
+  }
+
+  // ===== 反检测收口：读取类（零注入优先，原生 Locator） =====
+
+  static async readText(page: Page, selector: string): Promise<string | null> {
+    const locator = page.locator(selector);
+    if ((await locator.count()) === 0) {
+      HumanActions.recordActionPath('native-locator');
+      return null;
+    }
+    const text = await locator.textContent();
+    HumanActions.recordActionPath('native-locator');
+    return text;
+  }
+
+  static async readAttribute(page: Page, selector: string, attr: string): Promise<string | null> {
+    const locator = page.locator(selector);
+    if ((await locator.count()) === 0) {
+      HumanActions.recordActionPath('native-locator');
+      return null;
+    }
+    const val = await locator.getAttribute(attr);
+    HumanActions.recordActionPath('native-locator');
+    return val;
+  }
+
+  static async exists(page: Page, selector: string, timeoutMs: number = 0): Promise<boolean> {
+    const locator = page.locator(selector);
+    if (timeoutMs > 0) {
+      try {
+        await locator.waitFor({ state: 'attached', timeout: timeoutMs });
+      } catch {
+        HumanActions.recordActionPath('native-locator');
+        return false;
+      }
+    }
+    const result = (await locator.count()) > 0;
+    HumanActions.recordActionPath('native-locator');
+    return result;
+  }
+
+  // ===== 反检测收口：交互类（原生 Locator + 拟人化前置） =====
+
+  static async click(page: Page, selector: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.hover();
+    await HumanActions.wait(page, 80, 200); // 随机停顿
+    await locator.click({ delay: HumanActions.randomDelay(30, 90) });
+    HumanActions.recordActionPath('native-locator');
+  }
+
+  static async fill(page: Page, selector: string, text: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.click(); // 聚焦
+    await HumanActions.wait(page, 100, 250);
+    for (const ch of text) {
+      await locator.press(ch);
+      await page.waitForTimeout(HumanActions.randomDelay(60, 160));
+    }
+    HumanActions.recordActionPath('native-locator');
+  }
+
+  static async press(page: Page, selector: string, key: string): Promise<void> {
+    const locator = page.locator(selector);
+    await locator.waitFor({ state: 'visible' });
+    await locator.press(key);
+    HumanActions.recordActionPath('native-locator');
+  }
+
+  // ===== 反检测收口：safeEvaluate（方案 C，CDP 隔离世界） =====
+
+  private static async getIsolatedWorldId(page: Page, ctx: any): Promise<number> {
+    let contextId = HumanActions.isolatedWorldIds.get(page);
+    if (contextId !== undefined) return contextId;
+    const frameTree = await ctx.cdp.send('Page.getFrameTree');
+    const iso = await ctx.cdp.send('Page.createIsolatedWorld', {
+      frameId: frameTree.frameTree.frame.id,
+      worldName: 'humanactions_isolated',
+    }) as { executionContextId: number };
+    contextId = iso.executionContextId;
+    HumanActions.isolatedWorldIds.set(page, contextId);
+    return contextId;
+  }
+
+  static async safeEvaluate(
+    page: Page,
+    fn: string | ((...args: any[]) => unknown),
+    opts: { world?: 'isolated' | 'main'; reason: string; args?: any[] },
+  ): Promise<unknown> {
+    if (!opts || !opts.reason) throw new Error('safeEvaluate: reason is required');
+    const ctx = await (HumanActions as any).getCDPContext(page);
+    const contextId = opts.world === 'main' ? undefined : await HumanActions.getIsolatedWorldId(page, ctx);
+    const fnStr = typeof fn === 'string' ? fn : fn.toString();
+    const argsStr = opts.args ? JSON.stringify(opts.args) : '[]';
+    const expression = `(function() { return (${fnStr}).apply(null, ${argsStr}); })()`;
+    const result = await ctx.cdp.send('Runtime.evaluate', {
+      expression,
+      contextId,
+      returnByValue: true,
+    });
+    if (result?.exceptionDetails) throw new Error(`safeEvaluate failed: ${result.exceptionDetails.text}`);
+    HumanActions.recordActionPath(opts.world === 'main' ? 'safeEvaluate-main' : 'safeEvaluate-isolated', { reason: opts.reason });
+    return result?.result?.value;
   }
 
   private static async getCDPContext(page: Page): Promise<CDPContext> {
