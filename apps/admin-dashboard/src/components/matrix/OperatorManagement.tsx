@@ -169,10 +169,9 @@ export default function OperatorManagement() {
   const [newPlatformKey, setNewPlatformKey] = useState('');
   const [selectedVendor, setSelectedVendor] = useState('bitbrowser');
 
-  // 页面加载时自动同步两个厂商的窗口
+  // 页面加载时自动同步所有厂商的窗口（容错：某厂商不可用不影响其他）
   useEffect(() => {
-    syncWindows.mutate('bitbrowser');
-    syncWindows.mutate('roxybrowser');
+    syncWindows.mutate('all');
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [showWindowList, setShowWindowList] = useState(false);

@@ -175,14 +175,16 @@ router.delete('/:id', async (req: Request, res: Response) => {
 router.post('/windows/sync', async (req: Request, res: Response) => {
   try {
     const schema = z.object({
-      vendor: z.enum(['bitbrowser', 'roxybrowser']),
+      vendor: z.enum(['bitbrowser', 'roxybrowser', 'all']),
     });
     const { vendor } = schema.parse(req.body);
 
     // 1. 从浏览器API获取窗口列表
     let windows;
     try {
-      windows = await syncWindows(vendor as BrowserVendor);
+      windows = vendor === 'all'
+        ? await syncAllWindows()
+        : await syncWindows(vendor as BrowserVendor);
     } catch (syncErr) {
       logger.error({ err: (syncErr as Error).message }, '浏览器API调用失败');
       return res.status(502).json({ success: false, error: `浏览器API调用失败: ${(syncErr as Error).message}` });
