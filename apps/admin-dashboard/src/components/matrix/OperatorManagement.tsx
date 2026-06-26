@@ -73,11 +73,6 @@ function PlatformRow({
 }) {
   const meta = PLATFORM_OPTIONS.find((p) => p.key === platform);
 
-  // Debug: Log capability for tencent platform
-  if (platform === 'tencent') {
-    console.log('[DEBUG] PlatformRow tencent capability:', capability);
-  }
-
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-lg bg-surface border border-outline-variant group hover:border-primary/30 transition-colors">
       <PlatformIcon platform={platform as any} size={24} />
@@ -150,11 +145,11 @@ function OperatorDetail({
   unboundWindows: BrowserWindowItem[];
   windows: BrowserWindowItem[];
   capabilitiesData?: PlatformCapability[];
-  bindWindow: any;
-  unbindWindow: any;
-  addPlatform: any;
-  removePlatform: any;
-  verifyLogin: any;
+  bindWindow: ReturnType<typeof useBindWindow>;
+  unbindWindow: ReturnType<typeof useUnbindWindow>;
+  addPlatform: ReturnType<typeof useAddPlatform>;
+  removePlatform: ReturnType<typeof useRemovePlatform>;
+  verifyLogin: ReturnType<typeof useVerifyLogin>;
   verifyingPlatforms: Set<string>;
   setVerifyingPlatforms: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
@@ -273,7 +268,10 @@ function OperatorDetail({
                     <h4 className="text-label-md text-on-surface-variant">平台账号</h4>
                     {availablePlatforms.length > 0 && (
                       <button
-                        onClick={() => setAddPlatformForWindow(isAddingPlatform ? null : w.id)}
+                        onClick={() => {
+                          setAddPlatformForWindow(isAddingPlatform ? null : w.id);
+                          setNewPlatformKey('');
+                        }}
                         className="text-xs text-primary hover:underline flex items-center gap-1"
                       >
                         <MaterialIcon icon="add" size="xs" />
@@ -378,14 +376,6 @@ export default function OperatorManagement() {
   const { data: capabilitiesData } = usePlatformCapabilities() as { data: PlatformCapability[] };
   const createOperator = useCreateOperator();
 
-  // Debug: Log capabilities data
-  useEffect(() => {
-    console.log('[DEBUG] capabilitiesData:', capabilitiesData);
-    if (capabilitiesData) {
-      const tencentCap = capabilitiesData.find((c) => c.platform === 'tencent');
-      console.log('[DEBUG] tencent capability:', tencentCap);
-    }
-  }, [capabilitiesData]);
   const updateOperator = useUpdateOperator();
   const deleteOperator = useDeleteOperator();
   const syncWindows = useSyncWindows();
@@ -496,7 +486,7 @@ export default function OperatorManagement() {
 
   const handleDelete = (id: number) => {
     deleteOperator.mutate(id, {
-      onSuccess: () => setDeletingId(null),
+      onSuccess: () => { setDeletingId(null); setSelectedOperatorId(null); },
       onError: (err: any) => {
         alert(`删除用户失败: ${err?.response?.data?.error || err?.message || '未知错误'}`);
       },
