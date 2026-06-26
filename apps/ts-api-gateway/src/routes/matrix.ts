@@ -650,12 +650,12 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
     // 批量查询操作员信息（用于获取用户名称）
     const windowIds = [...new Set(users.map((u) => u.windowId))];
     const windows = await prisma.browserWindow.findMany({
-      where: { externalId: { in: windowIds } },
+      where: { id: { in: windowIds } },
       include: {
         operator: { select: { id: true, displayName: true, wechatUserId: true } },
       },
     });
-    const windowMap = new Map(windows.map((w) => [w.externalId, w]));
+    const windowMap = new Map(windows.map((w) => [w.id, w]));
 
     // For each user, get total comment count (sum of video.commentCount) and new comment count
     const enriched = await Promise.all(
