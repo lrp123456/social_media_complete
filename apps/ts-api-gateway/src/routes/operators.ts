@@ -43,13 +43,22 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     const operators = await prisma.operator.findMany({
       include: {
-        windows: { select: { id: true, externalId: true, browserVendor: true, windowName: true } },
-        platforms: { select: { platform: true, loginStatus: true, lastVerifiedAt: true } },
+        windows: {
+          include: {
+            platforms: { select: { platform: true, loginStatus: true, lastVerifiedAt: true } },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    res.json({ success: true, data: operators });
+    // 扁平化：将 windows[].platforms 聚合到 operator.platforms
+    const operatorsWithPlatforms = operators.map((op) => ({
+      ...op,
+      platforms: op.windows.flatMap((w: any) => w.platforms || []),
+    }));
+
+    res.json({ success: true, data: operatorsWithPlatforms });
   } catch (err) {
     logger.error({ err: (err as Error).message }, '获取操作员列表失败');
     res.status(500).json({ success: false, error: (err as Error).message });
