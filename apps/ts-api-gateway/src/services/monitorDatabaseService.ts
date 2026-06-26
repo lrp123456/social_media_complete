@@ -432,15 +432,15 @@ export async function getAllActiveUsers() {
   if (users.length === 0) return [];
 
   // 过滤：只保留 BrowserWindow 仍存在的用户（窗口解绑/删除后不再监控）
-  const windowExternalIds = [...new Set(users.map(u => u.windowId))];
+  const windowIds = [...new Set(users.map(u => u.windowId))];
   const activeWindows = await prisma.browserWindow.findMany({
     where: {
-      externalId: { in: windowExternalIds },
+      id: { in: windowIds },
       status: { not: 'error' },
     },
-    select: { externalId: true },
+    select: { id: true },
   });
-  const activeIds = new Set(activeWindows.map((w: any) => w.externalId));
+  const activeIds = new Set(activeWindows.map((w: any) => w.id));
 
   return users.filter(u => activeIds.has(u.windowId));
 }
