@@ -402,6 +402,8 @@ model TaskExecution {
   steps TaskExecutionStep[]
   user  PlatformAccount?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  maintenanceExecution MaintenanceExecution?
+
   @@index([taskType, createdAt], name: "idx_task_exec_type_created")
   @@index([status, createdAt], name: "idx_task_exec_status_created")
   @@index([userId, createdAt], name: "idx_task_exec_user_created")
@@ -424,6 +426,156 @@ model TaskExecutionStep {
 
   execution TaskExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
 
+  maintenanceSteps MaintenanceStep[]
+
   @@index([executionId, stepIndex], name: "idx_task_step_exec_index")
   @@map("task_execution_steps")
+}
+
+model MaintenanceExecution {
+  id              String    @id @default(cuid())
+  taskExecutionId String    @unique @map("task_execution_id")
+  platform        String    @db.VarChar(32)
+  flowType        String    @map("flow_type") @db.VarChar(16) // monitor | publish | reply
+  windowId        String    @map("window_id") @db.VarChar(128)
+  userId          Int?      @map("user_id")
+  overallHealth   String    @default("healthy") @db.VarChar(16) // healthy | degraded | failed
+  totalSteps      Int       @default(0) @map("total_steps")
+  healthySteps    Int       @default(0) @map("healthy_steps")
+  degradedSteps   Int       @default(0) @map("degraded_steps")
+  failedSteps     Int       @default(0) @map("failed_steps")
+  totalSelectors  Int       @default(0) @map("total_selectors")
+  passedSelectors Int       @default(0) @map("passed_selectors")
+  failedSelectors Int       @default(0) @map("failed_selectors")
+  totalUrlChecks  Int       @default(0) @map("total_url_checks")
+  passedUrlChecks Int       @default(0) @map("passed_url_checks")
+  startedAt       DateTime  @default(now()) @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+
+  taskExecution TaskExecution @relation(fields: [taskExecutionId], references: [id], onDelete: Cascade)
+  steps         MaintenanceStep[]
+
+  @@index([platform, startedAt], name: "idx_maint_exec_platform_time")
+  @@index([overallHealth], name: "idx_maint_exec_health")
+  @@index([userId], name: "idx_maint_exec_user")
+  @@map("maintenance_executions")
+}
+
+model MaintenanceStep {
+  id              String    @id @default(cuid())
+  executionId     String    @map("execution_id")
+  taskStepId      String?   @map("task_step_id")
+  phase           String    @db.VarChar(64)
+  stepName        String    @map("step_name") @db.VarChar(128)
+  subStepName     String?   @map("sub_step_name") @db.VarChar(128)
+  healthStatus    String    @default("healthy") @map("health_status") @db.VarChar(16)
+  outcomeSuccess  Boolean   @default(true) @map("outcome_success")
+  outcomeDetail   String?   @map("outcome_detail") @db.Text
+  durationMs      Int?      @map("duration_ms")
+  selectorCount   Int       @default(0) @map("selector_count")
+  selectorPassed  Int       @default(0) @map("selector_passed")
+  urlCount        Int       @default(0) @map("url_count")
+  urlPassed       Int       @default(0) @map("url_passed")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  execution       MaintenanceExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  taskStep        TaskExecutionStep?   @relation(fields: [taskStepId], references: [id], onDelete: SetNull)
+  selectorRecords MaintenanceSelectorRecord[]
+  urlRecords      MaintenanceUrlRecord[]
+  snapshots       DebugSnapshot[]
+
+  @@index([executionId, phase], name: "idx_maint_step_exec_phase")
+  @@index([healthStatus], name: "idx_maint_step_health")
+  @@index([taskStepId], name: "idx_maint_step_task_step")
+  @@map("maintenance_steps")
+}
+
+model MaintenanceSelectorRecord {
+  id                 String    @id @default(cuid())
+  stepId             String    @map("step_id")
+  selectorKey        String    @map("selector_key") @db.VarChar(128)
+  selectorUsed       String    @map("selector_used") @db.Text
+  selectorSource     String    @map("selector_source") @db.VarChar(20) // primary | fallback_1 | fallback_2 | bypass_detected
+  result             String    @db.VarChar(20) // found | not_found | timeout | error | honeypot_blocked | scope_not_found | bypass_detected
+  durationMs         Int?      @map("duration_ms")
+  elementTag         String?   @map("element_tag") @db.VarChar(32)
+  elementText        String?   @map("element_text") @db.VarChar(256)
+  isVisible          Boolean?  @map("is_visible")
+  isHoneypotBlocked  Boolean?  @map("is_honeypot_blocked")
+  honeypotReason     String?   @map("honeypot_reason") @db.VarChar(32)
+  scopeSelector      String?   @map("scope_selector") @db.VarChar(256)
+  scopeMatchTimeMs   Int?      @map("scope_match_time_ms")
+  errorMessage       String?   @map("error_message") @db.Text
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  step MaintenanceStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([stepId], name: "idx_maint_sel_step")
+  @@index([selectorKey, result], name: "idx_maint_sel_key_result")
+  @@map("maintenance_selector_records")
+}
+
+model MaintenanceUrlRecord {
+  id              String    @id @default(cuid())
+  stepId          String    @map("step_id")
+  healthKey       String?   @map("health_key") @db.VarChar(128)
+  urlPattern      String    @map("url_pattern") @db.VarChar(256)
+  actualUrl       String?   @map("actual_url") @db.Text
+  httpStatus      Int?      @map("http_status")
+  result          String    @db.VarChar(24) // matched | no_match | timeout | extraction_failed | validation_failed
+  validationStep  String?   @map("validation_step") @db.VarChar(64)
+  itemsFound      Int?      @map("items_found")
+  hasMore         Boolean?  @map("has_more")
+  cursorValue     String?   @map("cursor_value") @db.VarChar(256)
+  extractionValid Boolean?  @map("extraction_valid")
+  missingFields   String?   @map("missing_fields") @db.Text
+  requestParams   String?   @map("request_params") @db.Text
+  videoId         String?   @map("video_id") @db.VarChar(64)
+  commentCid      String?   @map("comment_cid") @db.VarChar(64)
+  durationMs      Int?      @map("duration_ms")
+  responseSize    Int?      @map("response_size")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  step MaintenanceStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([stepId], name: "idx_maint_url_step")
+  @@index([healthKey, result], name: "idx_maint_url_healthkey_result")
+  @@index([videoId], name: "idx_maint_url_video")
+  @@map("maintenance_url_records")
+}
+
+model DebugSnapshot {
+  id           String    @id @default(cuid())
+  stepId       String    @map("step_id")
+  snapshotType String    @map("snapshot_type") @db.VarChar(16) // dom | response | network
+  selectorKey  String?   @map("selector_key") @db.VarChar(128)
+  urlPattern   String?   @map("url_pattern") @db.VarChar(256)
+  content      String    @db.Text
+  contentSize  Int       @default(0) @map("content_size")
+  mimeType     String?   @map("mime_type") @db.VarChar(32)
+  expiresAt    DateTime  @map("expires_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  step MaintenanceStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([stepId, snapshotType], name: "idx_debug_snap_step_type")
+  @@index([expiresAt], name: "idx_debug_snap_expires")
+  @@map("debug_snapshots")
+}
+
+model ConfigSnapshot {
+  id           String    @id @default(cuid())
+  snapshotName String    @map("snapshot_name") @db.VarChar(128)
+  platform     String    @db.VarChar(32)
+  configType   String    @map("config_type") @db.VarChar(32) // selectors | url_monitors | flow_rules
+  configData   String    @map("config_data") @db.Text
+  version      Int       @default(1)
+  createdBy    String    @default("system") @map("created_by") @db.VarChar(32)
+  description  String    @default("") @db.VarChar(255)
+  isActive     Boolean   @default(false) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([platform, configType, isActive], name: "idx_config_snap_active")
+  @@index([platform, createdAt], name: "idx_config_snap_platform_time")
+  @@map("config_snapshots")
 }
