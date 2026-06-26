@@ -895,23 +895,39 @@ function MonitorTab() {
     return accounts.filter((a) => a.platform === platformFilter);
   }, [accounts, platformFilter]);
 
-  // 按用户分组（按 operatorId 或 windowId）
+  // 按窗口分组（按 operatorId + windowId）
   const groupedByUser = useMemo(() => {
-    const groups = new Map<string, { operatorName: string; windowId: string; windowName: string; wechatUserId: string; accounts: MonitorAccount[] }>();
+    const groups = new Map<string, {
+      operatorId: number | null;
+      operatorName: string;
+      windowId: string;
+      windowName: string;
+      wechatUserId: string;
+      accounts: MonitorAccount[]
+    }>();
     for (const account of filteredAccounts) {
-      const groupKey = account.operatorId ? `op_${account.operatorId}` : `win_${account.windowId}`;
+      const groupKey = `op_${account.operatorId || 'none'}_win_${account.windowId}`;
       if (!groups.has(groupKey)) {
         groups.set(groupKey, {
+          operatorId: account.operatorId,
           operatorName: account.operatorName || '未知用户',
           windowId: account.windowId,
-          windowName: account.windowName || account.windowId,
+          windowName: account.windowName || String(account.windowId),
           wechatUserId: account.wechatUserId,
           accounts: [],
         });
       }
       groups.get(groupKey)!.accounts.push(account);
     }
-    return Array.from(groups.values());
+    // 排序：同操作员窗口相邻，按 operatorName → windowName 排序
+    return Array.from(groups.values()).sort((a, b) => {
+      const opA = a.operatorName || '';
+      const opB = b.operatorName || '';
+      if (opA !== opB) return opA.localeCompare(opB, 'zh-CN');
+      const winA = a.windowName || '';
+      const winB = b.windowName || '';
+      return winA.localeCompare(winB, 'zh-CN');
+    });
   }, [filteredAccounts]);
 
   const newCommentVideos: NewCommentVideo[] = useMemo(() => {
@@ -1411,23 +1427,31 @@ function MonitorTab() {
                   const hasLoginRequired = group.accounts.some((a) => a.status === 'login_required');
                   const hasRiskControl = group.accounts.some((a) => a.status === 'risk_control');
 
+                  const sameOperatorAsPrev = groupIdx > 0
+                    && groupedByUser[groupIdx - 1].operatorId === group.operatorId
+                    && group.operatorId !== null;
+
                   return (
                     <div
                       key={group.windowId}
-                      className="relative bg-surface border border-outline-variant rounded-2xl overflow-hidden"
+                      className={cn(
+                        'relative bg-surface border border-outline-variant rounded-2xl overflow-hidden',
+                        sameOperatorAsPrev && '-mt-3 pt-3 border-t-dashed border-t-outline-variant',
+                      )}
                       style={{ animationDelay: `${groupIdx * 80}ms` }}
                     >
-                      {/* 用户头部信息 */}
+                      {/* 窗口头部信息 */}
                       <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-surface-container-high/80 to-surface-container/40 border-b border-outline-variant/50">
                         <div className="flex items-center gap-4">
-                          {/* 用户头像 */}
+                          {/* 窗口图标 */}
                           <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                            <MaterialIcon icon="person" size="lg" className="text-primary" />
+                            <MaterialIcon icon="window" size="lg" className="text-primary" />
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
+                              <MaterialIcon icon="window" size="sm" className="text-on-surface-variant" />
                               <h3 className="text-title-md text-on-surface font-bold">
-                                {group.operatorName}
+                                {group.windowName}
                               </h3>
                               {hasActive && (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10">
@@ -1455,8 +1479,12 @@ function MonitorTab() {
                               )}
                             </div>
                             <div className="flex items-center gap-3 mt-1">
+                              <span className="text-label-sm text-on-surface-variant">
+                                {group.operatorName}
+                              </span>
+                              <span className="text-outline">·</span>
                               <span className="text-label-sm text-on-surface-variant font-mono">
-                                {group.windowName}
+                                {group.wechatUserId}
                               </span>
                               <span className="text-outline">·</span>
                               <span className="text-label-sm text-on-surface-variant">
