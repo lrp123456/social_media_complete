@@ -1261,3 +1261,76 @@ Co-Authored-By: Claude <noreply@anthropic.com>"
 4. 前端主从面板：左操作员列表（独立新增入口）+ 右详情（一操作员可绑多窗口、每窗口独立管平台）（Task 10-12, 13-Step5）。
 5. 端到端：建操作员→绑多窗口→各窗口加平台→验证登录，platform_accounts/login_verifications 写入正确、一操作员多窗口生效（Task 13-Step6）。
 6. `npx jest` 全绿（Task 9-Step5, 13-Step7）。
+
+---
+
+## 附录：抖音 v2 反检测收口现状（2026-06-26）
+
+> 参考 spec: `docs/superpowers/specs/2026-06-25-anti-detection-douyin-pilot-design.md`
+> 双路径架构：`isAntiDetectionV2()` 控制 `v2（HumanActions.safeEvaluate）` / `legacy（page.evaluate）` 分支切换。参见 spec 第 9.7 条回滚策略。
+
+### 收口完成度概览
+
+| 文件 | v2 分支数 | 状态 | 说明 |
+|------|----------|------|------|
+| `douyinCrawler.ts` | 44 处 `isAntiDetectionV2()` | ✅ ~95% | `page.evaluate()` → `HumanActions.safeEvaluate()` / `HumanActions.exists()` / `HumanActions.readAll()` |
+| `platforms/douyin.ts` | 5 处 `isAntiDetectionV2()` | ✅ 发布路径全覆盖 | 填写(click/fill)→点击发布→结果检查 全部走 v2 |
+| `services/loginFlowHelpers.ts` | 4 处 `isAntiDetectionV2()` | ✅ 登录流程全覆盖 | 登录态检查/二维码扫码/SMS 验证码入口 全部走 v2 |
+
+### douyinCrawler.ts 已收口项（44 处分支）
+
+| 类别 | v2 路径 | 覆盖场景 |
+|------|---------|---------|
+| `page.evaluate()` → `HumanActions.safeEvaluate()` | `safeEvaluate(page, fn, { reason, world, args })` | 抖音视频列表解析、评论树提取、回复按钮定位、根评论 cid 读取、展开按钮查找、抽屉内容提取等 |
+| 元素查找/可见性 | `HumanActions.cdpIsElementVisible()` + `HumanActions.exists()` | 侧边栏、子菜单、视频列表、选择器可见性 |
+| 点击操作 | `HumanActions.cdpClick()` / `HumanActions.cdpClickByText()` / `HumanActions.cdpClickNode()` | 视频行点击、按钮点击、节点点击 |
+| 滚动操作 | `HumanActions.cdpSmartScroll()` + `HumanActions.humanScroll()` | 评论区滚动、抽屉滚动、视口滚动 |
+| 键盘输入 | `HumanActions.cdpKeyboard()` | 搜索输入、评论回复输入 |
+
+### ❌ 剩余盲区（5 处，无 v2 分支）
+
+| 位置 | 操作 | 风险等级 | 说明 |
+|------|------|---------|------|
+| `submitVerifyCode()` (~行1033-1086) | `page.$$` + `input.fill()` + `btn.click()` × 6 处 | 🟡 中 | SMS 验证码提交流程，触发频率低（仅需重登录时） |
+| `expandRepliesForRoot()` (~行1268) | `page.$$eval` × 1 处 | 🟢 低 | 子回复 DOM 展开查询，纯读取操作 |
+| `captureRiskScene()` (~行1493) | `page.screenshot()` × 1 处 | 🟢 低 | 风控现场截图，仅调试/审计用 |
+| `warmUp()` (~行167) | `page.goto()` × 1 处 | 🟢 低 | 预热阶段导航到抖音首页，非业务路径 |
+| `navigateToCreatorHome()` (~行204) | `page.goto()` × 1 处 | 🟢 低 | 导航回退路径，仅创作者中心跳转失败时用 |
+
+### 非盲区但需关注的裸调用
+
+以下调用在 legacy 分支中正常运行，v2 模式下已走 HumanActions，但本身无 v2 分支守卫（属基础设施层，不宜加业务分支）：
+
+| 位置 | 操作 | 说明 |
+|------|------|------|
+| `douyin.ts:37,87,298` | `page.goto()` × 3 处 | 发布页导航，属于页面跳转基础操作，HumanActions 暂无 goto 封装 |
+| `loginFlowHelpers.ts` | `page.$()` × 8 处 | 元素查询（含 v2 分支内），HumanActions 无 $ 原生替代 |
+
+### 架构说明
+
+```
+            isAntiDetectionV2() ?
+           /                    \
+    v2 路径                       legacy 路径
+    ┌─────────────────┐          ┌──────────────┐
+    │ HumanActions     │          │ page.evaluate │
+    │ .safeEvaluate()  │          │ page.$$       │
+    │ .cdpClick()      │          │ page.$$eval   │
+    │ .cdpSmartScroll()│          │ page.goto     │
+    │ .exists()        │          │ page.screenshot│
+    └─────────────────┘          └──────────────┘
+            │                           │
+            └───────────┬───────────────┘
+                        │
+              共享层（两路径共用）
+              HumanActions.cdpClickByText / humanScroll / wait
+```
+
+**关键文件**：`apps/ts-api-gateway/src/lib/antiDetectionMode.ts` 暴露 `isAntiDetectionV2()`，内部读 `ANTI_DETECTION_MODE` 环境变量。标准操作流程：`legacy` 默认 → 验证期 `v2` → 全量切换后移除 legacy 分支。
+
+### 成功判定（与 spec 第 11 节对齐）
+
+1. **静态零直接调用**：抖音范围文件 `page.evaluate`/`page.$eval`/`page.$$eval` 直接调用数 → 仅限上述 5 处盲区 + legacy 分支内
+2. **运行时指标埋点**：`TaskExecutionStep.extra.antiDetection.actionPath` 中 `safeEvaluate-isolated` 占绝大多数（v2 模式）
+3. **功能不回归**：抖音三功能（发布/监控/回复）端到端走通
+4. **双路径共存**：`ANTI_DETECTION_MODE=legacy|v2` 可切换，回滚无需代码变更
