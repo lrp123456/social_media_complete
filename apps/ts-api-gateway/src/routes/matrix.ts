@@ -1642,11 +1642,11 @@ router.put('/monitor/accounts/:userId/toggle', async (req: Request, res: Respons
       const { resetSchedulerTimer } = await import('../services/monitorService');
       if (enabled) {
         // 启用时：立即重置该 (窗口, 平台) 的调度器，触发即时调度
-        resetSchedulerTimer(user.windowId, user.platform);
-        logger.info({ userId, windowId: user.windowId, platform: user.platform }, '[toggle] 调度器已重置，等待即时调度');
+        resetSchedulerTimer(user.windowExternalId, user.platform);
+        logger.info({ userId, windowId: user.windowExternalId, platform: user.platform }, '[toggle] 调度器已重置，等待即时调度');
       } else {
         // 禁用时：无需操作，getAllActiveUsers() 已过滤 monitoringEnabled=false 的用户
-        logger.info({ userId, windowId: user.windowId, platform: user.platform }, '[toggle] 用户已禁用，调度器将在下次运行时自动跳过');
+        logger.info({ userId, windowId: user.windowExternalId, platform: user.platform }, '[toggle] 用户已禁用，调度器将在下次运行时自动跳过');
       }
     } catch (restartErr: any) {
       logger.warn({ err: restartErr.message }, '[toggle] 调度器重置失败（不影响 toggle 结果）');
