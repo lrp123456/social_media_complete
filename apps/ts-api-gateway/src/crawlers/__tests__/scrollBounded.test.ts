@@ -10,6 +10,15 @@ const stubLogger = {
   child: jest.fn(() => stubLogger),
 };
 
+// Mock @social-media/shared-config: logger.ts 调用 isProduction()，避免 OSS 校验
+jest.mock('@social-media/shared-config', () => ({
+  isProduction: jest.fn().mockReturnValue(false),
+  isDevelopment: jest.fn().mockReturnValue(false),
+  getConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
+  loadConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
+  PlatformName: 'douyin',
+}));
+
 jest.mock('@social-media/browser-core', () => ({
   // 被测方法
   HumanActions: {
