@@ -579,3 +579,28 @@ model ConfigSnapshot {
   @@index([platform, createdAt], name: "idx_config_snap_platform_time")
   @@map("config_snapshots")
 }
+
+// ============================================================
+// 素材更新 — 每周热门视频采集
+// ============================================================
+
+model HotVideoCandidate {
+  id           String   @id @default(cuid())
+  platformId   String   @map("platform_id") @db.VarChar(64)
+  videoId      String   @map("video_id") @db.VarChar(256)
+  title        String?  @db.VarChar(512)
+  author       String?  @db.VarChar(256)
+  playCount    Int?     @map("play_count")
+  cover        String?  @db.VarChar(1024)
+  videoUrl     String?  @map("video_url") @db.VarChar(1024)
+  publishTime  DateTime? @map("publish_time")
+  rawJson      Json?    @map("raw_json")
+  fetchedAt    DateTime @default(now()) @map("fetched_at")
+  status       String   @default("pending") @db.VarChar(32) // pending|processing|no_url|accepted|rejected
+  style        String?  @db.VarChar(64)
+
+  @@unique([platformId, videoId], name: "uq_hot_video_platform_video")
+  @@index([fetchedAt], name: "idx_hot_video_fetched_at")
+  @@index([status], name: "idx_hot_video_status")
+  @@map("hot_video_candidates")
+}
