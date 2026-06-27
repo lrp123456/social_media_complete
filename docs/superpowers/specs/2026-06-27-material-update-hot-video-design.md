@@ -1,7 +1,7 @@
 # 素材更新后端重构设计 · 每周热门视频采集
 
 - **日期**: 2026-06-27
-- **状态**: 设计待审
+- **状态**: 设计已修订（基于 oracle 架构审核）
 - **作者**: brainstorming session
 - **关联**: 重构原「达人监控」素材更新链路；与现有浏览器版达人监控并行
 
@@ -47,7 +47,7 @@
 | 调度 | cron 表达式可配（多个）+ 手动触发 |
 | 平台范围 | 国内主流 + 海外主流 + 平台条目可自由增删 |
 | 配置存储 | JSON 文件（复用 `settingsStore`，新 section `materialUpdate`） |
-| 执行架构 | 方案 A：TS 网关编排 + Python Worker 执行（复用现有 FFmpeg/LLM 管线） |
+| 执行架构 | TS 网关编排 + Python Worker 执行（HTTP POST 到 Python ARQ 队列，复用现有 FFmpeg/LLM 管线；Python 完成后 webhook 回调 TS） |
 
 ## 3. 整体架构与数据流
 
@@ -61,15 +61,15 @@
 │  2. 多 key 轮询 + 失败冷却 → curl 各平台热门视频 API           │
 │  3. 解析(列表路径+字段映射) → 标准化视频对象                    │
 │  4. 去重(平台+videoId) → 写入 HotVideoCandidate (PG)          │
-│  5. 下发 BullMQ 任务 → Python Worker                          │
+│  5. 下发 HTTP POST → Python Worker（ARQ 队列）                 │
 └─────────────────────────────────────────────────────────────┘
-        │ BullMQ 任务 { candidateId, videoUrl, platform, frameIntervalMs, evaluatePrompt, styles, minRating }
+        │ POST /api/v1/tasks/material-update { candidateId, videoUrl, platform, frameIntervalMs, evaluatePrompt, styles, minRating }
         ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ Python Worker material_tasks.py (改造)                        │
 │  下载原始视频直链 → 按间隔抽帧 → LLM 评估(可配提示词+风格)       │
 │  → 达标且命中风格 → 落盘 data/materials/{style}/{platform}/... │
-│  → 回调 TS（带 candidateId + style）                          │
+│  → webhook 回调 TS（带 candidateId + style + status）         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +91,9 @@
         "url": "https://tiktok-video.p.rapidapi.com/...?term={{PAGE}}",
         "headers": { "x-rapidapi-key": "{{API_KEY}}", "x-rapidapi-host": "..." },
         "params": { "period": "week", "count": 50 },
-        "body": null
+        "body": null,
+        "maxPages": 3,
+        "timeoutMs": 30000
       },
       "keyPool": {
         "placeholder": "API_KEY",
@@ -127,14 +129,18 @@
   },
   "keyCooldownState": {
     "douyin_hot": { "fbe8a12e...": 1719480000000 }
-  }
+  },
+  "allCooldownRetryAfterMs": 1800000
 }
 ```
 
 **说明**：
-- `{{API_KEY}}` / `{{PAGE}}` 占位符可在 `headers`/`params`/`url` 任意位置，运行时轮询注入。
-- `listPath` 与 `fields` 值用点路径取值（`data.videos`、`stats.play`），不引入 JSONPath。
+- `{{API_KEY}}` / `{{PAGE}}` 占位符可在 `headers`/`params`/`url` 任意位置，运行时轮询注入（字符串替换，key 中含 URL 特殊字符时自动 URL 编码）。
+- `listPath` 与 `fields` 值用点路径取值（`data.videos`、`stats.play`），不引入 JSONPath；点路径可解析到数组，若响应为嵌套数组（如 `data.videos.items`）需在 listPath 中完整指定。
+- `maxPages` 控制分页采集上限，`{{PAGE}}` 从 1 递增到 `maxPages`；未配置时默认 1（仅采集首页）。
+- `timeoutMs` 为 HTTP 请求超时（connect + read），默认 30000ms。
 - `keyCooldownState` 为运行态，由 service 自动写入；前端只读展示冷却倒计时。
+- `allCooldownRetryAfterMs` 为全平台 key 冷却后的自动重试延迟（默认 1800000ms = 30 分钟），避免等到下次 cron。
 - `styles[].dir` 决定落盘子目录名；`keywords` 辅助 LLM 判定（提示词中提示候选风格）。
 
 ## 5. 后端设计（TS 网关）
@@ -146,10 +152,10 @@
 | `src/services/materialUpdateConfig.ts` | 封装 `getSection('materialUpdate', DEFAULTS)` / `saveSection`；类型定义（`Platform`/`KeyPool`/`Parse`/`Processing`/`Schedule`）；提供默认值 |
 | `src/services/materialKeyPool.ts` | 多 key 轮询 + 失败冷却切换：401/429/额度错误 → 写 `keyCooldownState` 冷却 → 切下一个 key；全冷却则该平台本批次失败 |
 | `src/services/materialParser.ts` | 列表路径 + 字段映射解析（点路径取值），输出标准化 `Video` 对象 |
-| `src/services/materialUpdateService.ts` | 核心编排：读配置 → 并发 curl 各 enabled 平台 → 解析 → 去重 upsert → 下发 BullMQ 任务 |
+| `src/services/materialUpdateService.ts` | 核心编排：读配置 → 并发 curl 各 enabled 平台 → 解析 → 去重 upsert → 下发 HTTP POST 到 Python Worker（ARQ 队列） |
 | `src/services/materialUpdateScheduler.ts` | cron 调度器：配置变更时 `reload()`（参考现有 `restartMonitorScheduler` 模式）；启动时注册 |
 | `src/routes/config-material.ts` | `GET/PUT /api/v1/config-material`；`POST /api/v1/config-material/test`（测试单平台 curl+解析回显） |
-| `src/routes/material-update.ts` | `POST /api/v1/material-update/run`（手动触发）；`GET .../status`（运行态/key 冷却）；`GET .../candidates`（候选预览） |
+| `src/routes/material-update.ts` | `POST /api/v1/material-update/run`（手动触发）；`GET .../status`（运行态/key 冷却）；`GET .../candidates`（候选预览）；`POST .../webhook`（Python 完成回调：更新 candidate status/style） |
 
 在 `src/index.ts` 注册新路由并启动调度器。
 
@@ -157,7 +163,7 @@
 
 ```prisma
 model HotVideoCandidate {
-  id           String   @id @default(cuid())
+  id           String   @id @default(uuid())   // 与项目现有 schema 保持一致
   platformId   String
   videoId      String
   title        String?
@@ -168,7 +174,7 @@ model HotVideoCandidate {
   publishTime  DateTime?
   rawJson      Json?
   fetchedAt    DateTime @default(now())
-  status       String   @default("pending") // pending|processing|accepted|rejected
+  status       String   @default("pending") // pending|processing|no_url|accepted|rejected
   style        String?
 
   @@unique([platformId, videoId])
@@ -177,17 +183,19 @@ model HotVideoCandidate {
 }
 ```
 
-去重靠 `upsert` + `@@unique([platformId, videoId])`，已存在则跳过（不计入新候选，不下发处理）。
+去重靠 `upsert` + `@@unique([platformId, videoId])`。**已存在且 `status !== 'rejected'` 的候选跳过**（不计入新候选，不下发处理）；`status === 'rejected'` 的候选允许重新处理（更新 `status` 为 `pending` 并重新下发）。
 
 ### 5.3 运行时序（每次执行）
 
-1. `getSection('materialUpdate')` 读最新配置。
-2. 遍历 `enabled` 平台，并发 curl：每平台用 `materialKeyPool` 选可用 key，注入占位符到 `headers`/`params`/`url`。
-3. `materialParser` 按该平台 `parse` 提取标准化视频列表。
-4. `upsert` 到 `HotVideoCandidate`（去重）；仅对**新**候选继续。
-5. 新候选组装 BullMQ 任务 `{ candidateId, videoUrl, platform, frameIntervalMs, evaluatePrompt, styles, minRating }` 下发 Python。
-6. key 失败 → 写 `keyCooldownState`、切下一个 key；全冷却 → 该平台本批次失败并记录到运行态。
-7. Python 完成回调 → 更新 `HotVideoCandidate.status`（`accepted`/`rejected`）与 `style`。
+0. **并发互斥**：检查 `running` 标志（进程内锁），若已在运行则跳过（cron）或返回 409（手动触发）。参照 `monitorService.ts` 的 `schedulerStates` 模式。
+1. `getSection('materialUpdate')` 读最新配置（**每次执行时读取，不在模块顶层缓存**）。
+2. 遍历 `enabled` 平台，并发 curl：每平台用 `materialKeyPool` 选可用 key，注入占位符到 `headers`/`params`/`url`；按 `maxPages` 分页循环（`{{PAGE}}` 从 1 递增），每页请求带 `timeoutMs` 超时。
+3. **响应体错误检测**：不仅检查 HTTP 状态码（401/429），还需检测 200 响应体中的额度/限流错误（正则匹配 `rate limit`、`quota exceeded`、`credits` 等关键词，或 JSON path 检测 `message`/`error` 字段）。命中时触发 key 冷却，与 401/429 同等处理。
+4. `materialParser` 按该平台 `parse` 提取标准化视频列表；`videoUrl` 为空的候选标记为 `no_url` 不下发处理。
+5. `upsert` 到 `HotVideoCandidate`（去重）；**仅 `status === 'rejected'` 的候选允许重新处理**（重新下发 Python），其余已存在候选跳过。
+6. 新候选组装任务 `{ candidateId, videoUrl, platform, frameIntervalMs, evaluatePrompt, styles, minRating }` 通过 HTTP POST 到 Python Worker `POST /api/v1/tasks/material-update`（ARQ 队列）。
+7. key 失败 → 写 `keyCooldownState`、切下一个 key；全冷却 → 该平台本批次失败，记录到运行态，**调度 `allCooldownRetryAfterMs` 后自动重试一次**（而非等到下次 cron）。
+8. Python 完成后 webhook 回调 `POST /api/v1/material-update/webhook` → 更新 `HotVideoCandidate.status`（`accepted`/`rejected`）与 `style`。
 
 ### 5.4 API 清单
 
@@ -199,17 +207,20 @@ model HotVideoCandidate {
 | POST | `/api/v1/material-update/run` | 手动触发一次全量采集（复用 cron 路径） |
 | GET | `/api/v1/material-update/status` | 运行态：各平台 key 冷却、最近批次 |
 | GET | `/api/v1/material-update/candidates` | 候选视频分页预览 |
+| POST | `/api/v1/material-update/webhook` | Python Worker 完成回调（更新 candidate status/style） |
 
 ## 6. Python Worker 改造（`material_tasks.py`）
 
 现有管线：入参 `oss_urls`（OSS 下载）→ 场景切分 → 每段抽 1 帧 → 硬编码 prompt 评级 → 落盘。改造点：
 
-- **入参扩展**：支持 `videoUrl`（原始直链，先下载到 temp）、`frameIntervalMs`、`evaluatePrompt`、`styles`、`minRating`、`candidateId`。保留 `oss_urls` 兼容旧入口。
-- **抽帧改为按间隔**：用 FFmpeg `fps` filter 按 `frameIntervalMs` 等间隔抽帧，替换现有「每段 1 帧」。
-- **评估提示词可配**：`_rate_image` 的 prompt 从入参 `evaluatePrompt` 读取，不再硬编码；LLM 返回需含「是否达标 + 命中风格」。
+- **入参扩展**：`MaterialUpdateRequest` Pydantic 模型新增可选字段：`video_url: str | None`（原始直链）、`frame_interval_ms: int = 1000`、`evaluate_prompt: str | None`、`styles: list[dict] | None`、`min_rating: int = 4`、`candidate_id: str | None`。保留 `oss_urls` 兼容旧入口。
+- **新增 HTTP 直链下载函数**：现有 `download_from_oss`（`apps/python-worker/app/services/ffmpeg.py:14-30`）仅支持阿里云 OSS（`oss2` SDK）。新增 `download_from_url(url: str, temp_dir: str) -> str` 使用 `httpx` 流式下载 HTTP 直链到本地 temp 文件，返回本地路径。
+- **入参分发**：`process_material_update` 内做参数分发——`if video_url` → 新路径（HTTP 下载），`elif oss_urls` → 旧路径（OSS 下载），保持向后兼容。
+- **抽帧改为按间隔**：用 FFmpeg `fps` filter 按 `frameIntervalMs` 等间隔抽帧，替换现有「每段 1 帧」；FFmpeg 子进程调用加 `asyncio.wait_for` 超时保护。
+- **评估提示词可配**：`_rate_image` 的 prompt 从入参 `evaluatePrompt` 读取，不再硬编码；LLM 返回需含「是否达标 + 命中风格」。解析增加 `json.loads` 的 try/except + fallback 策略（解析失败时 reject）。
 - **风格判定**：与配置 `styles`（name/dir/keywords）匹配；未命中或 `rating < minRating` → 标记 `rejected`，不落盘。
 - **落盘路径**：保持 `data/materials/{style}/{platform}/...`，`style` 取自配置 `styles[].dir`。
-- **回调**：完成回调带 `candidateId` 与 `style`/`status`，TS 侧更新 `HotVideoCandidate`。
+- **回调**：完成后通过 webhook POST 到 TS 侧 `POST /api/v1/material-update/webhook`，带 `candidateId` 与 `style`/`status`。
 
 ## 7. 前端设计：「素材更新设置」Tab
 
@@ -261,7 +272,7 @@ model HotVideoCandidate {
 
 - **TS 单元**：`materialParser`（点路径取值、缺失字段、listPath 为数组/对象）、`materialKeyPool`（轮询选 key、冷却写入、全冷却失败、冷却过期恢复）。
 - **TS 集成**：`config-material` 路由 GET/PUT 往返；`test` 端点 mock fetch 回显解析；`run` 触发后候选 upsert 去重（同 videoId 不重复下发）。
-- **Python**：`material_tasks.py` 入参扩展（`videoUrl` 下载、按 `frameIntervalMs` 抽帧、可配 prompt、风格命中落盘 / 未命中 rejected）；可用本地小视频 fixture。
+- **Python**：`material_tasks.py` 入参扩展（`videoUrl` 下载、按 `frameIntervalMs` 抽帧、可配 prompt、风格命中落盘 / 未命中 rejected）；`download_from_url` HTTP 直链下载函数；可用本地小视频 fixture。
 - **端到端**（手动）：配置一个真实平台 → test 回显 → run → 候选入库 → Python 处理 → 落盘到 `data/materials/{style}/{platform}/`。
 
 ## 9. 范围与拆分
@@ -272,5 +283,10 @@ model HotVideoCandidate {
 
 - **RapidAPI key 暴露**：key 写入 `settings-overrides.json`（明文），与现有 `rapidapi_keys` 存储方式一致；前端展示用掩码。如需更高安全可后续迁移到加密存储，本期不做。
 - **cron 重载并发**：`reload()` 需先清除旧定时器再注册新定时器，避免重复触发（参照 `restartMonitorScheduler`）。
-- **Python 任务契约**：扩展入参需保持向后兼容 `oss_urls` 旧入口，避免破坏现有调用方。
+- **执行并发安全**：cron 触发和手动触发可能并发执行。TS 侧需进程内互斥锁（`running` 标志），参照 `monitorService.ts` 的 `schedulerStates` 模式。
+- **Python 任务契约**：扩展入参需保持向后兼容 `oss_urls` 旧入口，避免破坏现有调用方。新增 `download_from_url` 函数（`httpx` 流式下载），与现有 `download_from_oss` 并存。
 - **平台 curl 差异**：不同 RapidAPI 接口返回结构差异大，靠 `parse` 配置覆盖；测试请求端点用于配置时即时验证。
+- **RapidAPI 响应体错误**：RapidAPI 常返回 200 + 错误消息（如 `{"message": "rate limit exceeded"}`）。`materialKeyPool` 需检测响应体中的限流/额度错误关键词，否则 key 永远不会被冷却。
+- **全冷却自动重试**：所有 key 冷却后，调度 `allCooldownRetryAfterMs`（默认 30 分钟）后自动重试一次，避免等到下次 cron（每周一次）导致整批失败丢失一周数据。
+- **settingsStore 缓存**：`settingsStore.ts` 使用模块级 `_cache`。`materialUpdateService.ts` 必须在每次执行时主动调用 `getSection`，不能在模块顶层缓存配置。
+- **数据保留策略**：`HotVideoCandidate` 表会随时间增长。后续需增加自动清理（如超过 90 天的 `rejected` 候选定期删除）。
