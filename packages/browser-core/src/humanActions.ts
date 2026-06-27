@@ -67,14 +67,35 @@ export type PierceStep =
   | { type: 'shadow'; selector: string }
   | { type: 'frame'; name?: string; urlIncludes?: string };
 
+export type PierceHandler = (page: Page, params: any) => Promise<unknown | null>;
+
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
   private static isolatedWorldIds = new WeakMap<Page, number>();
   private static stepMetricsCollector: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null = null;
+  private static platformPierceRegistry = new Map<string, Map<string, PierceHandler>>();
 
   static setStepMetricsCollector(c: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null): void {
     HumanActions.stepMetricsCollector = c;
+  }
+
+  /**
+   * 注册平台特有的穿透 handler。仅当穿透逻辑无法用 PierceStep[] chain 声明式表达时使用；
+   * 通用穿透走 cdpPierceShadow。注册幂等（覆盖）。
+   */
+  static registerPlatformPierce(platform: string, name: string, handler: PierceHandler): void {
+    let platformMap = HumanActions.platformPierceRegistry.get(platform);
+    if (!platformMap) {
+      platformMap = new Map();
+      HumanActions.platformPierceRegistry.set(platform, platformMap);
+    }
+    platformMap.set(name, handler);
+  }
+
+  /** 取用平台特有穿透 handler，未注册返回 undefined。 */
+  static getPlatformPierce(platform: string, name: string): PierceHandler | undefined {
+    return HumanActions.platformPierceRegistry.get(platform)?.get(name);
   }
 
   private static recordActionPath(actionPath: string, extra?: Record<string, any>): void {
