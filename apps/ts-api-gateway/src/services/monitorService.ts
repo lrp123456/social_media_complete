@@ -895,6 +895,7 @@ function releaseCrawler(platform: string, windowId: string): void {
 
 // 任务超时时间：10分钟（评论采集需要处理多个视频的抽屉点击+滚动+展开）
 const JOB_TIMEOUT_MS = 10 * 60 * 1000;
+const REPLY_STEP_TIMEOUT_MS = 120_000; // replyToComment 单步超时（2min），外层 5min 之外的更细兜底
 
 // ============================================================
 // 向后兼容：从 unifiedQueue 导入并重新导出
@@ -2129,7 +2130,12 @@ export async function executeReplyAction(
         createTime: commentCreateTime,
       };
       if (executionId) await updatePhase(executionId, 5, '执行回复', 80, '正在执行回复操作');
-      const replied = await dy.replyToComment(page, replyTarget, replyData.text, executionId);
+      const replied = await Promise.race([
+        dy.replyToComment(page, replyTarget, replyData.text, executionId),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('定位/执行回复超时')), REPLY_STEP_TIMEOUT_MS),
+        ),
+      ]);
       if (replied) {
         logger.info({ commentCid: replyData.commentCid, text: replyData.text }, '抖音回复执行成功');
         if (commentDbId) await db.updateReplyStatus(commentDbId, 'sent');
