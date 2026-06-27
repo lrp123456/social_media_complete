@@ -974,14 +974,14 @@ function MonitorTab() {
     return { total, active, newCmts, totalVideos };
   }, [accounts]);
 
-  // 判断某个 (windowId, platform) 是否已全部暂停
+  // 判断某个 (windowExternalId, platform) 是否已全部暂停
   const pausedPairs = useMemo(() => {
-    const map = new Map<string, boolean>(); // key = "windowId_platform" → isPaused
+    const map = new Map<string, boolean>(); // key = "windowExternalId_platform" → isPaused
     if (!accounts.length) return map;
-    // 按 (windowId, platform) 分组
+    // 按 (windowExternalId, platform) 分组
     const groups = new Map<string, MonitorAccount[]>();
     for (const a of accounts) {
-      const k = `${a.windowId}_${a.platform}`;
+      const k = `${a.windowExternalId || a.windowId}_${a.platform}`;
       if (!groups.has(k)) groups.set(k, []);
       groups.get(k)!.push(a);
     }
@@ -1684,7 +1684,7 @@ function MonitorTab() {
                                           <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
                                             <span className="text-[10px] text-indigo-400">⏱</span>
                                             <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
-                                              {countdownMap.get(`${account.windowId}_${account.platform}`) || '--'}
+                                              {countdownMap.get(`${account.windowExternalId || account.windowId}_${account.platform}`) || '--'}
                                             </span>
                                           </div>
                                         )}

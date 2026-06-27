@@ -676,6 +676,7 @@ router.get('/monitor/accounts', async (_req: Request, res: Response) => {
           platform: user.platform,
           platformName: PLATFORM_DISPLAY_NAMES[user.platform] || user.platform,
           windowId: user.windowId,
+          windowExternalId: user.windowExternalId,
           windowName: window?.windowName || '',
           operatorId: operator?.id || null,
           operatorName: operator?.displayName || '',
