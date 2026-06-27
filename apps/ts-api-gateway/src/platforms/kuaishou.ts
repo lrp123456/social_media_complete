@@ -7,6 +7,7 @@ import { HumanActions, SelectorReader } from '@social-media/browser-core';
 import { BasePublisher } from './BasePublisher';
 import { createLogger } from '../lib/logger';
 import { getSelectorReader } from '../lib/selectorStore';
+import { isEnabled } from '../lib/antiDetectionMode';
 import type { LoginContext, UploadContext } from './types';
 import type { PlatformName } from '@social-media/shared-config';
 
@@ -162,7 +163,11 @@ export class KuaishouPublisher extends BasePublisher {
             await HumanActions.safeCDPType(page, tagText, tagInput.sel);
             await HumanActions.wait(page, 300, 600);
             // 按回车确认标签
-            await page.keyboard.press('Enter');
+            if (isEnabled('kuaishou')) {
+              await HumanActions.press(page, tagInput.sel, 'Enter');
+            } else {
+              await page.keyboard.press('Enter');
+            }
             await HumanActions.wait(page, 300, 500);
           }
           logger.info(`[快手] ${metadata.tags.length} 个标签已添加`);

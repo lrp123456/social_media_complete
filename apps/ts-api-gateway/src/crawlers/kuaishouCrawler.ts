@@ -1331,6 +1331,7 @@ export class KuaishouCrawler {
     // 开始抓取前清除可能存在的前端错误弹窗
     await this.dismissErrorDialog(page);
 
+    MaintenanceProbe.enterStep('monitor', 'kuaishou', 'Phase1', 'fetchVideoListFromSource');
     logger.info({ userId }, '[Phase1] Fetching kuaishou video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
 
@@ -1515,6 +1516,8 @@ export class KuaishouCrawler {
       };
     }
 
+    MaintenanceProbe.exitStep();
+
     return {
       hasUpdate: commentsQueue.length > 0,
       commentsQueue,
@@ -1618,6 +1621,7 @@ export class KuaishouCrawler {
     const startTime = Date.now();
 
     logger.info({ queueLength: queue.length }, '[Phase3] Starting kuaishou comment queue processing');
+    MaintenanceProbe.enterStep('monitor', 'kuaishou', 'Phase3', 'processCommentsQueue');
 
     this.page = page;
 
@@ -1961,6 +1965,7 @@ export class KuaishouCrawler {
     const failCount = results.filter(r => !r.success).length;
     logger.info({ elapsed, total: queue.length, success: successCount, failed: failCount }, '[Phase3] Kuaishou queue processing complete');
 
+    MaintenanceProbe.exitStep();
     return { results, riskDetected: false };
   }
 
@@ -2536,6 +2541,10 @@ export class KuaishouCrawler {
       level: target.level,
       textLength: replyText.length 
     }, '[Reply] Starting reply');
+
+    // ── 维护调试探针 ──
+    const dExec = executionId ? await prisma.taskExecution.findUnique({ where: { id: executionId }, select: { isDebugMode: true } }) : null;
+    await bootstrapProbe({ isDebugMode: dExec?.isDebugMode ?? false, taskExecutionId: executionId ?? undefined });
 
     // ── 调试模式初始化 ──
     const debugEnabled = await isDebugModeEnabled();
@@ -3250,6 +3259,8 @@ export class KuaishouCrawler {
       if (manifest) finishManifest(manifest, false);
       logger.error({ error: err.message, commentCid: target.commentCid }, '[Reply] Reply failed');
       return false;
+    } finally {
+      await teardownProbe();
     }
   }
 
