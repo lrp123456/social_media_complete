@@ -30,6 +30,24 @@ async def download_from_oss(oss_url: str, local_path: str) -> str:
     return local_path
 
 
+async def download_from_url(url: str, local_path: str, timeout: float = 120.0) -> str:
+    """
+    从 HTTP/HTTPS 直链下载文件到本地路径（流式下载）。
+    用于素材更新热门视频采集场景，与 download_from_oss 并存。
+    """
+    import httpx
+
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        async with client.stream("GET", url) as response:
+            response.raise_for_status()
+            with open(local_path, "wb") as f:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    f.write(chunk)
+
+    logger.info(f"HTTP 下载完成: {url} → {local_path}")
+    return local_path
+
+
 async def run_ffprobe(video_path: str) -> dict:
     """获取视频信息"""
     cmd = [

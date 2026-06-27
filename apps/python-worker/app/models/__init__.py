@@ -33,6 +33,23 @@ class RenderTaskRequest(BaseModel):
     options: dict | None = Field(default_factory=dict)
 
 
+class MaterialUpdateRequest(BaseModel):
+    """素材更新请求（热门视频采集）"""
+    task_id: str
+    task_type: str = "material_update"
+    # 旧入口兼容
+    oss_urls: list[str] = Field(default_factory=list)
+    platform: str = "unknown"
+    user_id: str | None = None
+    # 新增字段（热门视频采集）
+    candidate_id: str | None = None
+    video_url: str | None = None
+    frame_interval_ms: int = 1000
+    evaluate_prompt: str | None = None
+    styles: list[dict] | None = None
+    min_rating: int = 4
+
+
 # ============================================================
 # 回调模型
 # ============================================================

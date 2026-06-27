@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     # TS Webhook 回调
     ts_webhook_url: str = "http://localhost:3001/api/v1/webhook/python-callback"
+    # TS 素材更新 webhook 回调（独立端点）
+    ts_material_webhook_url: str = "http://localhost:3001/api/v1/material-update/webhook"
 
     # LiteLLM proxy
     litellm_url: str = "http://localhost:4000"

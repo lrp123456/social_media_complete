@@ -34,12 +34,15 @@ import operatorsRouter from './routes/operators';
 import wecomBotRouter from './routes/wecom-bot';
 import llmReplyRouter from './routes/llmReply';
 import configAiReplyRouter from './routes/config-ai-reply';
+import { configMaterialRouter } from './routes/config-material';
+import { materialUpdateRouter } from './routes/material-update';
 import maintenanceRouter from './routes/maintenance';
 
 // Workers
 import { startTimeoutMonitor } from './services/publishService';
 import { startMonitorScheduler } from './services/monitorService';
 import { startCleanupScheduler } from './services/cleanupService';
+import { startMaterialUpdateScheduler, stopMaterialUpdateScheduler } from './services/materialUpdateScheduler';
 
 // ============================================================
 // 初始化
@@ -112,6 +115,8 @@ app.use('/api/v1/matrix', matrixRouter);                     // 社媒矩阵: �
 app.use('/api/v1/materials', materialsRouter);               // 素材更新: 采集+归档+统计
 app.use('/api/v1/operators', operatorsRouter);               // 操作员管理: 用户+窗口+平台
 app.use('/api/v1/wecom-bot', wecomBotRouter);                // 企业微信机器人: 连接+消息+绑定
+app.use('/api/v1/config-material', configMaterialRouter);   // 板块四: 素材配置
+app.use('/api/v1/material-update', materialUpdateRouter);   // 素材更新: 调度+执行
 app.use('/api/v1/llm/reply', llmReplyRouter);               // AI 客服: 回复建议生成
 app.use('/api/v1/maintenance', maintenanceRouter);           // 维护调试: 执行健康/选择器/快照/配置管理/验证/重试
 
@@ -137,6 +142,9 @@ app.listen(PORT, () => {
 
   // 启动每日清理定时器（过期记录 & 快照）
   startCleanupScheduler();
+
+  // 启动素材更新调度器
+  startMaterialUpdateScheduler();
 });
 
 // 全局未捕获异常处理 — 防止 patchright "Frame was detached" 等错误导致进程崩溃
@@ -162,11 +170,13 @@ process.on('uncaughtException', (err: Error) => {
 // 优雅关闭
 process.on('SIGTERM', async () => {
   logger.info('⚠️  SIGTERM 信号，正在关闭...');
+  stopMaterialUpdateScheduler();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('⚠️  SIGINT 信号，正在关闭...');
+  stopMaterialUpdateScheduler();
   process.exit(0);
 });
 
