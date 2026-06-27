@@ -941,11 +941,11 @@ export async function executeMonitorCheck(
     ]);
   } catch (connectErr: any) {
     logger.error({ userId: task.userId, windowId: task.windowId, err: connectErr.message }, '连接指纹浏览器失败');
-    onProgress?.({ phase: '连接', step: '连接失败，60秒后重试', percent: 0, detail: connectErr.message });
+    onProgress?.({ phase: '连接', step: '连接失败', percent: 0, detail: connectErr.message });
     // 清理残留连接
     try { bm.disconnectSession(String(task.windowId), task.platform as any).catch(() => {}); } catch {}
-    // 直接返回失败，让 worker 处理重试
-    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+    // 抛错：让 handleJob 标记 failed 并触发 BullMQ 重试，不再静默标 completed
+    throw new Error('连接指纹浏览器失败: ' + connectErr.message);
   }
 
   const { page } = connectResult;
