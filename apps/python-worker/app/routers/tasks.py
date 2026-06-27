@@ -8,18 +8,9 @@ POST /api/v1/tasks/material-update - 素材更新(切分/抽帧/评级/落盘)
 
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
-from app.models import MaterialTaskRequest, RenderTaskRequest, TaskResponse
+from app.models import MaterialTaskRequest, MaterialUpdateRequest, RenderTaskRequest, TaskResponse
 from app.workers.arq_app import get_arq_queue
 from app.middleware.logging import logger
-
-
-class MaterialUpdateRequest(BaseModel):
-    """素材更新请求"""
-    task_id: str
-    task_type: str = "material_update"
-    oss_urls: list[str]
-    platform: str
-    user_id: str | None = None
 
 
 class VideoComposeRequest(BaseModel):
