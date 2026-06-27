@@ -3566,14 +3566,44 @@ export class DouyinCrawler {
       '[class*="tabs-pane-active"]',
     ];
 
-    if (direction === 'top') {
-      await HumanActions.cdpSmartScroll(page, selectors, 99999, 'up');
-    } else if (direction === 'bottom') {
-      await HumanActions.cdpSmartScroll(page, selectors, 99999, 'down');
-    } else {
+    const SCROLL_BOUNDED_PX = 3000;
+    const SCROLL_MAX_ROUNDS = 8;
+
+    // 数字入参：保持原有行为（已是有界值）
+    if (typeof direction === 'number') {
       await HumanActions.cdpSmartScroll(page, selectors, Math.abs(direction), direction >= 0 ? 'down' : 'up');
+      await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+      logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
+      return true;
     }
-    await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+
+    // 'top' / 'bottom'：有界滚动 + 到顶/到底即停
+    const dir = direction === 'top' ? 'up' : 'down';
+    for (let round = 0; round < SCROLL_MAX_ROUNDS; round++) {
+      await HumanActions.cdpSmartScroll(page, selectors, SCROLL_BOUNDED_PX, dir);
+      await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
+
+      // 读取容器滚动状态，判断是否到顶/到底
+      let state: { scrollTop: number; scrollHeight: number; clientHeight: number } | null = null;
+      try {
+        state = await page.evaluate((sels: string[]) => {
+          for (const s of sels) {
+            const el = document.querySelector(s) as HTMLElement | null;
+            if (el) return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
+          }
+          return null;
+        }, selectors);
+      } catch (evalErr: any) {
+        // evaluate 失败：降级为按有界量滚动一轮即返回，不阻塞主流程
+        logger.warn({ err: evalErr.message }, '[scrollCommentArea] state read failed, bounded return');
+        break;
+      }
+
+      if (!state) break;
+      if (direction === 'top' && state.scrollTop <= 0) break;
+      if (direction === 'bottom' && state.scrollTop + state.clientHeight >= state.scrollHeight - 10) break;
+    }
+
     logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
     return true;
   }
