@@ -2100,3 +2100,56 @@ export function useImportConfig() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['maintenance', 'config'] }),
   });
 }
+
+// ============================================================
+// 素材更新 — 每周热门视频采集
+// ============================================================
+
+export function useMaterialConfig() {
+  return useQuery({
+    queryKey: ['config-material'],
+    queryFn: () => api.get('/config-material').then((r) => r.data),
+  });
+}
+
+export function useUpdateMaterialConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (updates: Record<string, any>) =>
+      api.put('/config-material', updates).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['config-material'] }),
+  });
+}
+
+export function useTestPlatform() {
+  return useMutation({
+    mutationFn: (platform: Record<string, any>) =>
+      api.post('/config-material/test', platform).then((r) => r.data),
+  });
+}
+
+export function useTriggerMaterialRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post('/material-update/run').then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['material-status'] }),
+  });
+}
+
+export function useMaterialStatus() {
+  return useQuery({
+    queryKey: ['material-status'],
+    queryFn: () => api.get('/material-update/status').then((r) => r.data),
+    refetchInterval: 10000,
+  });
+}
+
+export function useMaterialCandidates(page = 1, pageSize = 20, platformId?: string, status?: string) {
+  const params: Record<string, string> = { page: String(page), pageSize: String(pageSize) };
+  if (platformId) params.platformId = platformId;
+  if (status) params.status = status;
+  return useQuery({
+    queryKey: ['material-candidates', page, pageSize, platformId, status],
+    queryFn: () => api.get('/material-update/candidates', { params }).then((r) => r.data),
+  });
+}
