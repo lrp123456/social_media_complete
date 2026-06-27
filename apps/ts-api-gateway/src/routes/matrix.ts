@@ -986,7 +986,7 @@ router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) =
 
     const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
-      select: { id: true, platform: true, windowId: true },
+      select: { id: true, platform: true, windowId: true, windowExternalId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: '未找到关联用户' });
@@ -997,8 +997,8 @@ router.post('/monitor/comments/:id/reply', async (req: Request, res: Response) =
       taskId: `reply_${Date.now()}_${comment.cid}`,
       userId: user.id,
       platform: user.platform as any,
-      windowId: user.windowId,
-      windowId: user.windowId,
+      windowId: user.windowExternalId,
+      windowExternalId: user.windowExternalId,
       replyData: {
         videoId: comment.videoId,
         commentCid: comment.cid,
@@ -1042,7 +1042,7 @@ router.post('/monitor/comments/:id/accept-reply', async (req: Request, res: Resp
 
     const user = await prisma.platformAccount.findUnique({
       where: { id: comment.video.userId },
-      select: { id: true, platform: true, windowId: true },
+      select: { id: true, platform: true, windowId: true, windowExternalId: true },
     });
     if (!user) {
       return res.status(404).json({ success: false, error: '未找到关联用户' });
@@ -1059,8 +1059,8 @@ router.post('/monitor/comments/:id/accept-reply', async (req: Request, res: Resp
       taskId: `reply_${Date.now()}_${comment.cid}`,
       userId: user.id,
       platform: user.platform as any,
-      windowId: user.windowId,
-      windowId: user.windowId,
+      windowId: user.windowExternalId,
+      windowExternalId: user.windowExternalId,
       replyData: {
         videoId: comment.videoId,
         commentCid: comment.cid,
@@ -1205,12 +1205,12 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
-      windowId: user.windowId,
-      windowId: user.windowId,
+      windowId: user.windowExternalId,
+      windowExternalId: user.windowExternalId,
     });
 
     // 重置该 (窗口, 平台) 的调度器倒计时
-    resetSchedulerTimer(user.windowId, user.platform);
+    resetSchedulerTimer(user.windowExternalId, user.platform);
 
     await prisma.operationLog.create({
       data: {
@@ -1257,9 +1257,9 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     // 按窗口分组，每个窗口内的任务串行执行
     const byWindow = new Map<string, typeof users>();
     for (const u of users) {
-      const items = byWindow.get(u.windowId) || [];
+      const items = byWindow.get(u.windowExternalId) || [];
       items.push(u);
-      byWindow.set(u.windowId, items);
+      byWindow.set(u.windowExternalId, items);
     }
 
     const jobIds: string[] = [];
@@ -1269,8 +1269,8 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,
-          windowId: user.windowId,
-          windowId: user.windowId,
+          windowId: user.windowExternalId,
+          windowExternalId: user.windowExternalId,
         });
         jobIds.push(job.id);
       }
@@ -1290,10 +1290,10 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     // 为每个唯一的 (窗口, 平台) 重置调度器
     const resetPairs = new Set<string>();
     for (const u of users) {
-      const pairKey = `${u.windowId}_${u.platform}`;
+      const pairKey = `${u.windowExternalId}_${u.platform}`;
       if (!resetPairs.has(pairKey)) {
         resetPairs.add(pairKey);
-        resetSchedulerTimer(u.windowId, u.platform);
+        resetSchedulerTimer(u.windowExternalId, u.platform);
       }
     }
 

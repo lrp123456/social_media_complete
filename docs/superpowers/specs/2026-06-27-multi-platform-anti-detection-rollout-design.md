@@ -71,6 +71,19 @@
 - 回滚：改回 `legacy`，无需代码回滚。
 - 全量切 v2 判据：某平台连续 7 天 v2 风控触发率不劣于 legacy。
 
+**环境变量命名规范**：
+1. **统一前缀**：所有反检测相关环境变量使用 `ANTI_DETECTION_` 前缀
+2. **平台标识**：平台名称使用大写字母，与现有命名保持一致
+3. **命名格式**：`ANTI_DETECTION_<PLATFORM>_<OPTION>`（可选）
+4. **示例**：
+   - `ANTI_DETECTION_MODE`：抖音平台模式（向后兼容）
+   - `ANTI_DETECTION_MODE_TENCENT`：腾讯平台模式
+   - `ANTI_DETECTION_MODE_KUAISHOU`：快手平台模式
+   - `ANTI_DETECTION_MODE_XIAOHONGSHU`：小红书平台模式
+   - `ANTI_DETECTION_LOG_LEVEL`：日志级别（可选扩展）
+   - `ANTI_DETECTION_METRICS_ENABLED`：指标开关（可选扩展）
+5. **文档要求**：在项目README或环境变量文档中列出所有反检测相关环境变量及其说明
+
 ### 1.3 范围边界
 
 - **改**：`tencentCrawler.ts`、`kuaishouCrawler.ts`、`xiaohongshuCrawler.ts`、各自 `platforms/<p>.ts`、`loginFlowHelpers.ts` 相关部分；`humanActions.ts`（新增 `cdpPierceShadow` + `registerPlatformPierce`）、`antiDetectionMode.ts`、静态守卫脚本扩展。
@@ -132,6 +145,13 @@ type PierceStep =
 
 **关键边界**：穿透失败不静默降级，返回 `null` + 记录 `actionPath='cdp-pierce-shadow'`，业务层决定是否改用 `safeEvaluate`（需 reason）。
 
+**穿透失败处理指导**：
+1. **默认策略**：业务层应优先尝试 `safeEvaluate` 作为降级方案，但需提供明确的 `reason` 参数说明降级原因
+2. **错误分类**：区分穿透失败类型（元素不存在、shadowRoot不可访问、iframe跨域等），记录到埋点数据便于分析
+3. **重试机制**：对于临时性失败（如页面未完全加载），建议实现有限次重试（最多3次，间隔500ms）
+4. **兜底方案**：若 `safeEvaluate` 也失败，应回退到 legacy 路径并记录 `actionPath='cdp-pierce-shadow-fallback-to-legacy'`
+5. **监控告警**：穿透失败率超过5%时触发告警，便于及时发现平台DOM结构变更
+
 ### 2.2 `registerPlatformPierce` 插件注册表（spec 8.2 要求）
 
 避免后续平台各自硬编码穿透逻辑进核心类导致膨胀：
@@ -148,6 +168,15 @@ static getPlatformPierce(platform: string, name: string): PierceHandler | undefi
 - 平台把**独特**的穿透逻辑注册为命名 handler（如 `registerPlatformPierce('tencent', 'wujie-comment-feed', handler)`），业务代码调 `HumanActions.getPlatformPierce('tencent','wujie-comment-feed')(page, params)`，不直接碰 CDP。
 - **通用穿透**走 `cdpPierceShadow`（2.1）；**平台特有、无法用 chain 表达**的穿透才注册 handler。腾讯批次首次使用此机制。
 - 注册时机：各平台 crawler 模块加载时注册（幂等）。
+
+**穿透机制选择指南**：
+1. **优先使用 `cdpPierceShadow`**：适用于标准CSS选择器链、shadowRoot穿透、iframe穿透等可声明式表达的场景
+2. **使用 `registerPlatformPierce`**：仅当穿透逻辑涉及复杂条件判断、循环遍历、或平台特有DOM结构无法用chain表达时
+3. **决策流程**：
+   - 尝试用 `PierceStep[]` 数组描述穿透路径 → 使用 `cdpPierceShadow`
+   - 无法用数组表达（如需要遍历多个元素、条件分支等） → 注册为平台特有handler
+4. **文档要求**：每个注册的handler必须包含JSDoc注释，说明其用途、适用场景和参数结构
+5. **测试覆盖**：平台特有handler需要独立单元测试，验证其在特定DOM结构下的行为
 
 ### 2.3 静态守卫脚本泛化
 
@@ -174,10 +203,45 @@ const PLATFORM_SCOPES = {
 
 ### 2.5 前置批次交付物与测试
 
-- `cdpPierceShadow`：单元测试覆盖 css/shadow/frame 三类 step + 失败返回 null + 复用 CDP context（不重建）。
-- `registerPlatformPierce`：注册幂等、未注册返回 undefined、平台隔离（同名不同平台不串）。
-- 静态守卫：在抖音范围上回归通过（不破坏抖音已有的零调用），其余平台先报告非零现状（不阻断）。
-- `antiDetectionMode.isEnabled`：env 解析单测。
+**测试覆盖率目标**：
+- `cdpPierceShadow`：行覆盖率 ≥90%，分支覆盖率 ≥85%
+- `registerPlatformPierce`：行覆盖率 ≥95%，分支覆盖率 ≥90%
+- `antiDetectionMode.isEnabled`：行覆盖率 100%
+- 静态守卫脚本：行覆盖率 ≥80%
+
+**具体测试用例设计**：
+
+**cdpPierceShadow 测试用例**：
+1. **css step 测试**：验证标准CSS选择器穿透
+2. **shadow step 测试**：验证shadowRoot穿透（需mock shadowRoot结构）
+3. **frame step 测试**：验证iframe穿透（需mock frame结构）
+4. **混合chain测试**：验证css→shadow→frame多级穿透
+5. **失败场景测试**：
+   - 元素不存在返回null
+   - shadowRoot不可访问返回null
+   - iframe跨域返回null
+   - 超时返回null
+6. **CDP context复用测试**：验证不新建session
+7. **性能测试**：验证穿透操作在100ms内完成
+
+**registerPlatformPierce 测试用例**：
+1. **注册幂等测试**：重复注册同一handler不报错
+2. **平台隔离测试**：同名不同平台handler不互相影响
+3. **未注册返回undefined测试**：查询未注册handler返回undefined
+4. **handler执行测试**：验证注册的handler能正确执行
+5. **参数传递测试**：验证params正确传递给handler
+
+**静态守卫测试用例**：
+1. **抖音范围回归测试**：确保不破坏抖音已有的零调用
+2. **多平台范围测试**：验证能正确检测各平台裸调用
+3. **白名单测试**：验证白名单机制正常工作
+4. **CI集成测试**：验证CI守卫能正确报告结果
+
+**antiDetectionMode.isEnabled 测试用例**：
+1. **环境变量解析测试**：验证正确读取各平台环境变量
+2. **v2启用测试**：验证值为'v2'时返回true
+3. **legacy禁用测试**：验证其他值返回false
+4. **未设置默认值测试**：验证环境变量未设置时的默认行为
 
 ---
 
@@ -248,6 +312,26 @@ MaintenanceProbe.exitStep();
 - `probeBootstrap`/`teardownProbe` 已是平台无关的样板（`crawlers/probeBootstrap.ts`），腾讯直接复用，在任务入口 `bootstrapProbe({isDebugMode, taskExecutionId})`、出口 `teardownProbe()`。
 - 探针在 `HumanActions.clickWithFallback`/`findInScope` + `Interceptor` 内部自动采集选择器/URL/响应结果，业务层只管 `enterStep`/`exitStep` 包络。
 - `selectors.json` 的 `tencent` 段（22 条已有）通过 `SelectorRegistry` 桥接 `platform.flow.key`，探针自动关联——不需新增 selector，只需确保织入的 step key 与现有 `flowRules` 对齐。
+
+**探针step key命名规范**：
+1. **格式**：`<flow>.<platform>.<phase>.<step>`
+2. **命名规则**：
+   - `flow`：业务流程类型，使用小写字母（如`monitor`、`publish`、`reply`）
+   - `platform`：平台标识，使用小写字母（如`douyin`、`tencent`、`kuaishou`、`xiaohongshu`）
+   - `phase`：阶段标识，使用PascalCase（如`Phase1`、`Phase2`、`Phase3`）
+   - `step`：步骤标识，使用camelCase（如`navigateToSidebar`、`fetchVideoListFromSource`）
+3. **示例**：
+   - `monitor.tencent.Phase1.navigateToSidebar`
+   - `monitor.kuaishou.Phase3.processCommentsQueue`
+   - `publish.xiaohongshu.Phase2.submitContent`
+4. **验证规则**：
+   - 步骤标识必须以动词开头（如`navigate`、`fetch`、`process`、`submit`）
+   - 避免使用缩写，确保可读性
+   - 同一phase下的step名称必须唯一
+5. **自动化验证**：
+   - 在CI中添加step key格式验证脚本
+   - 验证所有step key符合命名规范
+   - 验证四平台step key命名一致性
 
 ### 3.5 腾讯双路径与上线
 
@@ -326,6 +410,40 @@ MaintenanceProbe.exitStep();
 - 14 处盲区用 `if (isEnabled('kuaishou')) { v2 } else { legacy }` 包络。
 - 灰度：监控采集先 `v2`，埋点对比（风控较轻，预期 v2 快速达标）→ 连续 7 天不劣于 legacy → 全量切 v2 → 删 legacy。
 - **契约回溯触发条件**：若快手迁移中发现 `readAll`/`safeEvaluate` 契约需修改，暂停快手批次，回核心类改契约 + 抖音/腾讯回归验证，再继续。这是快手作为"契约二次验证"批次的护栏职责。
+
+**契约回溯详细流程**：
+1. **问题识别**：快手开发人员在迁移过程中发现契约不适配（如`readAll`批量读返回结构不够用、`safeEvaluate`参数不满足需求等）
+2. **暂停快手批次**：立即暂停快手批次的开发工作，标记为"blocked-契约回溯"
+3. **问题分析**：
+   - 记录具体的不适配场景和用例
+   - 分析是契约设计缺陷还是快手平台特殊性
+   - 评估对抖音/腾讯现有实现的影响
+4. **契约修改**：
+   - 在`humanActions.ts`中修改相关契约
+   - 确保修改向后兼容（不破坏抖音/腾讯现有功能）
+   - 更新相关类型定义和文档
+5. **回归验证**：
+   - 运行抖音全量测试套件，确保不回归
+   - 运行腾讯全量测试套件，确保不回归
+   - 运行核心类单元测试，确保新契约正常工作
+6. **快手批次恢复**：
+   - 使用修改后的契约继续快手批次开发
+   - 验证快手场景现在能正常工作
+   - 更新快手批次的测试用例
+7. **文档更新**：
+   - 更新契约文档，说明修改原因和影响
+   - 更新快手批次设计文档，记录回溯过程
+   - 通知相关团队成员契约变更
+
+**回溯时间预估**：
+- 简单契约调整：1-2天
+- 复杂契约重构：3-5天
+- 包含回归验证：额外1-2天
+
+**风险缓解**：
+- 提前识别：在快手批次开始前，先用小规模原型验证契约在快手平台的适用性
+- 并行准备：在快手批次开发的同时，准备抖音/腾讯的回归测试套件
+- 沟通机制：建立快速沟通渠道，确保契约问题能及时反馈和解决
 
 ### 4.6 快手批次交付物
 
