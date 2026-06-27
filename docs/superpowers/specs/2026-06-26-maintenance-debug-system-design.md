@@ -1,8 +1,8 @@
 # 视频流程节点监控与维护调试系统设计规格
 
-> **版本**: v1.1（Oracle 审核修正版）  
+> **版本**: v1.2（代码现状对齐版）  
 > **日期**: 2026-06-26  
-> **状态**: 待审批  
+> **状态**: 已复核，待审批  
 > **方案**: 方案A（探针织入）— 当前落地；方案B（声明式引擎）— 未来重构方向
 
 ### 变更日志
@@ -11,6 +11,7 @@
 |------|------|---------|
 | v1.0 | 2026-06-26 | 初始设计 |
 | v1.1 | 2026-06-26 | Oracle 审核修正：C1 新增方法作为一级交付物、C2 PageProxy 移至核心包、C3 指定 Redis 传输通道、M1-M5 数据模型修正、m1-m5 次要修正、新增安全清洗层 |
+| v1.2 | 2026-06-26 | 代码现状对齐：①`urlMonitors` 修正为实际存在的 `apiPatterns`/`dataSources`；②`RequestInterceptor` 新增方法清单补全（`waitForNext`/`hotReloadRules`/`extractItems`）；③`SelectorRegistry` 注明为新增、示例标注目标态；④`maintenance_selector_record` 定调为**替代** `TaskExecutionStep.selectorTries`，并明确 `maintenance_step` 与 `TaskExecutionStep` 的 1:1 关联；⑤m4 `videoId`/`commentCid` 复用现有 `storeResponse` 的 `pageKey`/`commentId` 来源 |
 
 ---
 
@@ -93,7 +94,7 @@
 
 ## 三、双引擎配置中心
 
-> **配置文件统一管理**：DOM 选择器和 API 网络监控配置统一存放在 `selectors.json` 中，不创建独立文件。现有 `urlMonitors` 部分将按新结构升级。
+> **配置文件统一管理**：DOM 选择器和 API 网络监控配置统一存放在 `selectors.json` 中，不创建独立文件。现有 `apiPatterns` / `dataSources` 部分将按新结构升级（v1.2 修正：实际现有键为 `apiPatterns`/`dataSources`，非 `urlMonitors`）。
 
 ### 3.1 DOM 选择器配置 (`selectors.json` — selectors 部分)
 
@@ -438,6 +439,7 @@ function createProxiedPage(rawPage: Page, windowId: string): Page {
 | `humanActions.ts` | **新增** `clickWithFallback()` 方法（C1） | ~80 行 |
 | `humanActions.ts` | **新增** `findInScope()` 方法（C1） | ~60 行 |
 | `interceptor.ts` | **新增** `attachByConfig()` 方法（C1） | ~40 行 |
+| `interceptor.ts` | **新增** `waitForNext()` / `extractItems()` / `hotReloadRules()` 方法（v1.2 补全：3.2/9.1 依赖，现有 `RequestInterceptor` 仅有 `register()`/`setValidationConfig`/`getResponses`/`storeResponse`/`unregister`） | ~60 行 |
 | `humanActions.ts` | `clickWithFallback()` 内部调用 `recordSelectorOp()` | ~20 行 |
 | `humanActions.ts` | `findInScope()` 内部调用 `recordSelectorOp()`（含防蜜罐字段） | ~15 行 |
 | `humanActions.ts` | `safeEvaluate()` 异常时调用 `recordSelectorOp()` | ~8 行 |
@@ -456,13 +458,14 @@ function createProxiedPage(rawPage: Page, windowId: string): Page {
 TaskExecution (现有)          maintenance_execution (新增)
     │ 1:1                          │ 1:1
     ▼                              ▼
-TaskExecutionStep (现有)       maintenance_step (新增)
-                                    │ 1:N
-                    ┌───────────────┼───────────────┐
-                    ▼               ▼               ▼
-          maintenance_selector  maintenance_url   debug_snapshot
-              _record             _record          (新增)
-              (新增)              (新增)
+TaskExecutionStep (现有)  ←─1:1─→ maintenance_step (新增)
+   (selectorTries 字段               │ 1:N
+    v1.2 起停写)        ┌────────────┼───────────────┐
+                        ▼            ▼               ▼
+              maintenance_selector  maintenance_url   debug_snapshot
+                  _record             _record          (新增)
+                  (新增,替代           (新增)
+                   selectorTries)
 
 config_snapshot (独立，不关联执行)
 ```
@@ -508,6 +511,7 @@ model MaintenanceExecution {
 model MaintenanceStep {
   id              String    @id @default(cuid())
   executionId     String    @map("execution_id")
+  taskStepId      String?   @map("task_step_id")                    // v1.2: 1:1 关联 TaskExecutionStep.id
   phase           String    @db.VarChar(64)
   stepName        String    @map("step_name") @db.VarChar(128)
   subStepName     String?   @map("sub_step_name") @db.VarChar(128)
@@ -522,12 +526,14 @@ model MaintenanceStep {
   createdAt       DateTime  @default(now()) @map("created_at")
 
   execution       MaintenanceExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  taskStep        TaskExecutionStep?   @relation(fields: [taskStepId], references: [id], onDelete: SetNull)  // v1.2
   selectorRecords MaintenanceSelectorRecord[]
   urlRecords      MaintenanceUrlRecord[]
   snapshots       DebugSnapshot[]
 
   @@index([executionId, phase], name: "idx_maint_step_exec_phase")
   @@index([healthStatus], name: "idx_maint_step_health")
+  @@index([taskStepId], name: "idx_maint_step_task_step")                    // v1.2
   @@map("maintenance_steps")
 }
 ```
@@ -535,6 +541,8 @@ model MaintenanceStep {
 ### 5.4 `maintenance_selector_record` — 选择器操作记录
 
 > **M4 修正**：`selectorUsed` 改为 `@db.Text`，避免长 CSS/XPath 溢出。
+
+> **v1.2 定调（替代 selectorTries）**：本表**替代**现有 `TaskExecutionStep.selectorTries` (Json) 字段，成为选择器操作明细的唯一持久化载体。现有执行流程中写入 `selectorTries` 的路径（`HumanActions` 内的选择器尝试记录、`TaskExecutionStep.status='fallback'` 的判定）迁移为经 `MaintenanceProbe.recordSelectorOp()` → Redis → `maintenance_selector_record`。`TaskExecutionStep.selectorTries` 字段保留但停止写入（兼容期），后续版本移除。`maintenance_step` 与 `TaskExecutionStep` 为 1:1 关联，通过 `MaintenanceExecution.taskExecutionId` 反查；`MaintenanceStep` 新增 `taskStepId` 字段（见 5.3）显式关联 `TaskExecutionStep.id`，便于回溯。
 
 ```prisma
 model MaintenanceSelectorRecord {
@@ -566,6 +574,8 @@ model MaintenanceSelectorRecord {
 ### 5.5 `maintenance_url_record` — URL 拦截记录
 
 > **m4 修正**：添加可空 `videoId` / `commentCid` 字段，关联内容条目。
+>
+> **v1.2 复用**：`videoId` / `commentCid` 直接复用现有 `RequestInterceptor.storeResponse()` 已计算的 `pageKey` / `commentId`（dedupKey 来源），不另起采集路径——在 `recordUrlIntercept()` 调用时由 interceptor 透传。
 
 ```prisma
 model MaintenanceUrlRecord {
@@ -860,6 +870,8 @@ async rollbackConfig(platform: string, configType: string, snapshotId: string, c
 MaintenanceProbe.enterStep('monitor', 'douyin', 'phase1', 'expandMenu');
 
 // 2. 选择器配置化 + 多路降级 + 防蜜罐
+// 注（v1.2）：SelectorRegistry 为本系统新增的注册中心，封装现有 SelectorReader；
+// 路径 'douyin.monitor.menu_creator_home' 为目标态新命名空间，迁移期由 Registry 内部映射到现有 platforms.douyin.menus.menu_home
 const menuConfig = SelectorRegistry.get('douyin.monitor.menu_creator_home');
 await HumanActions.clickWithFallback(page, menuConfig, {
   onFallbackTriggered: (failedSel, successSel, selectorKey) => {
@@ -962,7 +974,7 @@ function sanitizeSnapshot(content: string, mimeType: string): string {
 
 1. 新字段（`strategy`、`anti_honeypot`、`scope`）作为可选字段添加到现有条目
 2. 不进行破坏性重组，现有 `menus`/`buttons`/`regions`/`textboxes` 分类保留
-3. 新增 `apiMonitors` 顶级键（与现有 `urlMonitors` 并存，逐步合并）
+3. 新增 `apiMonitors` 顶级键（与现有 `apiPatterns` / `dataSources` 并存，逐步合并）
 4. `SelectorReader` 同时支持新旧字段，优先读取新字段
 5. 编写迁移脚本将旧结构逐步转换为新结构（可选，非阻塞）
 

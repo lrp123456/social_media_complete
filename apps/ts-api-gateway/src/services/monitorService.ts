@@ -1849,6 +1849,7 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
         userId: u.id,
         platform: u.platform as PlatformName,
         windowId: u.windowExternalId,
+        windowExternalId: u.windowExternalId,
       });
       queued++;
     }

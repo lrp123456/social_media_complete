@@ -35,6 +35,12 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
   const flow = flowsData?.navigationFlows?.[flowName];
   const steps = flow?.steps || [];
 
+  const handleNodeClick = useCallback((step: FlowNode) => {
+    console.log('[FlowGraphView] handleNodeClick called', { stepId: step.id, action: step.action });
+    setSelectedNode(step);
+    console.log('[FlowGraphView] selectedNode set');
+  }, []);
+
   // 将 FlowNode[] 转换为 React Flow nodes/edges
   const { nodes, edges } = useMemo(() => {
     const rawNodes: Node[] = [];
@@ -56,6 +62,7 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
               return next;
             });
           },
+          onNodeClick: handleNodeClick,
           lastRun: lastRunData?.steps?.find((s: any) => s.label === step.id),
         },
       });
@@ -94,11 +101,6 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
     return { nodes: layouted, edges: rawEdges };
   }, [steps, expandedNodes, lastRunData]);
 
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
-    const step = steps.find((s: FlowNode) => s.id === node.id);
-    if (step) setSelectedNode(step);
-  }, [steps]);
-
   if (isLoading) {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 256, color: '#94a3b8' }}>加载中...</div>;
   }
@@ -114,7 +116,7 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
   }
 
   return (
-    <div style={{ height: 600, border: '1px solid #334155', borderRadius: 12, overflow: 'hidden' }}>
+    <div style={{ height: 600, border: '1px solid #334155', borderRadius: 12, overflow: 'hidden', position: 'relative' }}>
       <div style={{ padding: '8px 12px', background: '#1e293b', borderBottom: '1px solid #334155', display: 'flex', gap: 8 }}>
         <button onClick={() => setShowFramework(true)} style={{ color: '#94a3b8', fontSize: 12 }}>框架管理</button>
         <button onClick={() => setShowApiPattern(true)} style={{ color: '#94a3b8', fontSize: 12 }}>API Pattern</button>
@@ -124,7 +126,6 @@ export function FlowGraphView({ platform, flowName }: FlowGraphViewProps) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
-        onNodeClick={onNodeClick}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         fitView

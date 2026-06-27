@@ -37,6 +37,38 @@ const TARGET_PAGES: Record<Platform, { urls: string[]; types: Record<string, str
       'new/note-manager': 'note_manage',
     },
   },
+  bilibili: {
+    urls: [
+      'member.bilibili.com',
+    ],
+    types: {
+      'member.bilibili.com': 'creator_home',
+    },
+  },
+  baijiahao: {
+    urls: [
+      'baijiahao.baidu.com',
+    ],
+    types: {
+      'baijiahao.baidu.com': 'creator_home',
+    },
+  },
+  tencent: {
+    urls: [
+      'channels.weixin.qq.com/platform',
+    ],
+    types: {
+      'channels.weixin.qq.com/platform': 'creator_home',
+    },
+  },
+  tiktok: {
+    urls: [
+      'www.tiktok.com/creator-tools',
+    ],
+    types: {
+      'www.tiktok.com/creator-tools': 'creator_home',
+    },
+  },
 };
 
 const MIN_REFRESH_INTERVAL_MS = 30_000;

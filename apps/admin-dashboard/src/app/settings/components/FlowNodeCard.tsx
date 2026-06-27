@@ -1,5 +1,5 @@
 // apps/admin-dashboard/src/app/settings/components/FlowNodeCard.tsx
-import { memo, useState } from 'react';
+import { memo, useRef } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { FlowNode, FlowSubStep } from '@/hooks/useApi';
 
@@ -20,14 +20,38 @@ type FlowNodeCardData = {
   node: FlowNode;
   expanded?: boolean;
   onToggleExpand?: (id: string) => void;
+  onNodeClick?: (node: FlowNode) => void;
   lastRun?: { status: string; durationMs?: number };
 };
 
+const DBLCLICK_DELAY = 250;
+
 function FlowNodeCard({ data, selected }: NodeProps & { data: FlowNodeCardData }) {
-  const { node, expanded, onToggleExpand, lastRun } = data;
+  const { node, expanded, onToggleExpand, onNodeClick, lastRun } = data;
   const color = ACTION_COLORS[node.action] || '#64748b';
   const hasSubSteps = node.steps && node.steps.length > 0;
   const branchCount = node.branches?.length || 0;
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleClick = () => {
+    console.log('[FlowNodeCard] click detected', { nodeId: node.id, hasSubSteps });
+    // 等待一小段时间，如果是双击则取消单击
+    if (clickTimer.current) {
+      console.log('[FlowNodeCard] double-click → toggle expand');
+      clearTimeout(clickTimer.current);
+      clickTimer.current = null;
+      // 双击：展开/收起子步骤
+      if (hasSubSteps) onToggleExpand?.(node.id);
+    } else {
+      console.log('[FlowNodeCard] scheduling single-click in', DBLCLICK_DELAY, 'ms');
+      clickTimer.current = setTimeout(() => {
+        console.log('[FlowNodeCard] single-click → open drawer', { nodeId: node.id, hasCallback: !!onNodeClick });
+        clickTimer.current = null;
+        // 单击：打开编辑面板
+        onNodeClick?.(node);
+      }, DBLCLICK_DELAY);
+    }
+  };
 
   return (
     <div
@@ -40,7 +64,7 @@ function FlowNodeCard({ data, selected }: NodeProps & { data: FlowNodeCardData }
         maxWidth: 280,
         cursor: 'pointer',
       }}
-      onClick={() => hasSubSteps && onToggleExpand?.(node.id)}
+      onClick={handleClick}
     >
       <Handle type="target" position={Position.Top} style={{ background: color }} />
 

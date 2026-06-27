@@ -496,13 +496,13 @@ class WeChatBotManager {
     let phone = '';
     try {
       const { prisma } = await import('../lib/prisma');
-      const user = await prisma.platformAccount.findUnique({
+      const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { windowId: true },
+        select: { fingerprintWindowId: true },
       }).catch(() => null);
       if (user) {
         const bw = await prisma.browserWindow.findFirst({
-          where: { id: user.windowId },
+          where: { externalId: user.fingerprintWindowId },
           select: { windowName: true, boundOperatorId: true },
         }).catch(() => null);
         if (bw) {
@@ -594,9 +594,9 @@ class WeChatBotManager {
     let phone = '';
     try {
       const { prisma } = await import('../lib/prisma');
-      const user = await prisma.platformAccount.findUnique({ where: { id: userId }, select: { windowId: true } }).catch(() => null);
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { fingerprintWindowId: true } }).catch(() => null);
       if (user) {
-        const bw = await prisma.browserWindow.findFirst({ where: { id: user.windowId }, select: { windowName: true, boundOperatorId: true } }).catch(() => null);
+        const bw = await prisma.browserWindow.findFirst({ where: { externalId: user.fingerprintWindowId }, select: { windowName: true, boundOperatorId: true } }).catch(() => null);
         if (bw) {
           windowName = bw.windowName || '';
           if (bw.boundOperatorId) {
@@ -660,7 +660,7 @@ async function autoStartBot(): Promise<void> {
 
           // 动态导入 prisma（避免循环依赖）
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.platformAccount.findFirst({
+          const user = await prisma.user.findFirst({
             where: { wechatUserid: userid },
             select: { id: true },
           }).catch(() => null);
@@ -669,7 +669,7 @@ async function autoStartBot(): Promise<void> {
 
           const window = await (prisma as any).browserWindow?.findFirst({
             where: { userId: user.id, platform },
-            select: { windowId: true },
+            select: { fingerprintWindowId: true },
           }).catch(() => null);
 
           if (!window) {
@@ -678,7 +678,7 @@ async function autoStartBot(): Promise<void> {
           }
 
           botManager.setPendingReply(commentCid, {
-            videoId: awemeId, awemeId, userId: user.id, windowId: window.windowId, platform,
+            videoId: awemeId, awemeId, userId: user.id, windowId: window.fingerprintWindowId, platform,
           });
 
           await botManager.sendTextMessage([userid], `💬 已选择回复评论，请直接发送回复内容（5分钟内有效）`);
@@ -693,14 +693,14 @@ async function autoStartBot(): Promise<void> {
           const targetFlowId = resumeSetup[3] || 'creator';
 
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.platformAccount.findUnique({
+          const user = await prisma.user.findUnique({
             where: { id: targetUserId },
-            select: { windowId: true, wechatUserid: true },
+            select: { fingerprintWindowId: true, wechatUserid: true },
           }).catch(() => null);
 
           if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
 
-          const windowId = String(user.windowId);
+          const windowId = String(user.fingerprintWindowId);
           const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
           const { getBrowserManager } = await import('../lib/browserManager');
           const config = getLoginFlowConfig(targetPlatform, targetFlowId);
@@ -728,20 +728,20 @@ async function autoStartBot(): Promise<void> {
               // 仍在登录页 → 设置 15min 自动重试
               const { enqueueMonitor } = await import('./unifiedQueue');
               const retryDelay = 15 * 60 * 1000;
-              await prisma.platformAccount.update({
+              await prisma.user.update({
                 where: { id: targetUserId },
                 data: { status: 'login_required', cooldownUntil: Date.now() + retryDelay },
               }).catch(() => null);
               setTimeout(async () => {
                 try {
-                  await prisma.platformAccount.update({
+                  await prisma.user.update({
                     where: { id: targetUserId },
                     data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true },
                   }).catch(() => null);
                   await enqueueMonitor({
                     taskId: `retry_${Date.now()}_${targetUserId}`,
                     userId: targetUserId, platform: targetPlatform as any,
-                    windowId,
+                    windowId, windowExternalId: user.fingerprintWindowId,
                   });
                   logger.info({ targetUserId, targetPlatform }, '15min 自动重试监控已触发');
                 } catch (err: any) {
@@ -761,9 +761,9 @@ async function autoStartBot(): Promise<void> {
           // 恢复监控
           const { delFlowState } = await import('./monitorService');
           await delFlowState(targetUserId, targetFlowId);
-          await prisma.platformAccount.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+          await prisma.user.update({ where: { id: targetUserId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
           const { enqueueMonitor } = await import('./unifiedQueue');
-          await enqueueMonitor({ taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId });
+          await enqueueMonitor({ taskId: `manual_${Date.now()}_${targetUserId}`, userId: targetUserId, platform: targetPlatform as any, windowId, windowExternalId: user.fingerprintWindowId });
           await botManager.sendTextMessage([userid], `✅ ${targetPlatform} 已恢复监控`);
           return;
         }
@@ -776,14 +776,14 @@ async function autoStartBot(): Promise<void> {
           const targetFlowId = forceRefreshSetup[3] || 'creator';
 
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.platformAccount.findUnique({
+          const user = await prisma.user.findUnique({
             where: { id: targetUserId },
-            select: { windowId: true, wechatUserid: true },
+            select: { fingerprintWindowId: true, wechatUserid: true },
           }).catch(() => null);
 
           if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
 
-          const windowId = String(user.windowId);
+          const windowId = String(user.fingerprintWindowId);
           const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
           const { getBrowserManager } = await import('../lib/browserManager');
           const config = getLoginFlowConfig(targetPlatform, targetFlowId);
@@ -820,14 +820,14 @@ async function autoStartBot(): Promise<void> {
           const targetFlowId = f5RefreshSetup[3] || 'creator';
 
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.platformAccount.findUnique({
+          const user = await prisma.user.findUnique({
             where: { id: targetUserId },
-            select: { windowId: true, wechatUserid: true },
+            select: { fingerprintWindowId: true, wechatUserid: true },
           }).catch(() => null);
 
           if (!user) { await botManager.sendTextMessage([userid], '❌ 未找到用户'); return; }
 
-          const windowId = String(user.windowId);
+          const windowId = String(user.fingerprintWindowId);
           const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
           const { getBrowserManager } = await import('../lib/browserManager');
           const config = getLoginFlowConfig(targetPlatform, targetFlowId);
@@ -907,9 +907,9 @@ async function autoStartBot(): Promise<void> {
                 await botManager.sendTextMessage([userid], `✅ ${pending.platform} 二次验证成功，正在恢复监控`);
                 // 恢复监控
                 const { prisma } = await import('../lib/prisma');
-                await prisma.platformAccount.update({ where: { id: pending.userId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
+                await prisma.user.update({ where: { id: pending.userId }, data: { status: 'init', cooldownUntil: 0, monitoringEnabled: true } }).catch(() => null);
                 const { enqueueMonitor } = await import('./unifiedQueue');
-                await enqueueMonitor({ taskId: `manual_${Date.now()}_${pending.userId}`, userId: pending.userId, platform: pending.platform as any, windowId: pending.windowId });
+                await enqueueMonitor({ taskId: `manual_${Date.now()}_${pending.userId}`, userId: pending.userId, platform: pending.platform as any, windowId: pending.windowId, windowExternalId: pending.windowId });
               } else {
                 await botManager.sendTextMessage([userid], `⚠️ 验证页面仍在，可能验证码错误，请重新输入`);
                 botManager.setPendingVerify(userid, pending.userId, pending.platform, pending.windowId);
@@ -1123,7 +1123,7 @@ async function autoStartBot(): Promise<void> {
               sendRootText = root?.text;
             }
 
-            const sendUser = await prismaSend.platformAccount.findUnique({
+            const sendUser = await prismaSend.user.findUnique({
               where: { id: sendComment.video.userId },
               select: { platform: true },
             }).catch(() => null);
@@ -1164,9 +1164,9 @@ async function autoStartBot(): Promise<void> {
           }
 
           // 查找用户和窗口
-          const sendUser = await prismaSend.platformAccount.findUnique({
+          const sendUser = await prismaSend.user.findUnique({
             where: { id: sendComment.video.userId },
-            select: { id: true, platform: true, windowId: true },
+            select: { id: true, platform: true, fingerprintWindowId: true },
           }).catch(() => null);
 
           if (!sendUser) {
@@ -1188,7 +1188,8 @@ async function autoStartBot(): Promise<void> {
             taskId: `reply_${Date.now()}_${sendCommentCid}`,
             userId: sendUser.id,
             platform: sendUser.platform as any,
-            windowId: sendUser.windowId,
+            windowId: sendUser.fingerprintWindowId,
+            windowExternalId: sendUser.fingerprintWindowId,
             replyData: {
               videoId: sendComment.videoId,
               commentCid: sendCommentCid,
@@ -1205,7 +1206,7 @@ async function autoStartBot(): Promise<void> {
         // 匹配实际回复文本（用户不在"回复"前缀模式下直接发送文本）
         for (const [commentCid, ctx] of botManager['pendingReplies']) {
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.platformAccount.findFirst({
+          const user = await prisma.user.findFirst({
             where: { wechatUserid: userid },
             select: { id: true },
           }).catch(() => null);
@@ -1220,6 +1221,7 @@ async function autoStartBot(): Promise<void> {
               userId: ctx.userId,
               platform: (ctx.platform || 'douyin') as any,
               windowId: ctx.windowId,
+              windowExternalId: ctx.windowId,
               replyData: {
                 videoId: ctx.videoId,
                 commentCid,

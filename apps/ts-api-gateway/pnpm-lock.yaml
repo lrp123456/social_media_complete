@@ -51,7 +51,7 @@ importers:
         specifier: ^2.1.1
         version: 2.2.0
       patchright:
-        specifier: ^1.59.0
+        specifier: ^1.61.1
         version: 1.61.1
       pino:
         specifier: ^9.0.0

@@ -160,7 +160,7 @@ export function NodeDrawer({
   }, [editedNode, steps, platform, flowName, upsertMutation]);
 
   return (
-    <div className="w-[480px] border-l bg-white flex flex-col h-full shadow-lg">
+    <div className="w-[480px] border-l bg-white flex flex-col shadow-lg" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, zIndex: 50 }}>
       {/* 顶部 */}
       <div className="flex items-center gap-2 p-4 border-b">
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600">

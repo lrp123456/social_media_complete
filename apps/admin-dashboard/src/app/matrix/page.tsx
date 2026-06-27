@@ -895,20 +895,32 @@ function MonitorTab() {
     return accounts.filter((a) => a.platform === platformFilter);
   }, [accounts, platformFilter]);
 
-  // 按窗口分组（按 operatorId + windowId）
-  const groupedByUser = useMemo(() => {
-    const groups = new Map<string, {
+  // 按操作员分组（两级结构：operator → windows → accounts）
+  type OperatorGroup = {
+    operatorId: number | null;
+    operatorName: string;
+    wechatUserId: string;
+    windows: {
+      windowId: string;
+      windowName: string;
+      accounts: MonitorAccount[];
+    }[];
+  };
+
+  const groupedByOperator = useMemo(() => {
+    // 第一步：按 (operatorId, windowId) 分组
+    const windowGroups = new Map<string, {
       operatorId: number | null;
       operatorName: string;
       windowId: string;
       windowName: string;
       wechatUserId: string;
-      accounts: MonitorAccount[]
+      accounts: MonitorAccount[];
     }>();
     for (const account of filteredAccounts) {
       const groupKey = `op_${account.operatorId || 'none'}_win_${account.windowId}`;
-      if (!groups.has(groupKey)) {
-        groups.set(groupKey, {
+      if (!windowGroups.has(groupKey)) {
+        windowGroups.set(groupKey, {
           operatorId: account.operatorId,
           operatorName: account.operatorName || '未知用户',
           windowId: account.windowId,
@@ -917,16 +929,31 @@ function MonitorTab() {
           accounts: [],
         });
       }
-      groups.get(groupKey)!.accounts.push(account);
+      windowGroups.get(groupKey)!.accounts.push(account);
     }
-    // 排序：同操作员窗口相邻，按 operatorName → windowName 排序
-    return Array.from(groups.values()).sort((a, b) => {
-      const opA = a.operatorName || '';
-      const opB = b.operatorName || '';
-      if (opA !== opB) return opA.localeCompare(opB, 'zh-CN');
-      const winA = a.windowName || '';
-      const winB = b.windowName || '';
-      return winA.localeCompare(winB, 'zh-CN');
+
+    // 第二步：按 operatorId 聚合为操作员级分组
+    const operatorMap = new Map<string, OperatorGroup>();
+    for (const wg of windowGroups.values()) {
+      const opKey = `op_${wg.operatorId || 'none'}`;
+      if (!operatorMap.has(opKey)) {
+        operatorMap.set(opKey, {
+          operatorId: wg.operatorId,
+          operatorName: wg.operatorName,
+          wechatUserId: wg.wechatUserId,
+          windows: [],
+        });
+      }
+      operatorMap.get(opKey)!.windows.push({
+        windowId: wg.windowId,
+        windowName: wg.windowName,
+        accounts: wg.accounts,
+      });
+    }
+
+    // 排序：按 operatorName
+    return Array.from(operatorMap.values()).sort((a, b) => {
+      return (a.operatorName || '').localeCompare(b.operatorName || '', 'zh-CN');
     });
   }, [filteredAccounts]);
 
@@ -1406,7 +1433,7 @@ function MonitorTab() {
                   <div key={i} className="h-48 rounded-2xl border border-outline-variant animate-pulse bg-surface-container" />
                 ))}
               </div>
-            ) : groupedByUser.length === 0 ? (
+            ) : groupedByOperator.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-on-surface-variant">
                 <MaterialIcon icon="person" size="3xl" className="text-outline mb-4 opacity-30" />
                 <p className="text-title-md font-medium mb-1">
@@ -1418,40 +1445,33 @@ function MonitorTab() {
               </div>
             ) : (
               <div className="space-y-6">
-                {groupedByUser.map((group, groupIdx) => {
-                  const totalVideos = group.accounts.reduce((s, a) => s + a.videoCount, 0);
-                  const totalComments = group.accounts.reduce((s, a) => s + a.totalComments, 0);
-                  const totalNewComments = group.accounts.reduce((s, a) => s + a.newComments, 0);
-                  const hasActive = group.accounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required' && a.status !== 'risk_control');
-                  const hasBlocked = group.accounts.some((a) => a.status === 'blocked');
-                  const hasLoginRequired = group.accounts.some((a) => a.status === 'login_required');
-                  const hasRiskControl = group.accounts.some((a) => a.status === 'risk_control');
-
-                  const sameOperatorAsPrev = groupIdx > 0
-                    && groupedByUser[groupIdx - 1].operatorId === group.operatorId
-                    && group.operatorId !== null;
+                {groupedByOperator.map((operator, opIdx) => {
+                  const allAccounts = operator.windows.flatMap((w) => w.accounts);
+                  const totalVideos = allAccounts.reduce((s, a) => s + a.videoCount, 0);
+                  const totalComments = allAccounts.reduce((s, a) => s + a.totalComments, 0);
+                  const totalNewComments = allAccounts.reduce((s, a) => s + a.newComments, 0);
+                  const hasActive = allAccounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required' && a.status !== 'risk_control');
+                  const hasBlocked = allAccounts.some((a) => a.status === 'blocked');
+                  const hasLoginRequired = allAccounts.some((a) => a.status === 'login_required');
+                  const hasRiskControl = allAccounts.some((a) => a.status === 'risk_control');
+                  const firstAccountId = operator.windows[0]?.accounts[0]?.id ?? 0;
 
                   return (
                     <div
-                      key={group.windowId}
-                      className={cn(
-                        'relative bg-surface border border-outline-variant rounded-2xl overflow-hidden',
-                        sameOperatorAsPrev && '-mt-3 pt-3 border-t-dashed border-t-outline-variant',
-                      )}
-                      style={{ animationDelay: `${groupIdx * 80}ms` }}
+                      key={operator.operatorId ?? `none_${opIdx}`}
+                      className="bg-surface border border-outline-variant rounded-2xl overflow-hidden"
+                      style={{ animationDelay: `${opIdx * 80}ms` }}
                     >
-                      {/* 窗口头部信息 */}
+                      {/* 操作员头部信息 */}
                       <div className="flex items-center justify-between px-6 py-4 bg-gradient-to-r from-surface-container-high/80 to-surface-container/40 border-b border-outline-variant/50">
                         <div className="flex items-center gap-4">
-                          {/* 窗口图标 */}
                           <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center">
-                            <MaterialIcon icon="window" size="lg" className="text-primary" />
+                            <MaterialIcon icon="person" size="lg" className="text-primary" />
                           </div>
                           <div>
                             <div className="flex items-center gap-2">
-                              <MaterialIcon icon="window" size="sm" className="text-on-surface-variant" />
                               <h3 className="text-title-md text-on-surface font-bold">
-                                {group.windowName}
+                                {operator.operatorName}
                               </h3>
                               {hasActive && (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10">
@@ -1479,22 +1499,18 @@ function MonitorTab() {
                               )}
                             </div>
                             <div className="flex items-center gap-3 mt-1">
-                              <span className="text-label-sm text-on-surface-variant">
-                                {group.operatorName}
-                              </span>
-                              <span className="text-outline">·</span>
                               <span className="text-label-sm text-on-surface-variant font-mono">
-                                {group.wechatUserId}
+                                {operator.wechatUserId}
                               </span>
                               <span className="text-outline">·</span>
                               <span className="text-label-sm text-on-surface-variant">
-                                {group.accounts.length} 个平台
+                                {operator.windows.length} 个窗口 · {allAccounts.length} 个平台
                               </span>
                             </div>
                           </div>
                         </div>
 
-                        {/* 用户汇总统计 */}
+                        {/* 操作员汇总统计 */}
                         <div className="flex items-center gap-6">
                           <div className="text-right">
                             <p className="text-headline-sm text-on-surface font-bold tabular-nums">{totalVideos}</p>
@@ -1516,158 +1532,207 @@ function MonitorTab() {
                         </div>
                       </div>
 
-                      {/* 用户级操作按钮 */}
+                      {/* 操作员级操作按钮 */}
                       <div className="px-4 py-2 flex gap-2 border-t border-outline-variant/50">
                         <button
-                          onClick={() => restoreAllPlatforms.mutate(group.accounts[0]?.id)}
+                          onClick={() => restoreAllPlatforms.mutate(firstAccountId)}
                           disabled={restoreAllPlatforms.isPending}
                           className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
                         >
                           {restoreAllPlatforms.isPending ? '恢复中...' : '恢复所有平台'}
                         </button>
                         <button
-                          onClick={() => setShowPinnedSettings(group.accounts[0]?.id ?? 0)}
+                          onClick={() => setShowPinnedSettings(firstAccountId)}
                           className="px-3 py-1.5 text-sm bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
                         >
                           置顶视频设置
                         </button>
                         <button
-                          onClick={() => setShowClearConfirm(group.accounts[0]?.id ?? 0)}
+                          onClick={() => setShowClearConfirm(firstAccountId)}
                           className="px-3 py-1.5 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
                         >
                           清空所有数据
                         </button>
                       </div>
 
-                      {/* 平台卡片网格 */}
-                      <div className="p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                        {group.accounts.map((account) => {
-                          const pc = MONITOR_PLATFORM_CONFIG[account.platform] || MONITOR_PLATFORM_FALLBACK;
-                           const isBlocked = account.status === 'blocked';
-                           const isLoginRequired = account.status === 'login_required';
-                           const isRiskControl = account.status === 'risk_control';
-                           const isCooldown = account.cooldownUntil > Date.now();
-                           const isActive = account.monitoringEnabled && !isBlocked && !isLoginRequired && !isRiskControl;
+                      {/* 窗口子块列表 */}
+                      <div className="p-4 space-y-4">
+                        {operator.windows.map((windowGroup) => {
+                          const winHasActive = windowGroup.accounts.some((a) => a.monitoringEnabled && a.status !== 'blocked' && a.status !== 'login_required' && a.status !== 'risk_control');
+                          const winHasBlocked = windowGroup.accounts.some((a) => a.status === 'blocked');
+                          const winHasLoginRequired = windowGroup.accounts.some((a) => a.status === 'login_required');
+                          const winHasRiskControl = windowGroup.accounts.some((a) => a.status === 'risk_control');
 
                           return (
-                            <div
-                              key={account.id}
-                              className={cn(
-                                'group relative bg-surface-container-low border border-outline-variant/50 rounded-xl overflow-hidden cursor-pointer',
-                                'hover:border-primary/40 hover:shadow-md transition-all duration-200',
-                                `border-l-3 ${pc.border}`,
-                              )}
-                              onClick={() => handleEnterDetail(account.id)}
-                            >
-                              <div className={cn('absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none', pc.gradient)} />
-
-                              <div className="relative p-3.5">
-                                {/* 平台头部 */}
-                                <div className="flex items-center justify-between mb-2.5">
-                                  <div className="flex items-center gap-2.5">
-                                    <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs', pc.bg, pc.text)}>
-                                      {account.platformName.charAt(0)}
-                                    </div>
-                                    <div>
-                                      <h4 className="text-label-md text-on-surface font-semibold">{account.platformName}</h4>
-                                      <p className="text-[10px] text-on-surface-variant">
-                                        {account.lastCheckTime ? formatRelativeTime(account.lastCheckTime) : '未检测'}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center gap-1.5">
-                                     {isActive && (
-                                       <span className="w-2 h-2 rounded-full bg-emerald-500" title="运行中" />
-                                     )}
-                                     {isLoginRequired && (
-                                       <span className="w-2 h-2 rounded-full bg-orange-500" title="需重新登录" />
-                                     )}
-                                     {isRiskControl && (
-                                       <span className="w-2 h-2 rounded-full bg-amber-500" title="风控冷却中" />
-                                     )}
-                                     {isBlocked && (
-                                       <span className="w-2 h-2 rounded-full bg-red-500" title="已封禁" />
-                                     )}
-                                    {isCooldown && !isBlocked && (
-                                      <span className="w-2 h-2 rounded-full bg-amber-500" title="冷却中" />
-                                    )}
-                                    {!account.monitoringEnabled && (
-                                      <span className="w-2 h-2 rounded-full bg-gray-400" title="已暂停" />
-                                    )}
-                                  </div>
-                                </div>
-
-                                {/* 统计行 */}
-                                <div className="flex items-center gap-4 mb-2.5">
-                                  <div>
-                                    <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.videoCount}</p>
-                                    <p className="text-[9px] text-on-surface-variant">视频</p>
-                                  </div>
-                                  <div>
-                                    <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.totalComments}</p>
-                                    <p className="text-[9px] text-on-surface-variant">评论</p>
-                                  </div>
-                                  <div>
-                                    <p className={cn(
-                                      'text-label-lg font-bold tabular-nums',
-                                      account.newComments > 0 ? 'text-amber-500' : 'text-on-surface-variant',
-                                    )}>
-                                      {account.newComments}
-                                    </p>
-                                    <p className="text-[9px] text-on-surface-variant">新增</p>
-                                  </div>
-                                </div>
-
-                                {/* 下次监控倒计时 */}
-                                {isActive && (
-                                  <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
-                                    <span className="text-[10px] text-indigo-400">⏱</span>
-                                    <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
-                                      {countdownMap.get(`${account.windowId}_${account.platform}`) || '--'}
+                            <div key={windowGroup.windowId} className="bg-surface-container-low border border-outline-variant/50 rounded-xl overflow-hidden">
+                              {/* 窗口头部 */}
+                              <div className="flex items-center justify-between px-4 py-3 bg-surface-container-high/50 border-b border-outline-variant/30">
+                                <div className="flex items-center gap-2">
+                                  <MaterialIcon icon="window" size="sm" className="text-on-surface-variant" />
+                                  <h4 className="text-label-lg text-on-surface font-semibold">{windowGroup.windowName}</h4>
+                                  {winHasActive && (
+                                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10">
+                                      <span className="relative flex h-1.5 w-1.5">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
+                                      </span>
+                                      <span className="text-[10px] text-emerald-600 font-medium">运行中</span>
                                     </span>
-                                  </div>
-                                )}
-
-                                {/* 操作按钮 */}
-                                <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
-                                  <button
-                                    onClick={() => handleTrigger(account.id)}
-                                    disabled={triggerMonitor.isPending || !account.monitoringEnabled || isBlocked}
-                                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                                  >
-                                    <MaterialIcon icon="sync" size="xs" />
-                                    更新
-                                  </button>
-                                  <button
-                                    onClick={() => handleToggle(account.id, account.monitoringEnabled)}
-                                    disabled={toggleMonitor.isPending}
-                                    className={cn(
-                                      'flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-30',
-                                      account.monitoringEnabled
-                                        ? 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
-                                        : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20',
-                                    )}
-                                  >
-                                    <MaterialIcon icon={account.monitoringEnabled ? 'pause' : 'play_arrow'} size="xs" />
-                                    {account.monitoringEnabled ? '暂停' : '恢复'}
-                                  </button>
-                                  <button
-                                    onClick={async () => {
-                                      if (!confirm(`确定清空 ${account.platformName} 的所有视频和评论数据？`)) return;
-                                      try {
-                                        const res = await clearUserData.mutateAsync(account.id);
-                                        addToast((res as any)?.message || '已清空', 'success');
-                                      } catch (e: any) {
-                                        addToast(e?.response?.data?.error || e?.message || '清空失败', 'error');
-                                      }
-                                    }}
-                                    disabled={clearUserData.isPending}
-                                    className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
-                                    title="清空该用户数据"
-                                  >
-                                    <MaterialIcon icon="delete" size="xs" />
-                                  </button>
+                                  )}
+                                  {winHasLoginRequired && (
+                                    <span className="text-[10px] text-orange-500 bg-orange-500/10 px-2 py-0.5 rounded-full font-medium">
+                                      需重新登录
+                                    </span>
+                                  )}
+                                  {winHasRiskControl && (
+                                    <span className="text-[10px] text-amber-600 bg-amber-500/10 px-2 py-0.5 rounded-full font-medium">
+                                      风控冷却
+                                    </span>
+                                  )}
+                                  {winHasBlocked && (
+                                    <span className="text-[10px] text-red-500 bg-red-500/10 px-2 py-0.5 rounded-full font-medium">
+                                      部分封禁
+                                    </span>
+                                  )}
                                 </div>
+                                <span className="text-label-sm text-on-surface-variant">
+                                  {windowGroup.accounts.length} 个平台
+                                </span>
+                              </div>
+
+                              {/* 平台卡片网格 */}
+                              <div className="p-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                {windowGroup.accounts.map((account) => {
+                                  const pc = MONITOR_PLATFORM_CONFIG[account.platform] || MONITOR_PLATFORM_FALLBACK;
+                                  const isBlocked = account.status === 'blocked';
+                                  const isLoginRequired = account.status === 'login_required';
+                                  const isRiskControl = account.status === 'risk_control';
+                                  const isCooldown = account.cooldownUntil > Date.now();
+                                  const isActive = account.monitoringEnabled && !isBlocked && !isLoginRequired && !isRiskControl;
+
+                                  return (
+                                    <div
+                                      key={account.id}
+                                      className={cn(
+                                        'group relative bg-surface-container-lowest border border-outline-variant/50 rounded-xl overflow-hidden cursor-pointer',
+                                        'hover:border-primary/40 hover:shadow-md transition-all duration-200',
+                                        `border-l-3 ${pc.border}`,
+                                      )}
+                                      onClick={() => handleEnterDetail(account.id)}
+                                    >
+                                      <div className={cn('absolute inset-0 bg-gradient-to-br opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none', pc.gradient)} />
+
+                                      <div className="relative p-3.5">
+                                        {/* 平台头部 */}
+                                        <div className="flex items-center justify-between mb-2.5">
+                                          <div className="flex items-center gap-2.5">
+                                            <div className={cn('w-9 h-9 rounded-lg flex items-center justify-center font-bold text-xs', pc.bg, pc.text)}>
+                                              {account.platformName.charAt(0)}
+                                            </div>
+                                            <div>
+                                              <h4 className="text-label-md text-on-surface font-semibold">{account.platformName}</h4>
+                                              <p className="text-[10px] text-on-surface-variant">
+                                                {account.lastCheckTime ? formatRelativeTime(account.lastCheckTime) : '未检测'}
+                                              </p>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-1.5">
+                                            {isActive && (
+                                              <span className="w-2 h-2 rounded-full bg-emerald-500" title="运行中" />
+                                            )}
+                                            {isLoginRequired && (
+                                              <span className="w-2 h-2 rounded-full bg-orange-500" title="需重新登录" />
+                                            )}
+                                            {isRiskControl && (
+                                              <span className="w-2 h-2 rounded-full bg-amber-500" title="风控冷却中" />
+                                            )}
+                                            {isBlocked && (
+                                              <span className="w-2 h-2 rounded-full bg-red-500" title="已封禁" />
+                                            )}
+                                            {isCooldown && !isBlocked && (
+                                              <span className="w-2 h-2 rounded-full bg-amber-500" title="冷却中" />
+                                            )}
+                                            {!account.monitoringEnabled && (
+                                              <span className="w-2 h-2 rounded-full bg-gray-400" title="已暂停" />
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* 统计行 */}
+                                        <div className="flex items-center gap-4 mb-2.5">
+                                          <div>
+                                            <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.videoCount}</p>
+                                            <p className="text-[9px] text-on-surface-variant">视频</p>
+                                          </div>
+                                          <div>
+                                            <p className="text-label-lg text-on-surface font-bold tabular-nums">{account.totalComments}</p>
+                                            <p className="text-[9px] text-on-surface-variant">评论</p>
+                                          </div>
+                                          <div>
+                                            <p className={cn(
+                                              'text-label-lg font-bold tabular-nums',
+                                              account.newComments > 0 ? 'text-amber-500' : 'text-on-surface-variant',
+                                            )}>
+                                              {account.newComments}
+                                            </p>
+                                            <p className="text-[9px] text-on-surface-variant">新增</p>
+                                          </div>
+                                        </div>
+
+                                        {/* 下次监控倒计时 */}
+                                        {isActive && (
+                                          <div className="flex items-center gap-1.5 mb-2.5 px-2 py-1 rounded-md bg-indigo-50/50 border border-indigo-100/50">
+                                            <span className="text-[10px] text-indigo-400">⏱</span>
+                                            <span className="text-[11px] text-indigo-600 font-semibold tabular-nums">
+                                              {countdownMap.get(`${account.windowId}_${account.platform}`) || '--'}
+                                            </span>
+                                          </div>
+                                        )}
+
+                                        {/* 操作按钮 */}
+                                        <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                          <button
+                                            onClick={() => handleTrigger(account.id)}
+                                            disabled={triggerMonitor.isPending || !account.monitoringEnabled || isBlocked}
+                                            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                          >
+                                            <MaterialIcon icon="sync" size="xs" />
+                                            更新
+                                          </button>
+                                          <button
+                                            onClick={() => handleToggle(account.id, account.monitoringEnabled)}
+                                            disabled={toggleMonitor.isPending}
+                                            className={cn(
+                                              'flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-30',
+                                              account.monitoringEnabled
+                                                ? 'bg-surface-container text-on-surface-variant hover:bg-surface-container-high'
+                                                : 'bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20',
+                                            )}
+                                          >
+                                            <MaterialIcon icon={account.monitoringEnabled ? 'pause' : 'play_arrow'} size="xs" />
+                                            {account.monitoringEnabled ? '暂停' : '恢复'}
+                                          </button>
+                                          <button
+                                            onClick={async () => {
+                                              if (!confirm(`确定清空 ${account.platformName} 的所有视频和评论数据？`)) return;
+                                              try {
+                                                const res = await clearUserData.mutateAsync(account.id);
+                                                addToast((res as any)?.message || '已清空', 'success');
+                                              } catch (e: any) {
+                                                addToast(e?.response?.data?.error || e?.message || '清空失败', 'error');
+                                              }
+                                            }}
+                                            disabled={clearUserData.isPending}
+                                            className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors disabled:opacity-30"
+                                            title="清空该用户数据"
+                                          >
+                                            <MaterialIcon icon="delete" size="xs" />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             </div>
                           );

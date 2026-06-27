@@ -10,7 +10,7 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "patchright": "^1.59.0"
+    "patchright": "^1.61.1"
   },
   "devDependencies": {
     "typescript": "^5.5.0"
