@@ -46,7 +46,8 @@ export function parseVideoList(response: unknown, config: ParseConfig): ParsedVi
       if (value === undefined || value === null) continue;
 
       if (targetField === 'playCount') {
-        video.playCount = typeof value === 'number' ? value : parseInt(String(value), 10) || undefined;
+        const num = typeof value === 'number' ? value : Number(value);
+        video.playCount = !isNaN(num) ? num : undefined;
       } else if (targetField === 'publishTime') {
         // Unix 秒时间戳 → 毫秒
         const num = typeof value === 'number' ? value : parseInt(String(value), 10);
