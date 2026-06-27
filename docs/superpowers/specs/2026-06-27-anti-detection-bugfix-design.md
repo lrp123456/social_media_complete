@@ -31,9 +31,11 @@
 
 ### 缺陷 2 根因
 
-1. **99999 无界滚动（主因）**：`douyinCrawler.ts:3570-3572` `scrollCommentArea(page, 'top'|'bottom')` 调用 `HumanActions.cdpSmartScroll(page, selectors, 99999, 'up'|'down')`，向 CDP 发送 99999 像素的 wheel 事件。`cdpScroller.executeScroll` 按 60-150px/步 + 段间 60-200ms 拟人节奏执行，单次 `scrollCommentArea` 可耗时 20-60s。
-2. **每轮重复归零（放大因）**：`scrollExpandAndFindTarget`（`douyinCrawler.ts:4953-5051`）在 30 轮循环里每轮开头（`:4960`）调用 `scrollCommentArea(page,'top')`，且 final sweep 前再次调用（`:5040`）。滚动进度被反复清零，30 轮可达 10-30 分钟，远超 `REPLY_TIMEOUT_MS = 5 * 60 * 1000`。
+1. **99999 无界滚动（主因）**：`douyinCrawler.ts:3570-3572` `scrollCommentArea(page, 'top'|'bottom')` 调用 `HumanActions.cdpSmartScroll(page, selectors, 99999, 'up'|'down')`，向 CDP 发送 99999 像素的 wheel 事件。`cdpScroller.ts:197-222` `executeScroll` 中 `remaining = Math.abs(99999)`，按 60-150px/步 + 段间 60-200ms 拟人节奏执行（`direction='up'` 时 deltaY 取负但仍跑完整循环），单次 `scrollCommentArea('top'|'bottom')` 可耗时 20-60s。
+2. **回复流程内两次 99999 归零滚动（放大因）**：`scrollExpandAndFindTarget`（`douyinCrawler.ts:4953-5051`）在 for 循环**之前**（`:4960`）调用一次 `scrollCommentArea(page,'top')`，并在 final sweep **之前**（`:5040`）再次调用。两次归零滚动合计 40-120s。循环内每轮 `tryExpandMoreAndScroll`（`:5832`）用的是 `scrollCommentArea(page, sh.ch * 0.6)`（数字入参、有界），不是致害点。叠加 30 轮循环里 `findRootCommentByUsernameContent`/`expandRootRepliesIfNeeded` 等 `page.evaluate` 在 CDP 不稳时单次可 hang 数十秒，总耗时可达 10-30 分钟，远超 `REPLY_TIMEOUT_MS = 5 * 60 * 1000`。
 3. **无 step 级超时（兜底过粗）**：`replyToComment` 内部无 step 级超时，全靠 `unifiedQueue.ts:156-161` 外层 5min `Promise.race` 兜底。任务长时间 `running` 且 `durationMs` 为 null（`finishExecution` 未被调用），前台显示"耗时 -"。
+
+> 影响面提示：`scrollCommentArea` 是共享方法，监控流程亦大量调用其 `'top'/'bottom'`（`douyinCrawler.ts:1224/1263/1322/2795/3669/3893/3966/3977/4084`）。去无界化会同步影响这些监控调用方——但"到顶/到底即停"是语义更正确、耗时更短的行为，对监控流程属改善而非回归。测试需覆盖监控滚动不回归（见"测试"）。
 
 > 说明：probe bootstrap/teardown、selectorTries 迁移、Interceptor 收口经核对**不是**卡死根因（非调试模式下 probe/recordSelectorTry 均为空操作；回复流程不使用 Interceptor）。本设计不改动这些模块。
 
@@ -71,8 +73,8 @@
    - `direction: number` 入参分支保留原行为。
    - `cdpSmartScroll` / `executeScroll` 内部拟人 segment 实现不改。
 2. **`scrollExpandAndFindTarget` 单调向下 + 总预算（L4953）**
-   - 删除循环内每轮开头的 `scrollCommentArea(page,'top')`（L4960），改为**仅在首次进入时滚到顶一次**（移到循环外）。
-   - 删除 final sweep 前的 `scrollCommentArea(page,'top')`（L5040）。
+   - `L4960` 的循环前 `scrollCommentArea(page,'top')` 保留（首次归零是合理的），但因缺陷 2 修复 1 已使其有界化，单次耗时大幅下降。
+   - `L5040` final sweep 前的 `scrollCommentArea(page,'top')` 保留同理（有界化后耗时可控）。不再删除这两处调用——只去除其 99900 致害性即可，行为更小改动。
    - 保留 `MAX_SCROLL = 30`，新增总时长预算 `FIND_TARGET_BUDGET_MS = 90_000`：每轮检查 `Date.now() - startT0`，超预算即 break 走 final sweep，并打日志 `[Reply::Find] Budget exceeded, early exit`。
 3. **`replyToComment` step 级超时（monitorService.ts:2132）**
    - 将 `dy.replyToComment(page, replyTarget, replyData.text, executionId)` 包入 `Promise.race`，超时阈值 `REPLY_STEP_TIMEOUT_MS = 120_000`（2min），超时 reject `new Error('定位/执行回复超时')`。
@@ -97,7 +99,8 @@
 
 - `monitorService.connect-failure.test.ts`：mock `bm.connect` reject → 断言 `executeMonitorCheck` reject，错误消息含"连接指纹浏览器失败"，且 `disconnectSession` 被调用一次。
 - `unifiedQueue.lock-null.test.ts`：mock `WindowMutex.tryAcquireOnce → null` → 断言 handleJob（monitor/reply/publish）抛"窗口锁占用中"且 `finishExecution(failed)` 被调用一次。
-- `douyinCrawler.scrollBounded.test.ts`：mock `cdpSmartScroll` + `page.evaluate` 返回 `scrollTop=0` → 断言 `scrollCommentArea('top')` 只滚动有界量、快速返回，不出现 99999 入参。
+- `douyinCrawler.scrollBounded.test.ts`：mock `cdpSmartScroll` + `page.evaluate` 返回 `scrollTop=0` → 断言 `scrollCommentArea('top')` 只滚动有界量、快速返回，不出现 99999 入参；`'bottom'` 同理（`scrollTop+clientHeight>=scrollHeight` 即停）。
+- `douyinCrawler.monitorScrollNoRegression.test.ts`：验证监控流程调用 `scrollCommentArea('top'|'bottom')` 时同样走有界路径（到顶/到底即停），不回归为长耗时盲滚。
 - `douyinCrawler.findTargetBudget.test.ts`：mock 每轮耗时使总时长超 `FIND_TARGET_BUDGET_MS` → 断言 `scrollExpandAndFindTarget` 在预算内 break 返回 null（而非跑满 30 轮）。
 - `monitorService.replyStepTimeout.test.ts`：mock `dy.replyToComment` 永挂 → 断言 `executeReplyAction` 抖音分支在 `REPLY_STEP_TIMEOUT_MS` 后 reject"定位/执行回复超时"。
 
