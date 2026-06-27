@@ -12,7 +12,9 @@ import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ReplyTarget } from './replyTypes';
-import { isEnabled } from '../lib/antiDetectionMode';
+import { isEnabled, isAntiDetectionV2 } from '../lib/antiDetectionMode';
+import { MaintenanceProbe } from '@social-media/browser-core';
+import { bootstrapProbe, teardownProbe } from './probeBootstrap';
 
 const logger = createLogger('crawler:tencent');
 
@@ -922,6 +924,7 @@ export class TencentCrawler {
    * 内容在 shadow DOM 内切换。成功判定基于拦截器是否捕获到 post_list API 数据。
    */
   async navigateToVideoList(page: Page): Promise<void> {
+    MaintenanceProbe.enterStep('monitor', 'tencent', 'Phase1', 'navigateToSidebar');
     const currentUrl = page.url();
     logger.info({ currentUrl }, '[Phase1] navigateToVideoList - current URL');
 
@@ -936,6 +939,8 @@ export class TencentCrawler {
     await this.expandMenu(page, '内容管理');
 
     // 点击「视频」子菜单（限定在 .finder-ui-desktop-sub-menu 范围内）
+    MaintenanceProbe.exitStep();
+    MaintenanceProbe.enterStep('monitor', 'tencent', 'Phase1', 'fetchVideoListFromSource');
     const videoClicked = await this.clickInlineSubMenuItem(page, '视频');
     if (videoClicked) {
       logger.info('[Phase1] 视频菜单已点击，等待页面加载');
@@ -1234,6 +1239,8 @@ export class TencentCrawler {
 
     logger.info({ userId, queueLength: commentsQueue.length }, '[Phase1] Check complete');
 
+    MaintenanceProbe.exitStep();
+
     return {
       hasUpdate: commentsQueue.length > 0,
       commentsQueue,
@@ -1247,6 +1254,8 @@ export class TencentCrawler {
     }
   }
 
+  // ════════════════════════════════════════
+  // Phase 2: 导航到评论管理页
   // ════════════════════════════════════════
   // Phase 2: 评论管理导航
   // ════════════════════════════════════════
@@ -2298,6 +2307,7 @@ export class TencentCrawler {
   ): Promise<CommentProcessResult[]> {
     const results: CommentProcessResult[] = [];
     logger.info({ queueLength: queue.length }, '[Phase3] Starting comment queue processing');
+    MaintenanceProbe.enterStep('monitor', 'tencent', 'Phase3', 'processCommentsQueue');
 
     // 注意：comment_list 拦截器已在 navigateToCommentManage (Phase2) 中注册
     // Phase2 导航时触发的 comment_list API 响应已被拦截器捕获
@@ -2362,6 +2372,7 @@ export class TencentCrawler {
       }
     }
 
+    MaintenanceProbe.exitStep();
     this.unregisterListener();
     return results;
   }
@@ -3004,6 +3015,10 @@ export class TencentCrawler {
     const { commentCid, level, username, text } = target;
     logger.info({ commentCid, level, username, textLength: replyText.length }, '[Reply] Starting reply');
 
+    // ── 维护调试探针 ──
+    const dExec = executionId ? await prisma.taskExecution.findUnique({ where: { id: executionId }, select: { isDebugMode: true } }) : null;
+    await bootstrapProbe({ isDebugMode: dExec?.isDebugMode ?? false, taskExecutionId: executionId ?? undefined });
+
     // ── 调试模式初始化 ──
     const debugEnabled = await isDebugModeEnabled();
     let manifest: DebugManifest | null = null;
@@ -3325,6 +3340,8 @@ export class TencentCrawler {
       if (manifest) finishManifest(manifest, false);
       logger.error({ error: err.message, commentCid }, '[Reply] Reply failed');
       return false;
+    } finally {
+      await teardownProbe();
     }
   }
 
