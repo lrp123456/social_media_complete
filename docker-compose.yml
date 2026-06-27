@@ -127,8 +127,12 @@ services:
       #   v2     — 全部收口到 HumanActions 原生 Locator + RequestInterceptor 拦截器
       #            + safeEvaluate 隔离世界，降低指纹特征暴露风险
       #   切换方式: 修改此变量后 docker compose up -d ts-api-gateway 即可回滚
-      #   关联文档: docs/superpowers/plans/2026-06-25-anti-detection-douyin-pilot-plan.md
+      #   关联文档: docs/superpowers/plans/2026-06-27-multi-platform-anti-detection-rollout.md
       ANTI_DETECTION_MODE: ${ANTI_DETECTION_MODE:-v2}
+      # 三平台独立双路径开关（plan 2026-06-27 全量开启 v2；回滚改 legacy）
+      ANTI_DETECTION_MODE_TENCENT: ${ANTI_DETECTION_MODE_TENCENT:-v2}
+      ANTI_DETECTION_MODE_KUAISHOU: ${ANTI_DETECTION_MODE_KUAISHOU:-v2}
+      ANTI_DETECTION_MODE_XIAOHONGSHU: ${ANTI_DETECTION_MODE_XIAOHONGSHU:-v2}
     volumes:
       - ts_api_data:/app/apps/ts-api-gateway/data
 
