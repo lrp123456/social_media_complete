@@ -449,6 +449,7 @@ export type MonitorAccount = {
   platform: string;
   platformName: string;
   windowId: string;
+  windowExternalId: string;
   windowName: string;
   operatorId: number | null;
   operatorName: string;

@@ -16,6 +16,9 @@ import { getCommentCrawlDecision, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } f
 import { isKuaishouDrawerVideoTextMatch, shouldStopKuaishouDrawerSearch } from './kuaishouDrawerUtils';
 import fs from 'fs';
 import path from 'path';
+import { isEnabled } from '../lib/antiDetectionMode';
+import { MaintenanceProbe } from '@social-media/browser-core';
+import { bootstrapProbe, teardownProbe } from './probeBootstrap';
 
 const logger = createLogger('crawler:kuaishou');
 
@@ -159,6 +162,22 @@ export class KuaishouCrawler {
     this.interceptor = new RequestInterceptor();
   }
 
+  /**
+   * 双路径 evaluate 包装器：v2 走 safeEvaluate（CDP 隔离世界），legacy 走 page.evaluate
+   */
+  private async evaluateOrSafe<T>(
+    page: Page,
+    fn: (...args: any[]) => T,
+    args: any[],
+    reason: string,
+  ): Promise<T> {
+    if (isEnabled('kuaishou')) {
+      const r = await HumanActions.safeEvaluate(page, fn, { reason, args });
+      return r as T;
+    }
+    return await page.evaluate(fn, ...args);
+  }
+
   // ════════════════════════════════════════
   // 登录管理
   // ════════════════════════════════════════
@@ -221,11 +240,20 @@ export class KuaishouCrawler {
     await page.goto(KS_LOGIN_URL, { waitUntil: 'domcontentloaded' });
     await HumanActions.wait(page, 2000, 3000);
 
-    const switchBtn = page.locator('div.platform-switch');
-    if (await switchBtn.count() > 0) {
-      await switchBtn.click();
-      await HumanActions.wait(page, 2000, 3000);
-      logger.info('[Login] Clicked platform switch button');
+    if (isEnabled('kuaishou')) {
+      // v2: 通过 HumanActions.click 走 CDP
+      if (await HumanActions.exists(page, 'div.platform-switch', 3000)) {
+        await HumanActions.click(page, 'div.platform-switch');
+        await HumanActions.wait(page, 2000, 3000);
+        logger.info('[Login] Clicked platform switch button (v2)');
+      }
+    } else {
+      const switchBtn = page.locator('div.platform-switch');
+      if (await switchBtn.count() > 0) {
+        await switchBtn.click();
+        await HumanActions.wait(page, 2000, 3000);
+        logger.info('[Login] Clicked platform switch button');
+      }
     }
 
     const { botManager } = await import('../services/wechatBotService');
@@ -274,10 +302,16 @@ export class KuaishouCrawler {
       if ((bodyText.includes('已过期') || bodyText.includes('刷新')) && qrRefreshCount < maxQrRefreshes) {
         logger.info('[Login] QR code expired, refreshing');
         qrRefreshCount++;
-        const refreshBtn = page.locator('.refresh-btn, [class*="refresh"], button:has-text("刷新")');
-        if (await refreshBtn.count() > 0) {
-          await refreshBtn.first.click().catch(() => {});
+        if (isEnabled('kuaishou')) {
+          // v2: 通过 HumanActions 点击刷新按钮
+          await HumanActions.click(page, '.refresh-btn');
           await HumanActions.wait(page, 1000, 2000);
+        } else {
+          const refreshBtn = page.locator('.refresh-btn, [class*="refresh"], button:has-text("刷新")');
+          if (await refreshBtn.count() > 0) {
+            await refreshBtn.first.click().catch(() => {});
+            await HumanActions.wait(page, 1000, 2000);
+          }
         }
         if (qrRefreshCount <= maxQrRefreshes && ksConfig) {
           const ksQrBuf2 = await loginTabRegistry.captureQR(page, ksConfig);
@@ -316,26 +350,47 @@ export class KuaishouCrawler {
       let buf: Buffer | undefined;
       const PADDING = 20;
 
-      for (const sel of selectors) {
-        try {
-          const el = await page.$(sel);
-          if (el) {
-            await el.waitForElementState('visible', { timeout: 5000 }).catch(() => {});
-            await page.waitForTimeout(500);
-            const box = await el.boundingBox();
-            if (box && box.width > 50 && box.height > 50) {
+      if (isEnabled('kuaishou')) {
+        // v2: 通过 HumanActions.cdpFindElement 替代 page.$
+        for (const sel of selectors) {
+          try {
+            const found = await HumanActions.cdpFindElement(page, [sel]);
+            if (found && found.w > 50 && found.h > 50) {
+              await HumanActions.wait(page, 400, 600);
               const clip = {
-                x: Math.max(0, box.x - PADDING),
-                y: Math.max(0, box.y - PADDING),
-                width: box.width + PADDING * 2,
-                height: box.height + PADDING * 2,
+                x: Math.max(0, found.x - PADDING),
+                y: Math.max(0, found.y - PADDING),
+                width: found.w + PADDING * 2,
+                height: found.h + PADDING * 2,
               };
               buf = await page.screenshot({ type: 'png', clip });
-              logger.info({ selector: sel, width: clip.width, height: clip.height }, '[Login] QR screenshot captured');
+              logger.info({ selector: sel, width: clip.width, height: clip.height }, '[Login] QR screenshot captured (v2)');
               break;
             }
-          }
-        } catch {}
+          } catch {}
+        }
+      } else {
+        for (const sel of selectors) {
+          try {
+            const el = await page.$(sel);
+            if (el) {
+              await el.waitForElementState('visible', { timeout: 5000 }).catch(() => {});
+              await page.waitForTimeout(500);
+              const box = await el.boundingBox();
+              if (box && box.width > 50 && box.height > 50) {
+                const clip = {
+                  x: Math.max(0, box.x - PADDING),
+                  y: Math.max(0, box.y - PADDING),
+                  width: box.width + PADDING * 2,
+                  height: box.height + PADDING * 2,
+                };
+                buf = await page.screenshot({ type: 'png', clip });
+                logger.info({ selector: sel, width: clip.width, height: clip.height }, '[Login] QR screenshot captured');
+                break;
+              }
+            }
+          } catch {}
+        }
       }
 
       if (!buf) {
@@ -1276,6 +1331,7 @@ export class KuaishouCrawler {
     // 开始抓取前清除可能存在的前端错误弹窗
     await this.dismissErrorDialog(page);
 
+    MaintenanceProbe.enterStep('monitor', 'kuaishou', 'Phase1', 'fetchVideoListFromSource');
     logger.info({ userId }, '[Phase1] Fetching kuaishou video list from source');
     const videos = await this.fetchVideoListFromSource(page, source);
 
@@ -1460,6 +1516,8 @@ export class KuaishouCrawler {
       };
     }
 
+    MaintenanceProbe.exitStep();
+
     return {
       hasUpdate: commentsQueue.length > 0,
       commentsQueue,
@@ -1563,6 +1621,7 @@ export class KuaishouCrawler {
     const startTime = Date.now();
 
     logger.info({ queueLength: queue.length }, '[Phase3] Starting kuaishou comment queue processing');
+    MaintenanceProbe.enterStep('monitor', 'kuaishou', 'Phase3', 'processCommentsQueue');
 
     this.page = page;
 
@@ -1717,35 +1776,40 @@ export class KuaishouCrawler {
 
         for (let scrollRound = 0; scrollRound < 30; scrollRound++) {
           // 查找视口内的展开按钮
-          const expandButtons = await page.evaluate((pattern: string) => {
-            const regex = new RegExp(pattern);
-            const results: Array<{ x: number; y: number; text: string; rootCommentId: string }> = [];
-            const all = Array.from(document.querySelectorAll('*'));
-            for (const el of all) {
-              const t = (el.textContent || '').trim();
-              if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
-              const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
-              if (!isLeaf) continue;
-              const rect = el.getBoundingClientRect();
-              if (rect.top < 0 || rect.bottom > window.innerHeight || rect.width === 0 || rect.height === 0) continue;
+          const expandButtons = await this.evaluateOrSafe(
+            page,
+            (pattern: string) => {
+              const regex = new RegExp(pattern);
+              const results: Array<{ x: number; y: number; text: string; rootCommentId: string }> = [];
+              const all = Array.from(document.querySelectorAll('*'));
+              for (const el of all) {
+                const t = (el.textContent || '').trim();
+                if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
+                const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
+                if (!isLeaf) continue;
+                const rect = el.getBoundingClientRect();
+                if (rect.top < 0 || rect.bottom > window.innerHeight || rect.width === 0 || rect.height === 0) continue;
 
-              // 往上找根评论的 commentId
-              let rootCommentId = '';
-              const commentItem = el.closest('[class*="comment-item"], [class*="comment"]');
-              if (commentItem) {
-                const cidAttr = commentItem.getAttribute('data-comment-id') || commentItem.getAttribute('data-id') || '';
-                if (cidAttr) rootCommentId = cidAttr;
+                // 往上找根评论的 commentId
+                let rootCommentId = '';
+                const commentItem = el.closest('[class*="comment-item"], [class*="comment"]');
+                if (commentItem) {
+                  const cidAttr = commentItem.getAttribute('data-comment-id') || commentItem.getAttribute('data-id') || '';
+                  if (cidAttr) rootCommentId = cidAttr;
+                }
+
+                results.push({
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  text: t,
+                  rootCommentId,
+                });
               }
-
-              results.push({
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                text: t,
-                rootCommentId,
-              });
-            }
-            return results;
-          }, expandPattern.source);
+              return results;
+            },
+            [expandPattern.source],
+            'find-expand-buttons-in-viewport',
+          );
 
           if (expandButtons.length > 0) {
             // 点击每个展开按钮
@@ -1800,11 +1864,16 @@ export class KuaishouCrawler {
           }
 
           // 检查是否到底
-          const atBottom = await page.evaluate(() => {
-            const container = document.querySelector('.el-main') as HTMLElement;
-            if (!container) return true;
-            return container.scrollTop + container.clientHeight >= container.scrollHeight - 50;
-          });
+          const atBottom = await this.evaluateOrSafe(
+            page,
+            () => {
+              const container = document.querySelector('.el-main') as HTMLElement;
+              if (!container) return true;
+              return container.scrollTop + container.clientHeight >= container.scrollHeight - 50;
+            },
+            [],
+            'scroll-bottom-detection',
+          );
           if (atBottom) {
             logger.info({ awemeId: item.awemeId, scrollRound }, '[Phase3] Reached bottom');
             break;
@@ -1896,6 +1965,7 @@ export class KuaishouCrawler {
     const failCount = results.filter(r => !r.success).length;
     logger.info({ elapsed, total: queue.length, success: successCount, failed: failCount }, '[Phase3] Kuaishou queue processing complete');
 
+    MaintenanceProbe.exitStep();
     return { results, riskDetected: false };
   }
 
@@ -2081,41 +2151,47 @@ export class KuaishouCrawler {
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      const matchResult = await page.evaluate(({ createTimeNum, tolerance }: { createTimeNum: number; tolerance: number }) => {
-        const items = Array.from(document.querySelectorAll('.video-item'));
-        let minTimestamp = Infinity;
-        let maxTimestamp = -Infinity;
-        let itemCount = 0;
-        const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
+      const matchResult = await this.evaluateOrSafe(
+        page,
+        (params: { createTimeNum: number; tolerance: number }) => {
+          const { createTimeNum: createTimeNum, tolerance } = params;
+          const items = Array.from(document.querySelectorAll('.video-item'));
+          let minTimestamp = Infinity;
+          let maxTimestamp = -Infinity;
+          let itemCount = 0;
+          const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
 
-        for (const item of items) {
-          const titleEl = item.querySelector('.video-info__content__title');
-          const dateEl = item.querySelector('.video-info__content__date');
-          const title = titleEl?.textContent?.trim() || '';
-          const dateText = dateEl?.textContent?.trim() || '';
-          const fullText = `${title} ${dateText}`;
+          for (const item of items) {
+            const titleEl = item.querySelector('.video-info__content__title');
+            const dateEl = item.querySelector('.video-info__content__date');
+            const title = titleEl?.textContent?.trim() || '';
+            const dateText = dateEl?.textContent?.trim() || '';
+            const fullText = `${title} ${dateText}`;
 
-          const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
-          if (!dateMatch) continue;
-          const [, y, m, d, h, min, s] = dateMatch;
-          const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
+            const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+            if (!dateMatch) continue;
+            const [, y, m, d, h, min, s] = dateMatch;
+            const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
 
-          itemCount++;
-          if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
-          if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
+            itemCount++;
+            if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
+            if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
 
-          if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
-            candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
+            if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
+              candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
+            }
           }
-        }
 
-        return {
-          itemCount,
-          minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
-          maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
-          candidates,
-        };
-      }, { createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE });
+          return {
+            itemCount,
+            minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
+            maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
+            candidates,
+          };
+        },
+        [{ createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE }],
+        'drawer-video-timestamp-matching',
+      );
 
       logger.info({ scrollAttempt, loadedItems: matchResult.itemCount, latestDate: matchResult.maxTimestamp, oldestDate: matchResult.minTimestamp, targetCreateTime: createTime }, '[Drawer] Scroll diagnostic');
 
@@ -2124,17 +2200,22 @@ export class KuaishouCrawler {
       );
 
       if (matchedCandidate) {
-        const clicked = await page.evaluate((targetDateText: string) => {
-          const items = Array.from(document.querySelectorAll('.video-item'));
-          for (const item of items) {
-            const dateEl = item.querySelector('.video-info__content__date');
-            if (dateEl?.textContent?.trim() === targetDateText) {
-              (dateEl as HTMLElement).click();
-              return true;
+        const clicked = await this.evaluateOrSafe(
+          page,
+          (targetDateText: string) => {
+            const items = Array.from(document.querySelectorAll('.video-item'));
+            for (const item of items) {
+              const dateEl = item.querySelector('.video-info__content__date');
+              if (dateEl?.textContent?.trim() === targetDateText) {
+                (dateEl as HTMLElement).click();
+                return true;
+              }
             }
-          }
-          return false;
-        }, matchedCandidate.dateText);
+            return false;
+          },
+          [matchedCandidate.dateText],
+          'drawer-click-video-by-date',
+        );
 
         if (!clicked) {
           logger.warn({ awemeId, dateText: matchedCandidate.dateText }, '[Drawer] Matched candidate but date click failed');
@@ -2420,13 +2501,28 @@ export class KuaishouCrawler {
    */
   private async injectEsbuildPolyfill(page: Page): Promise<void> {
     try {
-      await page.evaluate(() => {
-        // @ts-ignore: 故意挂在 window 上
-        if (typeof (window as any).__name === 'undefined') {
-          (window as any).__name = (target: any, value: string) =>
-            Object.defineProperty(target, 'name', { value, configurable: true });
-        }
-      });
+      if (isEnabled('kuaishou')) {
+        // v2: safeEvaluate 注入 __name polyfill（需 main world）
+        await HumanActions.safeEvaluate(
+          page,
+          () => {
+            // @ts-ignore: 故意挂在 window 上
+            if (typeof (window as any).__name === 'undefined') {
+              (window as any).__name = (target: any, value: string) =>
+                Object.defineProperty(target, 'name', { value, configurable: true });
+            }
+          },
+          { world: 'main', reason: 'main-world-required: esbuild polyfill' },
+        );
+      } else {
+        await page.evaluate(() => {
+          // @ts-ignore: 故意挂在 window 上
+          if (typeof (window as any).__name === 'undefined') {
+            (window as any).__name = (target: any, value: string) =>
+              Object.defineProperty(target, 'name', { value, configurable: true });
+          }
+        });
+      }
     } catch {
       // 注入失败不影响主流程
     }
@@ -2445,6 +2541,10 @@ export class KuaishouCrawler {
       level: target.level,
       textLength: replyText.length 
     }, '[Reply] Starting reply');
+
+    // ── 维护调试探针 ──
+    const dExec = executionId ? await prisma.taskExecution.findUnique({ where: { id: executionId }, select: { isDebugMode: true } }) : null;
+    await bootstrapProbe({ isDebugMode: dExec?.isDebugMode ?? false, taskExecutionId: executionId ?? undefined });
 
     // ── 调试模式初始化 ──
     const debugEnabled = await isDebugModeEnabled();
@@ -2494,128 +2594,133 @@ export class KuaishouCrawler {
       const expandPattern = /展开(查看)?\d+条回复/;
       
       // 查找所有根评论容器，找到目标根评论
-      const rootCommentInfo = await page.evaluate((target: {
-        cid: string; text: string; username: string; level: number;
-        subReplyCount?: number; rootText?: string; rootUsername?: string;
-      }) => {
-        const rootContainers = Array.from(document.querySelectorAll('.comment-item')) as HTMLElement[];
-        
-        /** 去装饰子元素 */
-        function bareUsernameText(el: HTMLElement): string {
-          const clone = el.cloneNode(true) as HTMLElement;
-          const ch = clone.children;
-          for (let i = ch.length - 1; i >= 0; i--) ch[i].remove();
-          return (clone.textContent || '').trim().toLowerCase();
-        }
-        
-        /** 查找容器内的子评论数（只看直接子代的expand-btn，避免嵌套子评论） */
-        function findSubReplyCount(container: HTMLElement): number {
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return 0;
-          const expandBtn = contentEl.querySelector(':scope > .comment-item__content__expand-btn');
-          if (expandBtn) {
-            const match = (expandBtn.textContent || '').match(/(\d+)条回复/);
-            if (match) return parseInt(match[1], 10);
+      const rootCommentInfo = await this.evaluateOrSafe(
+        page,
+        (target: {
+          cid: string; text: string; username: string; level: number;
+          subReplyCount?: number; rootText?: string; rootUsername?: string;
+        }) => {
+          const rootContainers = Array.from(document.querySelectorAll('.comment-item')) as HTMLElement[];
+          
+          /** 去装饰子元素 */
+          function bareUsernameText(el: HTMLElement): string {
+            const clone = el.cloneNode(true) as HTMLElement;
+            const ch = clone.children;
+            for (let i = ch.length - 1; i >= 0; i--) ch[i].remove();
+            return (clone.textContent || '').trim().toLowerCase();
           }
-          return 0;
-        }
-        
-        /** 查找容器内的评论正文（只取直接子代，避免嵌套子评论混入） */
-        function findCommentText(container: HTMLElement): string {
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
-          if (!detailEl) return '';
-          const span = detailEl.querySelector(':scope > span');
-          return ((span?.textContent) || detailEl.textContent || '').trim();
-        }
-        
-        /** 查找容器内的评论用户名
-         * 根评论结构: <username>UserA<span class="author-tag">作者</span></username>
-         * 子评论结构: <username>UserA<span class="reply">回复</span>UserB:</username>
-         * 都需要只取第一个文本节点（在第一个元素子节点之前的文本）
-         */
-        function findUsername(container: HTMLElement): string {
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
-          if (!usernameEl) return '';
-          let text = '';
-          for (const node of Array.from(usernameEl.childNodes)) {
-            if (node.nodeType === 1) break;
-            if (node.nodeType === 3) text += node.textContent || '';
+          
+          /** 查找容器内的子评论数（只看直接子代的expand-btn，避免嵌套子评论） */
+          function findSubReplyCount(container: HTMLElement): number {
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return 0;
+            const expandBtn = contentEl.querySelector(':scope > .comment-item__content__expand-btn');
+            if (expandBtn) {
+              const match = (expandBtn.textContent || '').match(/(\d+)条回复/);
+              if (match) return parseInt(match[1], 10);
+            }
+            return 0;
           }
-          return text.trim().toLowerCase();
-        }
+          
+          /** 查找容器内的评论正文（只取直接子代，避免嵌套子评论混入） */
+          function findCommentText(container: HTMLElement): string {
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
+            if (!detailEl) return '';
+            const span = detailEl.querySelector(':scope > span');
+            return ((span?.textContent) || detailEl.textContent || '').trim();
+          }
+          
+          /** 查找容器内的评论用户名
+           * 根评论结构: <username>UserA<span class="author-tag">作者</span></username>
+           * 子评论结构: <username>UserA<span class="reply">回复</span>UserB:</username>
+           * 都需要只取第一个文本节点（在第一个元素子节点之前的文本）
+           */
+          function findUsername(container: HTMLElement): string {
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
+            if (!usernameEl) return '';
+            let text = '';
+            for (const node of Array.from(usernameEl.childNodes)) {
+              if (node.nodeType === 1) break;
+              if (node.nodeType === 3) text += node.textContent || '';
+            }
+            return text.trim().toLowerCase();
+          }
 
-        // 对于子评论（level=2），先找到根评论
-        if (target.level === 2 && target.rootText && target.rootUsername) {
-          for (let i = 0; i < rootContainers.length; i++) {
-            const c = rootContainers[i];
-            const rootUsername = findUsername(c);
-            const rootText = findCommentText(c);
-            
-            const rootUsernameMatch = rootUsername === target.rootUsername!.toLowerCase();
-            
-            // 精确匹配根评论内容（不使用includes，避免"12"匹配"1312"）
-            const rootTextMatch = rootText && (rootText === target.rootText! || 
-              (rootText.length > 5 && target.rootText!.length > 5 &&
-               (rootText.includes(target.rootText!) || target.rootText!.includes(rootText))));
-            
-            if (rootUsernameMatch && rootTextMatch) {
-              const rect = c.getBoundingClientRect();
-              return {
-                index: i,
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                method: 'root-found-for-sub',
-              };
+          // 对于子评论（level=2），先找到根评论
+          if (target.level === 2 && target.rootText && target.rootUsername) {
+            for (let i = 0; i < rootContainers.length; i++) {
+              const c = rootContainers[i];
+              const rootUsername = findUsername(c);
+              const rootText = findCommentText(c);
+              
+              const rootUsernameMatch = rootUsername === target.rootUsername!.toLowerCase();
+              
+              // 精确匹配根评论内容（不使用includes，避免"12"匹配"1312"）
+              const rootTextMatch = rootText && (rootText === target.rootText! || 
+                (rootText.length > 5 && target.rootText!.length > 5 &&
+                 (rootText.includes(target.rootText!) || target.rootText!.includes(rootText))));
+              
+              if (rootUsernameMatch && rootTextMatch) {
+                const rect = c.getBoundingClientRect();
+                return {
+                  index: i,
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  method: 'root-found-for-sub',
+                };
+              }
             }
           }
-        }
-        
-        // 对于根评论（level=1），使用三重匹配
-        if (target.level === 1) {
-          for (let i = 0; i < rootContainers.length; i++) {
-            const c = rootContainers[i];
-            const username = findUsername(c);
-            const commentText = findCommentText(c);
-            const subReplyCount = findSubReplyCount(c);
-            
-            const usernameMatch = target.username && username === target.username.toLowerCase();
-            
-            // 精确匹配评论内容（不使用includes，避免"12"匹配"1312"）
-            const textMatch = target.text && commentText &&
-              (commentText === target.text || 
-               (commentText.length > 5 && target.text.length > 5 && 
-                (commentText.includes(target.text) || target.text.includes(commentText))));
-            
-            const countMatch = target.subReplyCount !== undefined && subReplyCount === target.subReplyCount;
-            
-            if (usernameMatch && textMatch && countMatch) {
-              const rect = c.getBoundingClientRect();
-              return {
-                index: i,
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                method: 'triple-match-root',
-              };
-            }
-            
-            if (usernameMatch && textMatch) {
-              const rect = c.getBoundingClientRect();
-              return {
-                index: i,
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                method: 'username-text-match-root',
-              };
+          
+          // 对于根评论（level=1），使用三重匹配
+          if (target.level === 1) {
+            for (let i = 0; i < rootContainers.length; i++) {
+              const c = rootContainers[i];
+              const username = findUsername(c);
+              const commentText = findCommentText(c);
+              const subReplyCount = findSubReplyCount(c);
+              
+              const usernameMatch = target.username && username === target.username.toLowerCase();
+              
+              // 精确匹配评论内容（不使用includes，避免"12"匹配"1312"）
+              const textMatch = target.text && commentText &&
+                (commentText === target.text || 
+                 (commentText.length > 5 && target.text.length > 5 && 
+                  (commentText.includes(target.text) || target.text.includes(commentText))));
+              
+              const countMatch = target.subReplyCount !== undefined && subReplyCount === target.subReplyCount;
+              
+              if (usernameMatch && textMatch && countMatch) {
+                const rect = c.getBoundingClientRect();
+                return {
+                  index: i,
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  method: 'triple-match-root',
+                };
+              }
+              
+              if (usernameMatch && textMatch) {
+                const rect = c.getBoundingClientRect();
+                return {
+                  index: i,
+                  x: Math.round(rect.left + rect.width / 2),
+                  y: Math.round(rect.top + rect.height / 2),
+                  method: 'username-text-match-root',
+                };
+              }
             }
           }
-        }
-        
-        return null;
-      }, target as any);
+          
+          return null;
+        },
+        [target as any],
+        'reply-find-root-comment-container',
+      );
 
       if (!rootCommentInfo) {
         await snap('root_comment_not_found');
@@ -2629,48 +2734,53 @@ export class KuaishouCrawler {
       // ★ 关键：找到根评论后立刻把它滚到视口中央
       // 借鉴评论树爬取方案：快手评论页的滚动容器是 .el-main，需要操作容器的 scrollTop
       // 用元素的 scrollIntoView 会自动找到最近的可滚动祖先（.el-main）并滚动它
-      const scrollResult = await page.evaluate((rootIndex: number) => {
-        const rootContainers = document.querySelectorAll('.comment-item');
-        if (rootIndex >= rootContainers.length) return { ok: false, reason: 'index-out-of-range' };
-        const rootContainer = rootContainers[rootIndex] as HTMLElement;
-        
-        // 找到真正的滚动容器（.el-main 或其他可滚动祖先）
-        let scrollContainer: HTMLElement | null = null;
-        let cur: HTMLElement | null = rootContainer.parentElement;
-        while (cur) {
-          const overflowY = getComputedStyle(cur).overflowY;
-          if ((overflowY === 'auto' || overflowY === 'scroll') && cur.scrollHeight > cur.clientHeight) {
-            scrollContainer = cur;
-            break;
+      const scrollResult = await this.evaluateOrSafe(
+        page,
+        (rootIndex: number) => {
+          const rootContainers = document.querySelectorAll('.comment-item');
+          if (rootIndex >= rootContainers.length) return { ok: false, reason: 'index-out-of-range' };
+          const rootContainer = rootContainers[rootIndex] as HTMLElement;
+          
+          // 找到真正的滚动容器（.el-main 或其他可滚动祖先）
+          let scrollContainer: HTMLElement | null = null;
+          let cur: HTMLElement | null = rootContainer.parentElement;
+          while (cur) {
+            const overflowY = getComputedStyle(cur).overflowY;
+            if ((overflowY === 'auto' || overflowY === 'scroll') && cur.scrollHeight > cur.clientHeight) {
+              scrollContainer = cur;
+              break;
+            }
+            cur = cur.parentElement;
           }
-          cur = cur.parentElement;
-        }
-        
-        if (!scrollContainer) {
-          // 兜底：用 scrollIntoView
-          rootContainer.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-          return { ok: true, method: 'scrollIntoView', containerSelector: null as string | null };
-        }
-        
-        // 计算目标滚动位置：让根评论显示在容器中央
-        const containerRect = scrollContainer.getBoundingClientRect();
-        const targetRect = rootContainer.getBoundingClientRect();
-        // 当前根评论 top（相对容器顶部）= targetRect.top - containerRect.top + scrollContainer.scrollTop
-        const currentTopInContainer = targetRect.top - containerRect.top + scrollContainer.scrollTop;
-        // 目标 scrollTop = currentTopInContainer - (containerHeight / 2) + (targetHeight / 2)
-        const desiredScrollTop = currentTopInContainer - scrollContainer.clientHeight / 2 + targetRect.height / 2;
-        
-        scrollContainer.scrollTop = Math.max(0, desiredScrollTop);
-        
-        return { 
-          ok: true, 
-          method: 'scrollTop',
-          containerSelector: scrollContainer.className || scrollContainer.tagName,
-          desiredScrollTop: Math.round(desiredScrollTop),
-          containerScrollHeight: scrollContainer.scrollHeight,
-          containerClientHeight: scrollContainer.clientHeight,
-        };
-      }, rootCommentInfo.index);
+          
+          if (!scrollContainer) {
+            // 兜底：用 scrollIntoView
+            rootContainer.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+            return { ok: true, method: 'scrollIntoView', containerSelector: null as string | null };
+          }
+          
+          // 计算目标滚动位置：让根评论显示在容器中央
+          const containerRect = scrollContainer.getBoundingClientRect();
+          const targetRect = rootContainer.getBoundingClientRect();
+          // 当前根评论 top（相对容器顶部）= targetRect.top - containerRect.top + scrollContainer.scrollTop
+          const currentTopInContainer = targetRect.top - containerRect.top + scrollContainer.scrollTop;
+          // 目标 scrollTop = currentTopInContainer - (containerHeight / 2) + (targetHeight / 2)
+          const desiredScrollTop = currentTopInContainer - scrollContainer.clientHeight / 2 + targetRect.height / 2;
+          
+          scrollContainer.scrollTop = Math.max(0, desiredScrollTop);
+          
+          return { 
+            ok: true, 
+            method: 'scrollTop',
+            containerSelector: scrollContainer.className || scrollContainer.tagName,
+            desiredScrollTop: Math.round(desiredScrollTop),
+            containerScrollHeight: scrollContainer.scrollHeight,
+            containerClientHeight: scrollContainer.clientHeight,
+          };
+        },
+        [rootCommentInfo.index],
+        'reply-scroll-root-comment-into-view',
+      );
       logger.info({ scrollResult }, '[Reply] Scrolled root comment into view');
       await HumanActions.wait(page, 1000, 1500);
       
@@ -2684,64 +2794,17 @@ export class KuaishouCrawler {
         // 循环展开子评论（最多20轮，处理大量子评论的情况）
         for (let expandRound = 0; expandRound < 20; expandRound++) {
           // 在目标根评论容器内查找展开按钮
-          const expandButton = await page.evaluate((args: { rootIndex: number; pattern: string }) => {
-            const { rootIndex, pattern } = args;
-            const regex = new RegExp(pattern);
-            const rootContainers = document.querySelectorAll('.comment-item');
-            if (rootIndex >= rootContainers.length) return null;
-            
-            const rootContainer = rootContainers[rootIndex] as HTMLElement;
-            const all = Array.from(rootContainer.querySelectorAll('*'));
-            
-            for (const el of all) {
-              const t = (el.textContent || '').trim();
-              if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
-              const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
-              if (!isLeaf) continue;
-              const rect = el.getBoundingClientRect();
-              if (rect.width === 0 || rect.height === 0) continue;
-              return {
-                x: Math.round(rect.left + rect.width / 2),
-                y: Math.round(rect.top + rect.height / 2),
-                visible: rect.top >= 0 && rect.bottom <= window.innerHeight,
-              };
-            }
-            return null;
-          }, { rootIndex: rootCommentInfo.index, pattern: expandPattern.source });
-
-          if (!expandButton) {
-            logger.info({ round: expandRound + 1 }, '[Reply] No more expand buttons found');
-            break;
-          }
-
-          // 如果按钮不在视口内，用 scrollIntoView 把按钮滚到视口中央
-          if (!expandButton.visible) {
-            await page.evaluate((args: { rootIndex: number; pattern: string }) => {
-              const { rootIndex, pattern } = args;
-              const regex = new RegExp(pattern);
-              const rootContainers = document.querySelectorAll('.comment-item');
-              if (rootIndex >= rootContainers.length) return;
-              const rootContainer = rootContainers[rootIndex] as HTMLElement;
-              const all = Array.from(rootContainer.querySelectorAll('*'));
-              for (const el of all) {
-                const t = (el.textContent || '').trim();
-                if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
-                const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
-                if (!isLeaf) continue;
-                el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-                return;
-              }
-            }, { rootIndex: rootCommentInfo.index, pattern: expandPattern.source });
-            await HumanActions.wait(page, 600, 1000);
-            
-            // 重新获取按钮坐标（滚动后坐标变了）
-            const refreshed = await page.evaluate((args: { rootIndex: number; pattern: string }) => {
+          const expandButton = await this.evaluateOrSafe(
+            page,
+            (args: { rootIndex: number; pattern: string }) => {
               const { rootIndex, pattern } = args;
               const regex = new RegExp(pattern);
               const rootContainers = document.querySelectorAll('.comment-item');
               if (rootIndex >= rootContainers.length) return null;
+              
               const rootContainer = rootContainers[rootIndex] as HTMLElement;
               const all = Array.from(rootContainer.querySelectorAll('*'));
+              
               for (const el of all) {
                 const t = (el.textContent || '').trim();
                 if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
@@ -2752,10 +2815,72 @@ export class KuaishouCrawler {
                 return {
                   x: Math.round(rect.left + rect.width / 2),
                   y: Math.round(rect.top + rect.height / 2),
+                  visible: rect.top >= 0 && rect.bottom <= window.innerHeight,
                 };
               }
               return null;
-            }, { rootIndex: rootCommentInfo.index, pattern: expandPattern.source });
+            },
+            [{ rootIndex: rootCommentInfo.index, pattern: expandPattern.source }],
+            'reply-find-expand-button-in-root',
+          );
+
+          if (!expandButton) {
+            logger.info({ round: expandRound + 1 }, '[Reply] No more expand buttons found');
+            break;
+          }
+
+          // 如果按钮不在视口内，用 scrollIntoView 把按钮滚到视口中央
+          if (!expandButton.visible) {
+            await this.evaluateOrSafe(
+              page,
+              (args: { rootIndex: number; pattern: string }) => {
+                const { rootIndex, pattern } = args;
+                const regex = new RegExp(pattern);
+                const rootContainers = document.querySelectorAll('.comment-item');
+                if (rootIndex >= rootContainers.length) return;
+                const rootContainer = rootContainers[rootIndex] as HTMLElement;
+                const all = Array.from(rootContainer.querySelectorAll('*'));
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
+                  const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
+                  if (!isLeaf) continue;
+                  el.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+                  return;
+                }
+              },
+              [{ rootIndex: rootCommentInfo.index, pattern: expandPattern.source }],
+              'reply-scroll-expand-button-into-view',
+            );
+            await HumanActions.wait(page, 600, 1000);
+            
+            // 重新获取按钮坐标（滚动后坐标变了）
+            const refreshed = await this.evaluateOrSafe(
+              page,
+              (args: { rootIndex: number; pattern: string }) => {
+                const { rootIndex, pattern } = args;
+                const regex = new RegExp(pattern);
+                const rootContainers = document.querySelectorAll('.comment-item');
+                if (rootIndex >= rootContainers.length) return null;
+                const rootContainer = rootContainers[rootIndex] as HTMLElement;
+                const all = Array.from(rootContainer.querySelectorAll('*'));
+                for (const el of all) {
+                  const t = (el.textContent || '').trim();
+                  if (!regex.test(t) || !(el instanceof HTMLElement)) continue;
+                  const isLeaf = !Array.from(el.children).some(child => regex.test((child.textContent || '').trim()));
+                  if (!isLeaf) continue;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width === 0 || rect.height === 0) continue;
+                  return {
+                    x: Math.round(rect.left + rect.width / 2),
+                    y: Math.round(rect.top + rect.height / 2),
+                  };
+                }
+                return null;
+              },
+              [{ rootIndex: rootCommentInfo.index, pattern: expandPattern.source }],
+              'reply-refresh-expand-button-coords',
+            );
             if (refreshed) {
               expandButton.x = refreshed.x;
               expandButton.y = refreshed.y;
@@ -2779,134 +2904,139 @@ export class KuaishouCrawler {
       }
 
       // ── Step 1: 在根评论容器内定位目标评论的回复按钮 ──
-      const locateResult = await page.evaluate((args: {
-        target: {
-          cid: string; text: string; username: string; level: number;
-          subReplyCount?: number; rootText?: string; rootUsername?: string;
-        };
-        rootIndex: number;
-      }) => {
-        const { target, rootIndex } = args;
-        const rootContainers = document.querySelectorAll('.comment-item');
-        if (rootIndex >= rootContainers.length) return null;
-        const rootContainer = rootContainers[rootIndex] as HTMLElement;
-        
-        /** 去装饰子元素 */
-        function bareUsernameText(el: HTMLElement): string {
-          const clone = el.cloneNode(true) as HTMLElement;
-          const ch = clone.children;
-          for (let i = ch.length - 1; i >= 0; i--) ch[i].remove();
-          return (clone.textContent || '').trim().toLowerCase();
-        }
-        
-        /** 在容器内查找"回复"按钮（只查找直接子代的btns，避免嵌套子评论） */
-        const findReplyBtn = (el: HTMLElement): { x: number; y: number; width: number; height: number } | null => {
-          // 直接子代的 .comment-content > .comment-content__btns
-          const contentEl = el.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return null;
-          const btnsContainer = contentEl.querySelector(':scope > .comment-content__btns') as HTMLElement;
-          if (!btnsContainer) return null;
+      const locateResult = await this.evaluateOrSafe(
+        page,
+        (args: {
+          target: {
+            cid: string; text: string; username: string; level: number;
+            subReplyCount?: number; rootText?: string; rootUsername?: string;
+          };
+          rootIndex: number;
+        }) => {
+          const { target, rootIndex } = args;
+          const rootContainers = document.querySelectorAll('.comment-item');
+          if (rootIndex >= rootContainers.length) return null;
+          const rootContainer = rootContainers[rootIndex] as HTMLElement;
           
-          // 优先：通过 .icon-reply 找
-          const replyIcon = btnsContainer.querySelector('.icon-reply') as HTMLElement;
-          if (replyIcon) {
-            const btnWrapper = replyIcon.closest('.comment-content__btns__btn') as HTMLElement;
-            if (btnWrapper) {
-              const r = btnWrapper.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
-            }
+          /** 去装饰子元素 */
+          function bareUsernameText(el: HTMLElement): string {
+            const clone = el.cloneNode(true) as HTMLElement;
+            const ch = clone.children;
+            for (let i = ch.length - 1; i >= 0; i--) ch[i].remove();
+            return (clone.textContent || '').trim().toLowerCase();
           }
-          // 次选：按文本"回复"找
-          const btns = btnsContainer.querySelectorAll(':scope > .comment-content__btns__btn');
-          for (const btn of Array.from(btns)) {
-            if ((btn.textContent || '').trim().includes('回复')) {
-              const r = (btn as HTMLElement).getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
-            }
-          }
-          return null;
-        };
-        
-        /** 查找容器内的评论正文（只取直接子代的 detail，避免嵌套） */
-        function findCommentText(container: HTMLElement): string {
-          // 直接子代 .comment-content > .comment-content__detail
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
-          if (!detailEl) return '';
-          // 只取 detail 内 span 的文本（评论正文在第一个span里）
-          const span = detailEl.querySelector(':scope > span');
-          return ((span?.textContent) || detailEl.textContent || '').trim();
-        }
-        
-        /** 查找容器内的评论用户名
-         * 根评论结构: <username>UserA<span class="author-tag">作者</span></username>
-         * 子评论结构: <username>UserA<span class="reply">回复</span>UserB:</username>
-         * 都需要只取第一个文本节点（去掉所有子元素后的"第一段"文本）
-         */
-        function findUsername(container: HTMLElement): string {
-          // 直接子代 .comment-content > .comment-content__username
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
-          if (!usernameEl) return '';
           
-          // 遍历子节点，取第一个文本节点（在第一个元素子节点之前的文本）
-          let text = '';
-          for (const node of Array.from(usernameEl.childNodes)) {
-            if (node.nodeType === 1) break; // 遇到元素节点就停（如<span>回复</span>或<span>作者</span>）
-            if (node.nodeType === 3) {       // 文本节点
-              text += node.textContent || '';
+          /** 在容器内查找"回复"按钮（只查找直接子代的btns，避免嵌套子评论） */
+          const findReplyBtn = (el: HTMLElement): { x: number; y: number; width: number; height: number } | null => {
+            // 直接子代的 .comment-content > .comment-content__btns
+            const contentEl = el.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return null;
+            const btnsContainer = contentEl.querySelector(':scope > .comment-content__btns') as HTMLElement;
+            if (!btnsContainer) return null;
+            
+            // 优先：通过 .icon-reply 找
+            const replyIcon = btnsContainer.querySelector('.icon-reply') as HTMLElement;
+            if (replyIcon) {
+              const btnWrapper = replyIcon.closest('.comment-content__btns__btn') as HTMLElement;
+              if (btnWrapper) {
+                const r = btnWrapper.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
             }
+            // 次选：按文本"回复"找
+            const btns = btnsContainer.querySelectorAll(':scope > .comment-content__btns__btn');
+            for (const btn of Array.from(btns)) {
+              if ((btn.textContent || '').trim().includes('回复')) {
+                const r = (btn as HTMLElement).getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
+            }
+            return null;
+          };
+          
+          /** 查找容器内的评论正文（只取直接子代的 detail，避免嵌套） */
+          function findCommentText(container: HTMLElement): string {
+            // 直接子代 .comment-content > .comment-content__detail
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
+            if (!detailEl) return '';
+            // 只取 detail 内 span 的文本（评论正文在第一个span里）
+            const span = detailEl.querySelector(':scope > span');
+            return ((span?.textContent) || detailEl.textContent || '').trim();
           }
-          return text.trim().toLowerCase();
-        }
+          
+          /** 查找容器内的评论用户名
+           * 根评论结构: <username>UserA<span class="author-tag">作者</span></username>
+           * 子评论结构: <username>UserA<span class="reply">回复</span>UserB:</username>
+           * 都需要只取第一个文本节点（去掉所有子元素后的"第一段"文本）
+           */
+          function findUsername(container: HTMLElement): string {
+            // 直接子代 .comment-content > .comment-content__username
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
+            if (!usernameEl) return '';
+            
+            // 遍历子节点，取第一个文本节点（在第一个元素子节点之前的文本）
+            let text = '';
+            for (const node of Array.from(usernameEl.childNodes)) {
+              if (node.nodeType === 1) break; // 遇到元素节点就停（如<span>回复</span>或<span>作者</span>）
+              if (node.nodeType === 3) {       // 文本节点
+                text += node.textContent || '';
+              }
+            }
+            return text.trim().toLowerCase();
+          }
 
-        // 对于根评论（level=1），直接在根评论容器内找回复按钮
-        if (target.level === 1) {
-          const commentText = findCommentText(rootContainer);
-          const username = findUsername(rootContainer);
-          
-          // 精确匹配评论内容（不使用includes，避免"12"匹配"1312"）
-          const textMatch = target.text && commentText &&
-            (commentText === target.text || 
-             (commentText.length > 5 && target.text.length > 5 &&
-              (commentText.includes(target.text) || target.text.includes(commentText))));
-          const usernameMatch = target.username && username === target.username.toLowerCase();
-          
-          if (textMatch && usernameMatch) {
-            return findReplyBtn(rootContainer);
-          }
-        }
-        
-        // 对于子评论（level=2），在根评论的子评论容器内搜索
-        if (target.level === 2) {
-          const subCommentContainer = rootContainer.querySelector('.comment-item__content__sub-comments');
-          if (!subCommentContainer) return null;
-          
-          const subItems = subCommentContainer.querySelectorAll('.comment-sub-item');
-          for (const subC of Array.from(subItems)) {
-            const subUsername = findUsername(subC as HTMLElement);
-            const subText = findCommentText(subC as HTMLElement);
+          // 对于根评论（level=1），直接在根评论容器内找回复按钮
+          if (target.level === 1) {
+            const commentText = findCommentText(rootContainer);
+            const username = findUsername(rootContainer);
             
-            const subUsernameMatch = target.username && subUsername === target.username.toLowerCase();
+            // 精确匹配评论内容（不使用includes，避免"12"匹配"1312"）
+            const textMatch = target.text && commentText &&
+              (commentText === target.text || 
+               (commentText.length > 5 && target.text.length > 5 &&
+                (commentText.includes(target.text) || target.text.includes(commentText))));
+            const usernameMatch = target.username && username === target.username.toLowerCase();
             
-            // 精确匹配子评论内容（不使用includes，避免"12"匹配"1312"）
-            const subTextMatch = target.text && subText &&
-              (subText === target.text || 
-               (subText.length > 5 && target.text.length > 5 &&
-                (subText.includes(target.text) || target.text.includes(subText))));
-            
-            if (subUsernameMatch && subTextMatch) {
-              // ★ 关键：把子评论滚到视口中央，再返回回复按钮坐标
-              (subC as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-              return findReplyBtn(subC as HTMLElement);
+            if (textMatch && usernameMatch) {
+              return findReplyBtn(rootContainer);
             }
           }
-        }
-        
-        return null;
-      }, { target: target as any, rootIndex: rootCommentInfo.index });
+          
+          // 对于子评论（level=2），在根评论的子评论容器内搜索
+          if (target.level === 2) {
+            const subCommentContainer = rootContainer.querySelector('.comment-item__content__sub-comments');
+            if (!subCommentContainer) return null;
+            
+            const subItems = subCommentContainer.querySelectorAll('.comment-sub-item');
+            for (const subC of Array.from(subItems)) {
+              const subUsername = findUsername(subC as HTMLElement);
+              const subText = findCommentText(subC as HTMLElement);
+              
+              const subUsernameMatch = target.username && subUsername === target.username.toLowerCase();
+              
+              // 精确匹配子评论内容（不使用includes，避免"12"匹配"1312"）
+              const subTextMatch = target.text && subText &&
+                (subText === target.text || 
+                 (subText.length > 5 && target.text.length > 5 &&
+                  (subText.includes(target.text) || target.text.includes(subText))));
+              
+              if (subUsernameMatch && subTextMatch) {
+                // ★ 关键：把子评论滚到视口中央，再返回回复按钮坐标
+                (subC as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+                return findReplyBtn(subC as HTMLElement);
+              }
+            }
+          }
+          
+          return null;
+        },
+        [{ target: target as any, rootIndex: rootCommentInfo.index }],
+        'reply-locate-reply-button',
+      );
 
       if (!locateResult) {
         await snap('reply_button_not_found');
@@ -2919,82 +3049,87 @@ export class KuaishouCrawler {
       await HumanActions.wait(page, 400, 700);
 
       // 重新获取按钮坐标（滚动后坐标可能已经变了）
-      const freshRect = await page.evaluate((args: {
-        target: { text: string; username: string; level: number; rootText?: string; rootUsername?: string };
-        rootIndex: number;
-      }) => {
-        const { target, rootIndex } = args;
-        const rootContainers = document.querySelectorAll('.comment-item');
-        if (rootIndex >= rootContainers.length) return null;
-        const rootContainer = rootContainers[rootIndex] as HTMLElement;
-        
-        function findUsername(container: HTMLElement): string {
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
-          if (!usernameEl) return '';
-          let text = '';
-          for (const node of Array.from(usernameEl.childNodes)) {
-            if (node.nodeType === 1) break;
-            if (node.nodeType === 3) text += node.textContent || '';
-          }
-          return text.trim().toLowerCase();
-        }
-        function findCommentText(container: HTMLElement): string {
-          const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return '';
-          const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
-          if (!detailEl) return '';
-          const span = detailEl.querySelector(':scope > span');
-          return ((span?.textContent) || detailEl.textContent || '').trim();
-        }
-        function getReplyBtnRect(el: HTMLElement) {
-          const contentEl = el.querySelector(':scope > .comment-content') as HTMLElement;
-          if (!contentEl) return null;
-          const btnsContainer = contentEl.querySelector(':scope > .comment-content__btns') as HTMLElement;
-          if (!btnsContainer) return null;
-          const replyIcon = btnsContainer.querySelector('.icon-reply') as HTMLElement;
-          if (replyIcon) {
-            const btn = replyIcon.closest('.comment-content__btns__btn') as HTMLElement;
-            if (btn) {
-              const r = btn.getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+      const freshRect = await this.evaluateOrSafe(
+        page,
+        (args: {
+          target: { text: string; username: string; level: number; rootText?: string; rootUsername?: string };
+          rootIndex: number;
+        }) => {
+          const { target, rootIndex } = args;
+          const rootContainers = document.querySelectorAll('.comment-item');
+          if (rootIndex >= rootContainers.length) return null;
+          const rootContainer = rootContainers[rootIndex] as HTMLElement;
+          
+          function findUsername(container: HTMLElement): string {
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const usernameEl = contentEl.querySelector(':scope > .comment-content__username') as HTMLElement;
+            if (!usernameEl) return '';
+            let text = '';
+            for (const node of Array.from(usernameEl.childNodes)) {
+              if (node.nodeType === 1) break;
+              if (node.nodeType === 3) text += node.textContent || '';
             }
+            return text.trim().toLowerCase();
           }
-          const btns = btnsContainer.querySelectorAll(':scope > .comment-content__btns__btn');
-          for (const btn of Array.from(btns)) {
-            if ((btn.textContent || '').trim().includes('回复')) {
-              const r = (btn as HTMLElement).getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+          function findCommentText(container: HTMLElement): string {
+            const contentEl = container.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return '';
+            const detailEl = contentEl.querySelector(':scope > .comment-content__detail') as HTMLElement;
+            if (!detailEl) return '';
+            const span = detailEl.querySelector(':scope > span');
+            return ((span?.textContent) || detailEl.textContent || '').trim();
+          }
+          function getReplyBtnRect(el: HTMLElement) {
+            const contentEl = el.querySelector(':scope > .comment-content') as HTMLElement;
+            if (!contentEl) return null;
+            const btnsContainer = contentEl.querySelector(':scope > .comment-content__btns') as HTMLElement;
+            if (!btnsContainer) return null;
+            const replyIcon = btnsContainer.querySelector('.icon-reply') as HTMLElement;
+            if (replyIcon) {
+              const btn = replyIcon.closest('.comment-content__btns__btn') as HTMLElement;
+              if (btn) {
+                const r = btn.getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
+            }
+            const btns = btnsContainer.querySelectorAll(':scope > .comment-content__btns__btn');
+            for (const btn of Array.from(btns)) {
+              if ((btn.textContent || '').trim().includes('回复')) {
+                const r = (btn as HTMLElement).getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
+            }
+            return null;
+          }
+          
+          if (target.level === 1) {
+            rootContainer.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+            return getReplyBtnRect(rootContainer);
+          }
+          if (target.level === 2) {
+            const subCommentContainer = rootContainer.querySelector('.comment-item__content__sub-comments');
+            if (!subCommentContainer) return null;
+            const subItems = subCommentContainer.querySelectorAll('.comment-sub-item');
+            for (const subC of Array.from(subItems)) {
+              const subUsername = findUsername(subC as HTMLElement);
+              const subText = findCommentText(subC as HTMLElement);
+              const subUsernameMatch = target.username && subUsername === target.username.toLowerCase();
+              const subTextMatch = target.text && subText &&
+                (subText === target.text || 
+                 (subText.length > 5 && target.text.length > 5 &&
+                  (subText.includes(target.text) || target.text.includes(subText))));
+              if (subUsernameMatch && subTextMatch) {
+                (subC as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
+                return getReplyBtnRect(subC as HTMLElement);
+              }
             }
           }
           return null;
-        }
-        
-        if (target.level === 1) {
-          rootContainer.scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-          return getReplyBtnRect(rootContainer);
-        }
-        if (target.level === 2) {
-          const subCommentContainer = rootContainer.querySelector('.comment-item__content__sub-comments');
-          if (!subCommentContainer) return null;
-          const subItems = subCommentContainer.querySelectorAll('.comment-sub-item');
-          for (const subC of Array.from(subItems)) {
-            const subUsername = findUsername(subC as HTMLElement);
-            const subText = findCommentText(subC as HTMLElement);
-            const subUsernameMatch = target.username && subUsername === target.username.toLowerCase();
-            const subTextMatch = target.text && subText &&
-              (subText === target.text || 
-               (subText.length > 5 && target.text.length > 5 &&
-                (subText.includes(target.text) || target.text.includes(subText))));
-            if (subUsernameMatch && subTextMatch) {
-              (subC as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' as ScrollBehavior });
-              return getReplyBtnRect(subC as HTMLElement);
-            }
-          }
-        }
-        return null;
-      }, { target: target as any, rootIndex: rootCommentInfo.index });
+        },
+        [{ target: target as any, rootIndex: rootCommentInfo.index }],
+        'reply-refresh-reply-button-rect',
+      );
 
       const finalRect = freshRect || locateResult;
       currentPhase = '执行回复';
@@ -3016,30 +3151,35 @@ export class KuaishouCrawler {
       // ── Step 3: 定位并点击回复输入框 ──
       // 点击回复后，对应评论内的 .comment-input__wrapper 从 display:none 变为可见
       // 输入框为 .comment-input [contenteditable="true"]
-      const inputRect = await page.evaluate(() => {
-        // 优先：查找可见的 .comment-input__wrapper 内的 .comment-input
-        const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper')) as HTMLElement[];
-        for (let i = wrappers.length - 1; i >= 0; i--) {
-          const w = wrappers[i];
-          // 跳过 display:none 的 wrapper
-          if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
-          const input = w.querySelector('.comment-input') as HTMLElement;
-          if (input) {
-            const r = input.getBoundingClientRect();
+      const inputRect = await this.evaluateOrSafe(
+        page,
+        () => {
+          // 优先：查找可见的 .comment-input__wrapper 内的 .comment-input
+          const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper')) as HTMLElement[];
+          for (let i = wrappers.length - 1; i >= 0; i--) {
+            const w = wrappers[i];
+            // 跳过 display:none 的 wrapper
+            if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
+            const input = w.querySelector('.comment-input') as HTMLElement;
+            if (input) {
+              const r = input.getBoundingClientRect();
+              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+            }
+          }
+          // 回退：查找所有可见的 contenteditable div（排除顶部发表评论输入框）
+          const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"]')) as HTMLElement[];
+          for (let i = candidates.length - 1; i >= 0; i--) {
+            const el = candidates[i];
+            // 跳过顶部发表评论输入框（class 含 author-comment-input）
+            if (el.closest('.author-comment-input')) continue;
+            const r = el.getBoundingClientRect();
             if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
           }
-        }
-        // 回退：查找所有可见的 contenteditable div（排除顶部发表评论输入框）
-        const candidates = Array.from(document.querySelectorAll('div[contenteditable="true"]')) as HTMLElement[];
-        for (let i = candidates.length - 1; i >= 0; i--) {
-          const el = candidates[i];
-          // 跳过顶部发表评论输入框（class 含 author-comment-input）
-          if (el.closest('.author-comment-input')) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
-        }
-        return null;
-      });
+          return null;
+        },
+        [],
+        'reply-locate-input-rect',
+      );
 
       if (!inputRect) {
         await snap('reply_input_not_found');
@@ -3061,36 +3201,41 @@ export class KuaishouCrawler {
 
       // ── Step 5: 定位并点击确认发送按钮 ──
       // 快手评论回复的提交按钮是 .comment-btn.sure-btn，文本为 "确认"（不是 "发送"）
-      const submitRect = await page.evaluate(() => {
-        // 优先：精确查找 .sure-btn
-        const sureBtn = document.querySelector('.sure-btn') as HTMLElement;
-        if (sureBtn) {
-          const r = sureBtn.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
-        }
-        // 次选：在可见的 .comment-input__wrapper__control 内查找 .comment-btn（非"取消"的那个）
-        const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper__control')) as HTMLElement[];
-        for (const w of wrappers) {
-          if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
-          const btns = w.querySelectorAll('.comment-btn');
-          for (const btn of Array.from(btns)) {
-            const text = (btn.textContent || '').trim();
-            if (text === '确认' || text === '发送') {
-              const r = (btn as HTMLElement).getBoundingClientRect();
-              if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+      const submitRect = await this.evaluateOrSafe(
+        page,
+        () => {
+          // 优先：精确查找 .sure-btn
+          const sureBtn = document.querySelector('.sure-btn') as HTMLElement;
+          if (sureBtn) {
+            const r = sureBtn.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+          }
+          // 次选：在可见的 .comment-input__wrapper__control 内查找 .comment-btn（非"取消"的那个）
+          const wrappers = Array.from(document.querySelectorAll('.comment-input__wrapper__control')) as HTMLElement[];
+          for (const w of wrappers) {
+            if (w.style.display === 'none' || getComputedStyle(w).display === 'none') continue;
+            const btns = w.querySelectorAll('.comment-btn');
+            for (const btn of Array.from(btns)) {
+              const text = (btn.textContent || '').trim();
+              if (text === '确认' || text === '发送') {
+                const r = (btn as HTMLElement).getBoundingClientRect();
+                if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+              }
             }
           }
-        }
-        // 回退：按文本 "确认" 查找
-        const allBtns = Array.from(document.querySelectorAll('span, button, div')).filter(
-          (n) => (n.textContent || '').trim() === '确认'
-        ) as HTMLElement[];
-        for (let i = allBtns.length - 1; i >= 0; i--) {
-          const r = allBtns[i].getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
-        }
-        return null;
-      });
+          // 回退：按文本 "确认" 查找
+          const allBtns = Array.from(document.querySelectorAll('span, button, div')).filter(
+            (n) => (n.textContent || '').trim() === '确认'
+          ) as HTMLElement[];
+          for (let i = allBtns.length - 1; i >= 0; i--) {
+            const r = allBtns[i].getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) return { x: r.x, y: r.y, width: r.width, height: r.height };
+          }
+          return null;
+        },
+        [],
+        'reply-locate-submit-rect',
+      );
 
       if (submitRect) {
         currentPhase = '提交回复';
@@ -3114,6 +3259,8 @@ export class KuaishouCrawler {
       if (manifest) finishManifest(manifest, false);
       logger.error({ error: err.message, commentCid: target.commentCid }, '[Reply] Reply failed');
       return false;
+    } finally {
+      await teardownProbe();
     }
   }
 

@@ -62,14 +62,40 @@ export type FallbackConfig = {
   hoverPause?: { min: number; max: number };
 };
 
+export type PierceStep =
+  | { type: 'css'; selector: string }
+  | { type: 'shadow'; selector: string }
+  | { type: 'frame'; name?: string; urlIncludes?: string };
+
+export type PierceHandler = (page: Page, params: any) => Promise<unknown | null>;
+
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
   private static isolatedWorldIds = new WeakMap<Page, number>();
   private static stepMetricsCollector: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null = null;
+  private static platformPierceRegistry = new Map<string, Map<string, PierceHandler>>();
 
   static setStepMetricsCollector(c: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null): void {
     HumanActions.stepMetricsCollector = c;
+  }
+
+  /**
+   * 注册平台特有的穿透 handler。仅当穿透逻辑无法用 PierceStep[] chain 声明式表达时使用；
+   * 通用穿透走 cdpPierceShadow。注册幂等（覆盖）。
+   */
+  static registerPlatformPierce(platform: string, name: string, handler: PierceHandler): void {
+    let platformMap = HumanActions.platformPierceRegistry.get(platform);
+    if (!platformMap) {
+      platformMap = new Map();
+      HumanActions.platformPierceRegistry.set(platform, platformMap);
+    }
+    platformMap.set(name, handler);
+  }
+
+  /** 取用平台特有穿透 handler，未注册返回 undefined。 */
+  static getPlatformPierce(platform: string, name: string): PierceHandler | undefined {
+    return HumanActions.platformPierceRegistry.get(platform)?.get(name);
   }
 
   private static recordActionPath(actionPath: string, extra?: Record<string, any>): void {
@@ -210,6 +236,80 @@ export class HumanActions {
     if (result?.exceptionDetails) throw new Error(`safeEvaluate failed: ${result.exceptionDetails.text}`);
     HumanActions.recordActionPath(opts.world === 'main' ? 'safeEvaluate-main' : 'safeEvaluate-isolated', { reason: opts.reason });
     return result?.result?.value;
+  }
+
+  /**
+   * 多级穿透读取（CDP DOM 域，零注入）。沿 chain 逐层定位，末层按 read 类型结构化读取。
+   * 失败返回 null，不静默降级（铁律 5）。actionPath='cdp-pierce-shadow'。
+   */
+  static async cdpPierceShadow(
+    page: Page,
+    chain: PierceStep[],
+    target: { selector: string; read?: 'text' | 'attr' | 'exists' | 'count' | 'outerHTML'; attr?: string },
+    opts?: { timeout?: number; reason?: string },
+  ): Promise<unknown | null> {
+    const ctx = await (HumanActions as any).getCDPContext(page) as CDPContext;
+    const cdp = ctx.cdp;
+    // 取根 document
+    const doc = await cdp.send('DOM.getDocument', { depth: 0 });
+    let currentNodeId: number = doc.root.nodeId;
+
+    // 逐层穿透
+    for (const step of chain) {
+      if (step.type === 'css') {
+        const r = await cdp.send('DOM.querySelector', { nodeId: currentNodeId, selector: step.selector });
+        currentNodeId = r?.nodeId || 0;
+      } else if (step.type === 'shadow') {
+        const host = await cdp.send('DOM.querySelector', { nodeId: currentNodeId, selector: step.selector });
+        if (!host?.nodeId) { currentNodeId = 0; break; }
+        const desc = await cdp.send('DOM.describeNode', { nodeId: host.nodeId, depth: 1 });
+        const shadowRoot = desc?.node?.shadowRoots?.[0];
+        if (!shadowRoot) { currentNodeId = 0; break; }
+        currentNodeId = shadowRoot.nodeId;
+      } else if (step.type === 'frame') {
+        const desc = await cdp.send('DOM.describeNode', { nodeId: currentNodeId, depth: 0 });
+        const contentDoc = desc?.node?.contentDocument;
+        if (!contentDoc) { currentNodeId = 0; break; }
+        currentNodeId = contentDoc.nodeId;
+      }
+      if (!currentNodeId) break;
+    }
+
+    if (!currentNodeId) {
+      HumanActions.recordActionPath('cdp-pierce-shadow', { reason: opts?.reason, status: 'not-found' });
+      return null;
+    }
+
+    // 末层定位 target
+    const targetNode = await cdp.send('DOM.querySelector', { nodeId: currentNodeId, selector: target.selector });
+    const targetNodeId = targetNode?.nodeId || 0;
+
+    if (target.read === 'exists') {
+      HumanActions.recordActionPath('cdp-pierce-shadow', { reason: opts?.reason });
+      return targetNodeId !== 0;
+    }
+    if (!targetNodeId) {
+      HumanActions.recordActionPath('cdp-pierce-shadow', { reason: opts?.reason, status: 'target-not-found' });
+      return null;
+    }
+
+    // 结构化读取（不注入业务函数）
+    const html = await cdp.send('DOM.getOuterHTML', { nodeId: targetNodeId });
+    const outerHTML: string = html?.outerHTML || '';
+    HumanActions.recordActionPath('cdp-pierce-shadow', { reason: opts?.reason });
+    switch (target.read) {
+      case 'outerHTML': return outerHTML;
+      case 'attr': {
+        const m = outerHTML.match(new RegExp((target.attr ?? '') + '=["\']([^"\']*)["\']'));
+        return m ? m[1] : null;
+      }
+      case 'count': return 1;
+      case 'text':
+      default: {
+        const m = outerHTML.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        return m || null;
+      }
+    }
   }
 
   private static async getCDPContext(page: Page): Promise<CDPContext> {

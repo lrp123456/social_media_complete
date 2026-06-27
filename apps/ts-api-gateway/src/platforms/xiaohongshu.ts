@@ -7,6 +7,7 @@ import { SelectorReader, HumanActions } from '@social-media/browser-core';
 import { getSelectorReader } from '../lib/selectorStore';
 import { BasePublisher } from './BasePublisher';
 import { createLogger } from '../lib/logger';
+import { isAntiDetectionV2, isEnabled } from '../lib/antiDetectionMode';
 import type { LoginContext, UploadContext } from './types';
 import type { PlatformName } from '@social-media/shared-config';
 
@@ -147,16 +148,30 @@ export class XiaohongshuPublisher extends BasePublisher {
       } catch {}
     }
     if (!descFilled) {
-      // 回退：尝试 Playwright locator
-      try {
-        const descLocator = page.locator('[data-placeholder*="描述"]').first();
-        await descLocator.waitFor({ state: 'visible', timeout: 5000 });
-        await descLocator.click();
-        await HumanActions.wait(page, 300, 600);
-        await descLocator.fill(metadata.description);
-        logger.info('[小红书] 描述已填写 (Playwright fallback)');
-        descFilled = true;
-      } catch {}
+      if (isEnabled('xiaohongshu')) {
+        // v2: CDP fallback
+        try {
+          const descInput = await HumanActions.cdpFindElement(page, ['[data-placeholder*="描述"]']);
+          if (descInput) {
+            await HumanActions.cdpClick(page, descInput.sel);
+            await HumanActions.wait(page, 300, 600);
+            await HumanActions.safeCDPType(page, metadata.description, descInput.sel);
+            descFilled = true;
+            logger.info('[小红书] 描述已填写 (v2 CDP fallback)');
+          }
+        } catch {}
+      } else {
+        // legacy: Playwright locator fallback
+        try {
+          const descLocator = page.locator('[data-placeholder*="描述"]').first();
+          await descLocator.waitFor({ state: 'visible', timeout: 5000 });
+          await descLocator.click();
+          await HumanActions.wait(page, 300, 600);
+          await descLocator.fill(metadata.description);
+          logger.info('[小红书] 描述已填写 (Playwright fallback)');
+          descFilled = true;
+        } catch {}
+      }
     }
     if (!descFilled) {
       logger.warn({ selectors: descSels }, '[小红书] 描述输入框未找到或不可见，跳过描述填写');
@@ -182,8 +197,12 @@ export class XiaohongshuPublisher extends BasePublisher {
                 const tagText = tag.startsWith('#') ? tag : `#${tag}`;
                 await HumanActions.safeCDPType(page, tagText, tagSel);
                 await HumanActions.wait(page, 300, 600);
-                // 按回车确认话题
-                await page.keyboard.press('Enter');
+                // 按回车确认话题（双路径）
+                if (isEnabled('xiaohongshu')) {
+                  await HumanActions.press(page, tagSel, 'Enter');
+                } else {
+                  await page.keyboard.press('Enter');
+                }
                 await HumanActions.wait(page, 300, 500);
               }
               logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (via ${tagSel})`);
@@ -193,22 +212,42 @@ export class XiaohongshuPublisher extends BasePublisher {
           } catch {}
         }
         if (!tagAdded) {
-          // 回退：尝试 Playwright locator
-          try {
-            const tagLocator = page.locator('input[placeholder*="话题"]').first();
-            await tagLocator.waitFor({ state: 'visible', timeout: 5000 });
-            await tagLocator.click();
-            await HumanActions.wait(page, 300, 600);
-            for (const tag of metadata.tags.slice(0, 5)) {
-              const tagText = tag.startsWith('#') ? tag : `#${tag}`;
-              await tagLocator.fill(tagText);
+          if (isEnabled('xiaohongshu')) {
+            // v2: CDP fallback
+            try {
+              const tagInput = await HumanActions.cdpFindElement(page, ['input[placeholder*="话题"]']);
+              if (tagInput) {
+                await HumanActions.cdpClick(page, tagInput.sel);
+                await HumanActions.wait(page, 300, 600);
+                for (const tag of metadata.tags.slice(0, 5)) {
+                  const tagText = tag.startsWith('#') ? tag : `#${tag}`;
+                  await HumanActions.safeCDPType(page, tagText, tagInput.sel);
+                  await HumanActions.wait(page, 300, 600);
+                  await HumanActions.press(page, tagInput.sel, 'Enter');
+                  await HumanActions.wait(page, 300, 500);
+                }
+                logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (v2 CDP fallback)`);
+                tagAdded = true;
+              }
+            } catch {}
+          } else {
+            // legacy: Playwright locator fallback
+            try {
+              const tagLocator = page.locator('input[placeholder*="话题"]').first();
+              await tagLocator.waitFor({ state: 'visible', timeout: 5000 });
+              await tagLocator.click();
               await HumanActions.wait(page, 300, 600);
-              await page.keyboard.press('Enter');
-              await HumanActions.wait(page, 300, 500);
-            }
-            logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (Playwright fallback)`);
-            tagAdded = true;
-          } catch {}
+              for (const tag of metadata.tags.slice(0, 5)) {
+                const tagText = tag.startsWith('#') ? tag : `#${tag}`;
+                await tagLocator.fill(tagText);
+                await HumanActions.wait(page, 300, 600);
+                await page.keyboard.press('Enter');
+                await HumanActions.wait(page, 300, 500);
+              }
+              logger.info(`[小红书] ${metadata.tags.length} 个话题已添加 (Playwright fallback)`);
+              tagAdded = true;
+            } catch {}
+          }
         }
         if (!tagAdded) {
           logger.warn({ count: metadata.tags.length, selectors: tagSels }, '[小红书] 话题输入框未找到，跳过话题添加');

@@ -1,11 +1,13 @@
 import { Page } from 'patchright';
-import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager } from '@social-media/browser-core';
+import { RequestInterceptor, HumanActions, ExitStrategy, BrowserManager, MaintenanceProbe } from '@social-media/browser-core';
 import { getSelector, getSelectorChain, getRandomExitSubmenuKeyForPlatform, SelectorDef } from './menuSelectors';
 import { resolveAndClick, tryClickBySelector } from './menuNavigator';
 import * as db from '../services/monitorDatabaseService';
 import { getCommentCrawlDecision, truncateToNewest, ROOT_COMMENT_RETRY_LIMIT } from '../services/commentCrawlRules';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
+import { bootstrapProbe, teardownProbe } from './probeBootstrap';
+import { isEnabled, isAntiDetectionV2 } from '../lib/antiDetectionMode';
 import fs from 'fs';
 import path from 'path';
 
@@ -619,9 +621,13 @@ export class XiaohongshuCrawler {
   ): Promise<XiaohongshuCheckResult> {
     logger.info({ userId, url: page.url() }, '[XHS-Light] Starting xiaohongshu update check — light mode (no comment details)');
 
+    // 维护探针：任务执行入口
+    await bootstrapProbe({ isDebugMode: false });
+
     const riskCheck = await this.detectRiskControlAsync(page);
     if (riskCheck.detected) {
       logger.error({ userId, riskType: riskCheck.type, evidence: riskCheck.evidence }, '[XHS-Light] Risk control detected before check');
+      await teardownProbe();
       return {
         hasUpdate: false,
         updatedVideos: [],
@@ -636,8 +642,32 @@ export class XiaohongshuCrawler {
     const preFetchRejections = this.interceptor.getRejectionLog(3);
     logger.info({ userId, preFetchResponses, preFetchRejections, url: page.url() }, '[XHS-Light] Pre-fetch interceptor state');
 
+    // Phase1: 视频列表采集 + 通用 API 观测 (v2)
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase1', 'fetchVideoListFromSource');
     logger.info({ userId }, '[XHS-Light] Fetching note list');
     const videos = await this.fetchNoteListFromSource(page);
+    MaintenanceProbe.exitStep();
+
+    // 通用 API 观测（v2 路径）：拦 /api/sns/.* 路径，埋点记录响应命中率
+    if (isEnabled('xiaohongshu')) {
+      try {
+        const apiPattern = '/api/sns/.*';
+        this.interceptor.setValidationConfig(apiPattern, {
+          expectedPageUrls: ['creator.xiaohongshu.com', 'www.xiaohongshu.com'],
+          requiredItemFields: [],
+          minItems: 0,
+        });
+        const snsListenerId = await this.interceptor.register(page, [apiPattern]);
+        await HumanActions.wait(page, 500, 1000);
+        const snsRespCount = this.interceptor.getResponseCount(apiPattern);
+        logger.info({ snsResponseCount: snsRespCount }, '[XHS] General API observation snapshot');
+        this.interceptor.unregister(snsListenerId);
+        this.interceptor.clear(apiPattern);
+      } catch (obsErr: any) {
+        logger.warn({ error: obsErr.message }, '[XHS] General API observation failed (non-fatal)');
+      }
+    }
+
     const awemeIdToIsPinned = (videos as any)._awemeIdToIsPinned || new Map<string, boolean>();
 
     // 同步作者 ID
@@ -784,6 +814,7 @@ export class XiaohongshuCrawler {
     const postRiskCheck = await this.detectRiskControlAsync(page);
     if (postRiskCheck.detected) {
       logger.error({ userId, riskType: postRiskCheck.type }, '[XHS-Light] Risk control detected after check');
+      await teardownProbe();
       return {
         hasUpdate: false,
         updatedVideos: [],
@@ -805,6 +836,9 @@ export class XiaohongshuCrawler {
       });
       logger.info({ awemeId: v.awemeId, isFirstCrawl: v.isFirstCrawl }, '[XHS-Light] Queue item crawl mode from Phase1 decision');
     }
+
+    // 维护探针：任务结束
+    await teardownProbe();
 
     return {
       hasUpdate: updatedVideos.length > 0,
@@ -842,25 +876,41 @@ export class XiaohongshuCrawler {
 
       logger.info({ noteId, cardSelector, coverSelector }, '[XHS-Phase3] Resolved selectors');
 
-      // 3. 等待卡片元素（CSS 选择器）
+      // 3. 等待卡片元素（CSS 选择器）— 双路径
       let card: any = null;
+      let v2ClickSel = cardSelector; // v2 的 CDP 点击选择器
       try {
-        card = await page.waitForSelector(cardSelector, { timeout: 10000 });
-      } catch {
-        // CSS 选择器失败，降级为 JS evaluate（不受 HTML 转义影响）
-        logger.warn({ noteId, cardSelector }, '[XHS-Phase3] CSS selector failed, trying JS evaluate');
-        const handle = await page.evaluateHandle((nid: string) => {
-          const cards = document.querySelectorAll('.note-card');
-          for (const c of Array.from(cards)) {
-            const imp = c.getAttribute('data-impression') || '';
-            if (imp.includes(nid)) return c;
+        if (isEnabled('xiaohongshu')) {
+          const foundCard = await HumanActions.cdpFindElement(page, [cardSelector]);
+          if (foundCard) {
+            card = true; // 标记找到
+            if (coverSelector) {
+              const foundCover = await HumanActions.cdpFindElement(page, [coverSelector]);
+              if (foundCover) v2ClickSel = coverSelector;
+            }
           }
-          return null;
-        }, noteId);
-        const element = handle.asElement();
-        if (element) {
-          card = element;
-          logger.info({ noteId }, '[XHS-Phase3] Card found via JS evaluate');
+        } else {
+          card = await page.waitForSelector(cardSelector, { timeout: 10000 });
+        }
+      } catch {
+        if (!isEnabled('xiaohongshu')) {
+          // legacy: CSS 选择器失败，降级为 JS evaluate（不受 HTML 转义影响）
+          logger.warn({ noteId, cardSelector }, '[XHS-Phase3] CSS selector failed, trying JS evaluate');
+          const handle = await page.evaluateHandle((nid: string) => {
+            const cards = document.querySelectorAll('.note-card');
+            for (const c of Array.from(cards)) {
+              const imp = c.getAttribute('data-impression') || '';
+              if (imp.includes(nid)) return c;
+            }
+            return null;
+          }, noteId);
+          const element = handle.asElement();
+          if (element) {
+            card = element;
+            logger.info({ noteId }, '[XHS-Phase3] Card found via JS evaluate');
+          }
+        } else {
+          logger.warn({ noteId, cardSelector }, '[XHS-Phase3] v2: CDP card element not found');
         }
       }
 
@@ -869,19 +919,22 @@ export class XiaohongshuCrawler {
         return null;
       }
 
-      // 4. 查找 cover 元素
+      // 4. 查找 cover 元素（legacy 专用，v2 已在上面处理）
       let clickEl: any = card;
-      if (coverSelector) {
+      if (!isEnabled('xiaohongshu') && coverSelector) {
         const cover = await card.$(coverSelector);
         if (cover) clickEl = cover;
       }
 
       // 5. 顺序式：先注册 waitForEvent，再点击
-      //    避免 Promise.all 竞态条件（点击失败和标签页打开的竞态）
       let newPage: Page | null = null;
       try {
         const pagePromise = page.context().waitForEvent('page', { timeout });
-        await clickEl.click();
+        if (isEnabled('xiaohongshu')) {
+          await HumanActions.cdpClick(page, v2ClickSel, { timeout: 10000 });
+        } else {
+          await clickEl.click();
+        }
         newPage = await pagePromise;
         await newPage.waitForLoadState('domcontentloaded', { timeout: 15000 });
         await HumanActions.wait(newPage, 2000, 4000);
@@ -1282,6 +1335,7 @@ export class XiaohongshuCrawler {
     userId: number,
   ): Promise<Array<{ success: boolean; awemeId: string; error?: string }>> {
     logger.info({ queueLength: queue.length, userId }, '[XHS-Phase3] Processing comments queue');
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase3', 'processCommentsQueue');
 
     const results: Array<{ success: boolean; awemeId: string; error?: string }> = [];
 
@@ -1311,6 +1365,7 @@ export class XiaohongshuCrawler {
       this.commentListenerId = null;
     }
 
+    MaintenanceProbe.exitStep();
     return results;
   }
 
@@ -1323,6 +1378,7 @@ export class XiaohongshuCrawler {
     queue: XhsCommentQueueItem[],
     maxRootComments: number = 30,
   ): Promise<{ results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> }> {
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase3', 'processCommentsQueueSimple');
     const { prisma } = await import('../lib/prisma');
     const db = await import('../services/monitorDatabaseService');
     const results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> = [];
@@ -1436,6 +1492,7 @@ export class XiaohongshuCrawler {
       }
     }
 
+    MaintenanceProbe.exitStep();
     return { results };
   }
 
@@ -1489,10 +1546,14 @@ export class XiaohongshuCrawler {
     }, '[XHS-Reply] Starting xiaohongshu reply');
 
     try {
-      // 等待评论区加载
+      // 等待评论区加载（双路径：v2 → cdpWaitForSelector / legacy → waitForSelector）
       const containerDef = getSelector('region.comments-container', XHS_PLATFORM);
       if (containerDef.css) {
-        await page.waitForSelector(containerDef.css, { timeout: 15000 }).catch(() => {});
+        if (isEnabled('xiaohongshu')) {
+          await HumanActions.cdpWaitForSelector(page, containerDef.css, { timeout: 15000 }).catch(() => {});
+        } else {
+          await page.waitForSelector(containerDef.css, { timeout: 15000 }).catch(() => {});
+        }
       }
       await HumanActions.wait(page, 2000, 4000);
 
@@ -1503,6 +1564,12 @@ export class XiaohongshuCrawler {
         return false;
       }
 
+      // ── v2 双路径：走 HumanActions CDP 路径 ──
+      if (isEnabled('xiaohongshu')) {
+        return await this.replyToCommentV2(page, target, replyText);
+      }
+
+      // ── legacy 路径：page.locator / page.keyboard / page.waitForFunction ──
       let commentEl = page.locator(`[data-cid="${cid}"]`).first();
       if (!(await commentEl.isVisible().catch(() => false))) {
         commentEl = page.locator(`[id*="${cid}"]`).first();
@@ -1610,5 +1677,109 @@ export class XiaohongshuCrawler {
       logger.error({ cid: target.cid, error: err.message }, '[XHS-Reply] Reply failed');
       return false;
     }
+  }
+
+  /**
+   * v2 反检测路径：replyToComment 的 CDP 实现
+   * 覆盖 7 处 page.locator + 1 处 page.keyboard + 1 处 page.waitForFunction
+   */
+  private async replyToCommentV2(
+    page: Page,
+    target: import('./replyTypes').ReplyTarget,
+    replyText: string,
+  ): Promise<boolean> {
+    const cid = target.cid;
+    if (!cid) {
+      logger.error('[XHS-Reply-v2] No cid provided');
+      return false;
+    }
+
+    // Phase 3: CDP 查找评论元素
+    let foundCid = await HumanActions.cdpFindElement(page, [`[data-cid="${cid}"]`]);
+    if (!foundCid) {
+      foundCid = await HumanActions.cdpFindElement(page, [`[id*="${cid}"]`]);
+    }
+
+    // 子评论展开
+    if (!foundCid && target.level === 2) {
+      logger.info({ cid, level: target.level }, '[XHS-Reply-v2] Sub-comment not found, expanding .show-more via CDP');
+      for (let i = 0; i < 20; i++) {
+        const showMoreExists = await HumanActions.exists(page, '.show-more');
+        if (!showMoreExists) break;
+        await HumanActions.click(page, '.show-more');
+        await HumanActions.wait(page, 1500, 2500);
+      }
+      // 展开后重试 CID 查找
+      foundCid = await HumanActions.cdpFindElement(page, [`[id*="${cid}"]`]);
+      if (!foundCid) {
+        foundCid = await HumanActions.cdpFindElement(page, [`[data-cid="${cid}"]`]);
+      }
+    }
+
+    // 文本退匹配
+    if (!foundCid) {
+      logger.warn({ cid }, '[XHS-Reply-v2] Comment not found by cid, trying text+username matching via CDP');
+      try {
+        const textMatch = await HumanActions.safeEvaluate(page, function(opts: { text: string; username: string }) {
+          const items = document.querySelectorAll('[class*="comment-item"]');
+          for (let i = 0; i < items.length; i++) {
+            const el = items[i] as HTMLElement;
+            const t = el.innerText || '';
+            if (t.includes(opts.text) && t.includes(opts.username)) {
+              const rect = el.getBoundingClientRect();
+              return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            }
+          }
+          return null;
+        }, { reason: 'find-comment-by-text-xhs', world: 'main', args: [{ text: target.text?.slice(0, 20) || '', username: target.username || '' }] }) as { x: number; y: number } | null;
+        if (textMatch) {
+          foundCid = { x: textMatch.x, y: textMatch.y, w: 100, h: 50, sel: '[class*="comment-item"]', tag: 'div' };
+        }
+      } catch {
+        // safeEvaluate 异常忽略
+      }
+    }
+
+    if (!foundCid) {
+      logger.error({ cid }, '[XHS-Reply-v2] Comment not found');
+      return false;
+    }
+
+    // Phase 4: 点击回复按钮（cdpClickByText）
+    try {
+      const replyClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 5000 });
+      if (!replyClicked) {
+        const globalClicked = await HumanActions.cdpClickByText(page, '回复', { timeout: 3000 });
+        if (!globalClicked) {
+          logger.error({ cid }, '[XHS-Reply-v2] Reply button not found');
+          return false;
+        }
+      }
+    } catch {
+      logger.error({ cid }, '[XHS-Reply-v2] Reply button click failed');
+      return false;
+    }
+    await HumanActions.wait(page, 500, 1000);
+
+    // Phase 5: 输入框定位 + CDP 打字
+    const inputFound = await HumanActions.cdpFindElement(page, ['#content-textarea[contenteditable="true"]']);
+    if (!inputFound) {
+      logger.error('[XHS-Reply-v2] No reply input found');
+      return false;
+    }
+    await HumanActions.safeCDPType(page, replyText, inputFound.sel);
+    await HumanActions.wait(page, 500, 1200);
+
+    // 发送：cdpClickByText + Enter fallback
+    const sendClicked = await HumanActions.cdpClickByText(page, '发送', { timeout: 5000 });
+    if (sendClicked) {
+      await HumanActions.wait(page, 1000, 2000);
+      logger.info({ cid: target.cid, text: replyText }, '[XHS-Reply-v2] Reply sent');
+    } else {
+      await HumanActions.press(page, inputFound.sel, 'Enter');
+      await HumanActions.wait(page, 1000, 2000);
+      logger.info({ cid: target.cid }, '[XHS-Reply-v2] Reply sent via Enter key');
+    }
+    return true;
   }
 }
