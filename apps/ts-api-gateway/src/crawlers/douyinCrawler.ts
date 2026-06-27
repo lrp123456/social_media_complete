@@ -4992,6 +4992,7 @@ export class DouyinCrawler {
     await snap?.('scroll_to_top');
 
     const MAX_SCROLL = 30;
+    const FIND_TARGET_BUDGET_MS = 90_000;
     const startT0 = Date.now();
     const reader = getSelectorReader();
     const rootContainerSels = reader.getSelectorListWithFallback('douyin', 'regions', 'comment_root_container', [
@@ -5002,6 +5003,10 @@ export class DouyinCrawler {
       '[Reply::Find] Start (triple-criteria)');
 
     for (let scrollRound = 0; scrollRound < MAX_SCROLL; scrollRound++) {
+      if (Date.now() - startT0 > FIND_TARGET_BUDGET_MS) {
+        logger.info({ scrollRound, elapsedMs: Date.now() - startT0 }, '[Reply::Find] Budget exceeded, early exit');
+        break;
+      }
       await snap?.('scroll_round_' + (scrollRound + 1));
 
       // ── A. 在视窗中找根评论（按 rootUsername + subReplyCount + rootText 匹配） ──
