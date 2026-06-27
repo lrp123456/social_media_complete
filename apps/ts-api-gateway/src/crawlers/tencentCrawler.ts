@@ -12,6 +12,7 @@ import { recordSelectorTry } from '../lib/taskExecutionRecorder';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ReplyTarget } from './replyTypes';
+import { isEnabled } from '../lib/antiDetectionMode';
 
 const logger = createLogger('crawler:tencent');
 
@@ -467,22 +468,48 @@ export class TencentCrawler {
           // ── 1a. 仅在二维码过期时点击刷新（避免无条件刷新导致二维码进入异常状态）──
           await this.clickQRRefreshIfNeeded(frame, page);
 
-          // ── 1b. 在 iframe 内部用 evaluate 找最大方形 img/canvas ──
-          const qrInfo = await frame.evaluate(() => {
-            const candidates: Array<{ sel: string; x: number; y: number; w: number; h: number }> = [];
-            // 搜索所有 img 和 canvas，找面积最大且接近正方形的
-            const els = document.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
-            els.forEach((el, idx) => {
-              const r = el.getBoundingClientRect();
-              if (r.width < 60 || r.height < 60) return;
-              const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
-              if (ratio < 0.5) return; // 太扁的不是二维码
-              candidates.push({ sel: `idx_${idx}_${el.tagName}`, x: r.left, y: r.top, w: r.width, h: r.height });
-            });
-            // 按面积排序，取最大
-            candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
-            return candidates[0] || null;
-          }).catch(() => null);
+          // ── 1b. 在 iframe 内部找最大方形 img/canvas ──
+          let qrInfo: { sel: string; x: number; y: number; w: number; h: number } | null = null;
+          if (isEnabled('tencent')) {
+            // v2: safeEvaluate 从主世界穿透 iframe contentDocument
+            const result = await HumanActions.safeEvaluate(
+              page,
+              () => {
+                const candidates: Array<{ sel: string; x: number; y: number; w: number; h: number }> = [];
+                const iframe = document.querySelector<HTMLIFrameElement>('iframe[src*="login-for-iframe"], iframe.display');
+                if (!iframe) return null;
+                const idoc = iframe.contentDocument;
+                if (!idoc) return null;
+                const els = idoc.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
+                els.forEach((el, idx) => {
+                  const r = el.getBoundingClientRect();
+                  if (r.width < 60 || r.height < 60) return;
+                  const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
+                  if (ratio < 0.5) return;
+                  candidates.push({ sel: `idx_${idx}_${el.tagName}`, x: r.left, y: r.top, w: r.width, h: r.height });
+                });
+                candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+                return candidates[0] || null;
+              },
+              { world: 'main', reason: 'main-world-required: 腾讯QR码穿透iframe contentDocument定位' },
+            ).catch(() => null);
+            qrInfo = result as any;
+          } else {
+            // legacy: 在 iframe context 内 evaluate
+            qrInfo = await frame.evaluate(() => {
+              const candidates: Array<{ sel: string; x: number; y: number; w: number; h: number }> = [];
+              const els = document.querySelectorAll('img, canvas, [class*="qr"], [class*="Qr"], [class*="QR"]');
+              els.forEach((el, idx) => {
+                const r = el.getBoundingClientRect();
+                if (r.width < 60 || r.height < 60) return;
+                const ratio = Math.min(r.width, r.height) / Math.max(r.width, r.height);
+                if (ratio < 0.5) return;
+                candidates.push({ sel: `idx_${idx}_${el.tagName}`, x: r.left, y: r.top, w: r.width, h: r.height });
+              });
+              candidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+              return candidates[0] || null;
+            }).catch(() => null);
+          }
 
           if (qrInfo) {
             // boundingBox 返回的是相对于页面的坐标（包含 iframe 偏移）
@@ -582,11 +609,25 @@ export class TencentCrawler {
   private async clickQRRefreshIfNeeded(frame: any, page: Page): Promise<void> {
     try {
       // 先检查二维码是否已过期（通过 iframe 内的文字判断）
-      const isExpired = await frame.evaluate(() => {
-        const bodyText = document.body?.innerText || '';
-        return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
-          || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
-      }).catch(() => false);
+      let isExpired = false;
+      if (isEnabled('tencent')) {
+        // v2: cdpPierceShadow 穿透 iframe 读 body 文本（零注入）
+        const bodyText = await HumanActions.cdpPierceShadow(
+          page,
+          [{ type: 'css', selector: 'iframe[src*="login-for-iframe"], iframe.display' }, { type: 'frame' }],
+          { selector: 'body', read: 'text' },
+          { reason: 'QR过期检测-iframe body text' },
+        ).catch(() => null) as string | null;
+        isExpired = !!bodyText && (bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+          || bodyText.includes('二维码已过期') || bodyText.includes('请刷新'));
+      } else {
+        // legacy: 在 iframe context 内 evaluate
+        isExpired = await frame.evaluate(() => {
+          const bodyText = document.body?.innerText || '';
+          return bodyText.includes('已过期') || bodyText.includes('已失效') || bodyText.includes('已退出')
+            || bodyText.includes('二维码已过期') || bodyText.includes('请刷新');
+        }).catch(() => false);
+      }
 
       if (!isExpired) {
         logger.info('[Login] QR code not expired, skipping refresh');
@@ -615,17 +656,29 @@ export class TencentCrawler {
       }
 
       // 方式2: 查找包含"刷新"/"重新生成"文字的可点击元素
-      const refreshed = await frame.evaluate(() => {
-        const els = document.querySelectorAll('a, button, span, div, p');
-        for (const el of els) {
-          const text = el.textContent?.trim() || '';
-          if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
-            (el as HTMLElement).click();
-            return true;
+      let refreshed = false;
+      if (isEnabled('tencent')) {
+        // v2: cdpClickByText 使用 CDP performSearch（零注入，可穿透 iframe/shadow DOM）
+        for (const refreshText of ['刷新', '重新生成', '点击刷新', '重新获取']) {
+          if (await HumanActions.cdpClickByText(page, refreshText, { timeout: 2000 }).catch(() => false)) {
+            refreshed = true;
+            break;
           }
         }
-        return false;
-      }).catch(() => false);
+      } else {
+        // legacy: 在 iframe context 内 evaluate
+        refreshed = await frame.evaluate(() => {
+          const els = document.querySelectorAll('a, button, span, div, p');
+          for (const el of els) {
+            const text = el.textContent?.trim() || '';
+            if (text === '刷新' || text === '重新生成' || text === '点击刷新' || text === '重新获取') {
+              (el as HTMLElement).click();
+              return true;
+            }
+          }
+          return false;
+        }).catch(() => false);
+      }
       if (refreshed) {
         await page.waitForTimeout(3000);
         logger.info('[Login] QR refreshed via text click');
@@ -1418,21 +1471,47 @@ export class TencentCrawler {
             continue;
           }
 
-          const shadowClicked = await page.evaluate(() => {
-            const apps = document.querySelectorAll('wujie-app');
-            for (const app of Array.from(apps)) {
-              const sr = (app as HTMLElement).shadowRoot;
-              if (!sr) continue;
-              const allEls = sr.querySelectorAll('*');
-              for (const el of Array.from(allEls)) {
-                if (el.children.length === 0 && el.textContent?.trim() === '展开更多回复') {
-                  (el as HTMLElement).click();
-                  return true;
+          let shadowClicked = false;
+          if (isEnabled('tencent')) {
+            // v2: safeEvaluate 通过 CDP 隔离世界执行（免注入检测）
+            const clickResult = await HumanActions.safeEvaluate(
+              page,
+              () => {
+                const apps = document.querySelectorAll('wujie-app');
+                for (const app of Array.from(apps)) {
+                  const sr = (app as HTMLElement).shadowRoot;
+                  if (!sr) continue;
+                  const allEls = sr.querySelectorAll('*');
+                  for (const el of Array.from(allEls)) {
+                    if (el.children.length === 0 && el.textContent?.trim() === '展开更多回复') {
+                      (el as HTMLElement).click();
+                      return true;
+                    }
+                  }
+                }
+                return false;
+              },
+              { reason: '腾讯shadow DOM展开更多回复检测+点击' },
+            );
+            shadowClicked = !!(clickResult as boolean);
+          } else {
+            // legacy: page.evaluate shadow DOM fallback
+            shadowClicked = await page.evaluate(() => {
+              const apps = document.querySelectorAll('wujie-app');
+              for (const app of Array.from(apps)) {
+                const sr = (app as HTMLElement).shadowRoot;
+                if (!sr) continue;
+                const allEls = sr.querySelectorAll('*');
+                for (const el of Array.from(allEls)) {
+                  if (el.children.length === 0 && el.textContent?.trim() === '展开更多回复') {
+                    (el as HTMLElement).click();
+                    return true;
+                  }
                 }
               }
-            }
-            return false;
-          });
+              return false;
+            });
+          }
           if (shadowClicked) {
             logger.debug('[Phase3:Collect] Expand clicked via shadow DOM fallback');
             consecutiveNoExpand = 0;
@@ -1582,18 +1661,41 @@ export class TencentCrawler {
     }
 
     // 回退: 在 shadow DOM 中查找（兼容旧版 wujie）
-    const shadowClicked = await page.evaluate((title: string) => {
-      const wujieApps = document.querySelectorAll('wujie-app');
-      for (const app of Array.from(wujieApps)) {
-        const sr = (app as HTMLElement).shadowRoot;
-        if (!sr) continue;
-        const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
-        const target = feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim() === title)
-          || feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim().includes(title.slice(0, 10)));
-        if (target) { (target as HTMLElement).click(); return true; }
-      }
-      return false;
-    }, videoTitle);
+    let shadowClicked = false;
+    if (isEnabled('tencent')) {
+      // v2: safeEvaluate 通过 CDP 隔离世界执行
+      const clickResult = await HumanActions.safeEvaluate(
+        page,
+        (title: string) => {
+          const wujieApps = document.querySelectorAll('wujie-app');
+          for (const app of Array.from(wujieApps)) {
+            const sr = (app as HTMLElement).shadowRoot;
+            if (!sr) continue;
+            const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
+            const target = feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim() === title)
+              || feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim().includes(title.slice(0, 10)));
+            if (target) { (target as HTMLElement).click(); return true; }
+          }
+          return false;
+        },
+        { reason: '腾讯wujie shadow DOM视频列表点击', args: [videoTitle] },
+      );
+      shadowClicked = !!(clickResult as boolean);
+    } else {
+      // legacy: page.evaluate shadow DOM fallback
+      shadowClicked = await page.evaluate((title: string) => {
+        const wujieApps = document.querySelectorAll('wujie-app');
+        for (const app of Array.from(wujieApps)) {
+          const sr = (app as HTMLElement).shadowRoot;
+          if (!sr) continue;
+          const feeds = Array.from(sr.querySelectorAll('.comment-feed-wrap'));
+          const target = feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim() === title)
+            || feeds.find(f => f.querySelector('.feed-title')?.textContent?.trim().includes(title.slice(0, 10)));
+          if (target) { (target as HTMLElement).click(); return true; }
+        }
+        return false;
+      }, videoTitle);
+    }
     if (shadowClicked) {
       logger.info({ videoTitle }, '[Phase3] Video clicked via shadow DOM fallback');
       return true;
@@ -1616,16 +1718,37 @@ export class TencentCrawler {
     }
 
     // 回退: shadow DOM
-    const shadowClicked = await page.evaluate(() => {
-      const wujieApps = document.querySelectorAll('wujie-app');
-      for (const app of Array.from(wujieApps)) {
-        const sr = (app as HTMLElement).shadowRoot;
-        if (!sr) continue;
-        const feed = sr.querySelector('.comment-feed-wrap');
-        if (feed) { (feed as HTMLElement).click(); return true; }
-      }
-      return false;
-    });
+    let shadowClicked = false;
+    if (isEnabled('tencent')) {
+      // v2: safeEvaluate 通过 CDP 隔离世界执行
+      const clickResult = await HumanActions.safeEvaluate(
+        page,
+        () => {
+          const wujieApps = document.querySelectorAll('wujie-app');
+          for (const app of Array.from(wujieApps)) {
+            const sr = (app as HTMLElement).shadowRoot;
+            if (!sr) continue;
+            const feed = sr.querySelector('.comment-feed-wrap');
+            if (feed) { (feed as HTMLElement).click(); return true; }
+          }
+          return false;
+        },
+        { reason: '腾讯wujie shadow DOM首个视频点击' },
+      );
+      shadowClicked = !!(clickResult as boolean);
+    } else {
+      // legacy: page.evaluate shadow DOM fallback
+      shadowClicked = await page.evaluate(() => {
+        const wujieApps = document.querySelectorAll('wujie-app');
+        for (const app of Array.from(wujieApps)) {
+          const sr = (app as HTMLElement).shadowRoot;
+          if (!sr) continue;
+          const feed = sr.querySelector('.comment-feed-wrap');
+          if (feed) { (feed as HTMLElement).click(); return true; }
+        }
+        return false;
+      });
+    }
     if (shadowClicked) {
       logger.info('[Phase3] First video clicked via shadow DOM fallback');
     }
