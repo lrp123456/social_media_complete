@@ -1010,11 +1010,20 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
   const source = ExitStrategy.getQuerySource();
+  const phase1StartTime = Date.now();
+  logger.info({ userId: task.userId, source }, '[计时] Phase1 开始');
   const phase1Result = await dy.checkForUpdates(page, task.userId, task.windowId, source as 'work_list' | 'item_list');
+  const phase1EndTime = Date.now();
+  logger.info({ userId: task.userId, elapsed: phase1EndTime - phase1StartTime, videoCount: phase1Result.commentsQueue.length }, '[计时] Phase1 完成');
 
+  const unregisterStartTime = Date.now();
   dy.unregisterListener();
+  const unregisterEndTime = Date.now();
+  logger.info({ userId: task.userId, elapsed: unregisterEndTime - unregisterStartTime }, '[计时] unregisterListener 完成');
 
   // 风控检测
+  const riskCheckStartTime = Date.now();
+  logger.info({ userId: task.userId }, '[计时] 风控检测开始');
   if (phase1Result.riskControlDetected) {
     const riskType = phase1Result.riskControlInfo?.type || 'unknown';
     logger.error({ userId: task.userId, platform: 'douyin', riskType }, '抖音风控触发');
@@ -1033,18 +1042,24 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
         logger.info({ userId: task.userId, smsSent }, '抖音二次验证卡片已发送');
       }
       await db.updateUserStatus(task.userId, 'login_required');
+      logger.info({ userId: task.userId, elapsed: Date.now() - riskCheckStartTime }, '[计时] 风控检测完成（二次验证）');
       return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
     }
 
     await db.updateUserStatus(task.userId, 'login_required');
     await sendLoginQR(page, task.userId, 'douyin');
+    logger.info({ userId: task.userId, elapsed: Date.now() - riskCheckStartTime }, '[计时] 风控检测完成（登录QR）');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
+  logger.info({ userId: task.userId, elapsed: Date.now() - riskCheckStartTime }, '[计时] 风控检测完成（无风险）');
 
   // 无新评论 → 执行退出策略并返回
   if (phase1Result.commentsQueue.length === 0) {
     const exitPage = source === 'work_list' ? 'content_management' : 'data_center';
+    const exitStartTime = Date.now();
+    logger.info({ userId: task.userId, exitPage }, '[计时] 退出策略开始');
     await dy.executeExitStrategy(page, exitPage as any);
+    logger.info({ userId: task.userId, elapsed: Date.now() - exitStartTime }, '[计时] 退出策略完成');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 

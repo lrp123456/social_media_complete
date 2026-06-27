@@ -185,7 +185,29 @@ export function NodeDrawer({
           <input value={editedNode.description} onChange={(e) => setEditedNode({ ...editedNode, description: e.target.value })} className="w-full px-2 py-1 border rounded text-sm" />
         </div>
 
-        {/* DOM 选择器 */}
+        {/* 选择器 Key（所有节点） */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">选择器 Key</label>
+          <input
+            value={(editedNode.selector as any)?.key || ''}
+            onChange={(e) => setEditedNode({ ...editedNode, selector: { ...(editedNode.selector || {}), key: e.target.value } as any })}
+            placeholder="如 menus.menu_work_manage"
+            className="w-full px-2 py-1 border rounded text-sm font-mono"
+          />
+        </div>
+
+        {/* API Pattern Key（所有节点） */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">API Pattern Key</label>
+          <input
+            value={editedNode.apiPatternKey || ''}
+            onChange={(e) => setEditedNode({ ...editedNode, apiPatternKey: e.target.value || undefined })}
+            placeholder="如 video_list.work_list"
+            className="w-full px-2 py-1 border rounded text-sm font-mono"
+          />
+        </div>
+
+        {/* DOM 选择器（详细编辑） */}
         {['check_menu_state', 'click_menu', 'click_tab', 'click_button', 'close_menu', 'page_turn'].includes(editedNode.action) && (
           <div>
             <label className="text-xs text-gray-500 mb-2 block">DOM 选择器</label>
@@ -197,17 +219,6 @@ export function NodeDrawer({
               </div>
             ))}
             <button onClick={addFallback} className="text-xs text-blue-600 hover:text-blue-800 mt-1">+ 添加备用选择器</button>
-          </div>
-        )}
-
-        {/* API Pattern（enable_interceptor 节点） */}
-        {editedNode.action === 'enable_interceptor' && (
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">API Pattern</label>
-            <select value={editedNode.apiPatternKey || ''} onChange={(e) => setEditedNode({ ...editedNode, apiPatternKey: e.target.value || undefined })} className="w-full px-2 py-1 border rounded text-sm">
-              <option value="">选择...</option>
-              {Object.keys(apiPatterns).map((k) => <option key={k} value={k}>{k} — {(apiPatterns[k] as any)?.pattern}</option>)}
-            </select>
           </div>
         )}
 

@@ -275,6 +275,7 @@ export class DouyinCrawler {
   }
 
   async fetchVideoListFromSource(page: Page, source: QuerySource): Promise<VideoInfo[]> {
+    const fetchStartTime = Date.now();
     MaintenanceProbe.enterStep('monitor', 'douyin', 'Phase1', 'fetchVideoListFromSource');
     try {
     const pattern = source === 'work_list' ? WORK_LIST_PATTERN : ITEM_LIST_PATTERN;
@@ -287,21 +288,27 @@ export class DouyinCrawler {
 
     if (onTarget) {
       logger.info({ source, url: page.url() }, 'Already on target page — forcing F5 refresh to ensure fresh data');
+      const refreshStartTime = Date.now();
       await HumanActions.cdpF5Refresh(page);
       HumanActions.clearCDPContext(page);
       this.currentMenuSection = 'unknown';
       await HumanActions.wait(page, 3000, 5000); // 延长等待，确保页面完全加载
+      logger.info({ source, elapsed: Date.now() - refreshStartTime }, '[计时] fetchVideoList - F5刷新等待');
       await HumanActions.pageLoadBehavior(page);
     } else {
+      const navigateStartTime = Date.now();
       if (source === 'work_list') {
         await this.navigateToWorkList(page);
       } else {
         await this.navigateToItemListMenus(page);
       }
+      logger.info({ source, elapsed: Date.now() - navigateStartTime }, '[计时] fetchVideoList - 导航到目标页');
     }
 
     if (source !== 'work_list') {
+      const tabClickStartTime = Date.now();
       const tabClicked = await this.clickPostListTab(page);
+      logger.info({ source, elapsed: Date.now() - tabClickStartTime, clicked: tabClicked }, '[计时] fetchVideoList - 点击投稿列表tab');
       if (!tabClicked) {
         logger.warn({ source }, '[投稿列表] tab click failed, retrying after extra wait');
         await HumanActions.wait(page, 2000, 3000);
@@ -311,17 +318,22 @@ export class DouyinCrawler {
 
     logger.info({ source, step: 'AFTER_TAB_CLICK', existingResponses: this.interceptor.getResponseCount(pattern) }, 'Tab click complete, waiting for target response');
 
+    const waitForResponseStartTime = Date.now();
     let initialResponse = await this.interceptor.waitForResponse(pattern, 15000);
+    logger.info({ source, elapsed: Date.now() - waitForResponseStartTime, hasResponse: !!initialResponse }, '[计时] fetchVideoList - 等待初始API响应');
 
     if (!initialResponse && source !== 'work_list') {
       logger.info({ source }, 'No target response after 15s, compensating with F5 refresh + re-click tab');
+      const compensationStartTime = Date.now();
       await HumanActions.cdpF5Refresh(page);
       HumanActions.clearCDPContext(page);
       this.currentMenuSection = 'unknown';
       await HumanActions.wait(page, 2000, 4000);
       await this.clickPostListTab(page);
-      logger.info({ source, step: 'AFTER_COMPENSATION', existingResponses: this.interceptor.getResponseCount(pattern) }, 'Compensation complete, waiting again');
+      logger.info({ source, step: 'AFTER_COMPENSATION', existingResponses: this.interceptor.getResponseCount(pattern), elapsed: Date.now() - compensationStartTime }, 'Compensation complete, waiting again');
+      const waitForResponse2StartTime = Date.now();
       initialResponse = await this.interceptor.waitForResponse(pattern, 15000);
+      logger.info({ source, elapsed: Date.now() - waitForResponse2StartTime, hasResponse: !!initialResponse }, '[计时] fetchVideoList - 等待补偿API响应');
     }
 
     if (!initialResponse) {
@@ -404,7 +416,9 @@ export class DouyinCrawler {
     logger.info({ source, collected: initialItems.length, publicCount: initialPublicCount, privateCount: privateAwemeIds.size }, '[Phase1] Initial view count map built');
 
     // 传入公开视频计数回调，让滚动循环用公开视频数判断是否停止
+    const scrollStartTime = Date.now();
     await this.scrollToLoadMoreWithDualStop(page, pattern, updateViewCountMapAndGetPublicCount);
+    logger.info({ source, elapsed: Date.now() - scrollStartTime }, '[计时] fetchVideoList - 滚动加载完成');
 
     const allItems = this.interceptor.getCollectedItems(pattern);
 
@@ -447,6 +461,7 @@ export class DouyinCrawler {
 
     this.awemeIdToViewCount = awemeIdToViewCount;
     this.awemeIdToIsPinned = awemeIdToIsPinned;
+    logger.info({ source, totalElapsed: Date.now() - fetchStartTime, videoCount: filtered.length }, '[计时] fetchVideoListFromSource 总耗时');
     return filtered;
     } finally {
       MaintenanceProbe.exitStep();
@@ -466,12 +481,14 @@ export class DouyinCrawler {
     pattern: string,
     getPublicCount?: () => number,
   ): Promise<void> {
+    const scrollLoopStartTime = Date.now();
     let totalScrolls = 0;
     let scrollsSinceNewData = 0;
     let lastKnownCount = this.interceptor.getCollectedCount(pattern);
     let lastKnownResponseCount = this.interceptor.getResponseCount(pattern);
 
     while (totalScrolls < MAX_SCROLL_ATTEMPTS) {
+      const iterationStartTime = Date.now();
       const collectedCount = this.interceptor.getCollectedCount(pattern);
       const responseCount = this.interceptor.getResponseCount(pattern);
       const publicCount = getPublicCount ? getPublicCount() : collectedCount;
@@ -503,23 +520,27 @@ export class DouyinCrawler {
 
       // 使用公开视频数判断是否达到目标数量
       if (publicCount >= this.maxMonitorVideos) {
-        logger.info({ collectedCount, publicCount, maxMonitor: this.maxMonitorVideos, totalScrolls }, 'Public video quantity cap reached - stopping scroll');
+        logger.info({ collectedCount, publicCount, maxMonitor: this.maxMonitorVideos, totalScrolls, elapsed: Date.now() - scrollLoopStartTime }, 'Public video quantity cap reached - stopping scroll');
         break;
       }
 
       if (this.interceptor.hasDataExhausted(pattern)) {
-        logger.info({ totalScrolls, collectedCount, publicCount }, 'Data exhausted (has_more=false) - stopping scroll');
+        logger.info({ totalScrolls, collectedCount, publicCount, elapsed: Date.now() - scrollLoopStartTime }, 'Data exhausted (has_more=false) - stopping scroll');
         break;
       }
 
       if (scrollsSinceNewData >= MAX_SCROLL_NO_NEW_DATA) {
-        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount, publicCount }, 'No new data after consecutive scrolls - stopping');
+        logger.info({ totalScrolls, scrollsSinceNewData, collectedCount, publicCount, elapsed: Date.now() - scrollLoopStartTime }, 'No new data after consecutive scrolls - stopping');
         break;
       }
 
+      const readingPauseStartTime = Date.now();
       await this.humanReadingPause(page);
+      logger.debug({ totalScrolls, elapsed: Date.now() - readingPauseStartTime }, '[计时] 滚动 - 人类阅读暂停');
 
+      const scrollStartTime = Date.now();
       await this.smartScrollListContainer(page);
+      logger.debug({ totalScrolls, elapsed: Date.now() - scrollStartTime }, '[计时] 滚动 - 智能滚动');
 
       totalScrolls++;
 
@@ -566,6 +587,7 @@ export class DouyinCrawler {
       finalCollected: this.interceptor.getCollectedCount(pattern),
       finalPublic: getPublicCount ? getPublicCount() : this.interceptor.getCollectedCount(pattern),
       finalResponses: this.interceptor.getResponseCount(pattern),
+      totalElapsed: Date.now() - scrollLoopStartTime,
     }, 'Scroll loop finished');
   }
 
@@ -710,6 +732,7 @@ export class DouyinCrawler {
   }
 
   async executeExitStrategy(page: Page, currentPage: PageType, excludeSubmenuKey?: string): Promise<void> {
+    const exitStrategyStartTime = Date.now();
     const action = ExitStrategy.getNextPageAction(currentPage);
     const currentSubmenuKey = getSubmenuKeyForPageType(currentPage);
     const excludeKeys = [excludeSubmenuKey, currentSubmenuKey].filter(Boolean) as string[];
@@ -728,8 +751,10 @@ export class DouyinCrawler {
           triedKeys.push(submenuKey);
           logger.info({ submenuKey, attempt }, 'Navigating to random submenu for exit');
 
+          const clickStartTime = Date.now();
           const urlBefore = page.url();
           const clicked = await resolveAndClick(page, submenuKey, 'douyin', { timeout: 8000 });
+          logger.info({ submenuKey, elapsed: Date.now() - clickStartTime, clicked }, '[计时] 退出策略 - 点击子菜单');
           await HumanActions.wait(page, 2000, 3000);
           const urlAfter = page.url();
 
@@ -800,7 +825,7 @@ export class DouyinCrawler {
       }
     }
 
-    logger.info({ finalUrl: page.url(), currentMenuSection: this.currentMenuSection }, 'Exit strategy completed — final page state');
+    logger.info({ finalUrl: page.url(), currentMenuSection: this.currentMenuSection, totalElapsed: Date.now() - exitStrategyStartTime }, 'Exit strategy completed — final page state');
   }
 
   async fetchCommentDetailsByClick(page: Page, awemeId: string): Promise<CommentInfo[]> {
@@ -1586,9 +1611,12 @@ export class DouyinCrawler {
     userWindowId: string,
     source: QuerySource
   ): Promise<CheckResult> {
+    const checkForUpdatesStartTime = Date.now();
     logger.info({ userId, source }, '[Phase1] Starting update check — collection only mode');
 
+    const riskCheckStartTime = Date.now();
     const riskCheck = await this.detectRiskControlAsync(page);
+    logger.info({ userId, elapsed: Date.now() - riskCheckStartTime }, '[计时] Phase1 初始风控检测');
     if (riskCheck.detected) {
       logger.error({ userId, riskType: riskCheck.type, evidence: riskCheck.evidence }, '[Phase1] Risk control detected before check');
       return {
@@ -1603,7 +1631,9 @@ export class DouyinCrawler {
     // syncPlatformAuthorId 会处理首次绑定 + 自愈检测，不需要 needAuthorId 标志
 
     logger.info({ userId }, '[Phase1] Fetching video list from source');
+    const fetchStartTime = Date.now();
     let videos = await this.fetchVideoListFromSource(page, source);
+    logger.info({ userId, elapsed: Date.now() - fetchStartTime, videoCount: videos.length }, '[计时] Phase1 获取视频列表');
     const fetchedCount = videos.length;
     videos = truncateToNewest(videos, this.maxMonitorVideos);
     logger.info({ userId, fetched: fetchedCount, monitored: videos.length, cap: this.maxMonitorVideos }, '[Phase1] Truncated to newest N videos');
@@ -1776,7 +1806,9 @@ export class DouyinCrawler {
     }
 
     logger.info({ userId, videoCount: videos.length }, '[Phase1] Comparison done, upserting videos to database');
+    const upsertStartTime = Date.now();
     await db.reconcileVideosForUser(userId, 'douyin', videos, this.maxMonitorVideos);
+    logger.info({ userId, elapsed: Date.now() - upsertStartTime }, '[计时] Phase1 数据库upsert');
 
     if (commentsQueue.length === 0) {
       logger.info({ userId }, '[Phase1] No comment updates found — task complete');
@@ -1784,7 +1816,9 @@ export class DouyinCrawler {
       logger.info({ userId, count: commentsQueue.length, awemeIds: commentsQueue.map(q => q.awemeId) }, '[Phase1] Found videos with comment updates — proceeding to Phase 2');
     }
 
+    const postRiskCheckStartTime = Date.now();
     const postRiskCheck = await this.detectRiskControlAsync(page);
+    logger.info({ userId, elapsed: Date.now() - postRiskCheckStartTime }, '[计时] Phase1 后置风控检测');
     if (postRiskCheck.detected) {
       logger.error({ userId, riskType: postRiskCheck.type }, '[Phase1] Risk control detected after check');
       return {
@@ -1796,6 +1830,7 @@ export class DouyinCrawler {
       };
     }
 
+    logger.info({ userId, totalElapsed: Date.now() - checkForUpdatesStartTime }, '[计时] Phase1 checkForUpdates 总耗时');
     return {
       hasUpdate: commentsQueue.length > 0,
       commentsQueue,
