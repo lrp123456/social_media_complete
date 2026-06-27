@@ -621,9 +621,13 @@ export class XiaohongshuCrawler {
   ): Promise<XiaohongshuCheckResult> {
     logger.info({ userId, url: page.url() }, '[XHS-Light] Starting xiaohongshu update check — light mode (no comment details)');
 
+    // 维护探针：任务执行入口
+    await bootstrapProbe({ isDebugMode: false });
+
     const riskCheck = await this.detectRiskControlAsync(page);
     if (riskCheck.detected) {
       logger.error({ userId, riskType: riskCheck.type, evidence: riskCheck.evidence }, '[XHS-Light] Risk control detected before check');
+      await teardownProbe();
       return {
         hasUpdate: false,
         updatedVideos: [],
@@ -638,8 +642,32 @@ export class XiaohongshuCrawler {
     const preFetchRejections = this.interceptor.getRejectionLog(3);
     logger.info({ userId, preFetchResponses, preFetchRejections, url: page.url() }, '[XHS-Light] Pre-fetch interceptor state');
 
+    // Phase1: 视频列表采集 + 通用 API 观测 (v2)
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase1', 'fetchVideoListFromSource');
     logger.info({ userId }, '[XHS-Light] Fetching note list');
     const videos = await this.fetchNoteListFromSource(page);
+    MaintenanceProbe.exitStep();
+
+    // 通用 API 观测（v2 路径）：拦 /api/sns/.* 路径，埋点记录响应命中率
+    if (isEnabled('xiaohongshu')) {
+      try {
+        const apiPattern = '/api/sns/.*';
+        this.interceptor.setValidationConfig(apiPattern, {
+          expectedPageUrls: ['creator.xiaohongshu.com', 'www.xiaohongshu.com'],
+          requiredItemFields: [],
+          minItems: 0,
+        });
+        const snsListenerId = await this.interceptor.register(page, [apiPattern]);
+        await HumanActions.wait(page, 500, 1000);
+        const snsRespCount = this.interceptor.getResponseCount(apiPattern);
+        logger.info({ snsResponseCount: snsRespCount }, '[XHS] General API observation snapshot');
+        this.interceptor.unregister(snsListenerId);
+        this.interceptor.clear(apiPattern);
+      } catch (obsErr: any) {
+        logger.warn({ error: obsErr.message }, '[XHS] General API observation failed (non-fatal)');
+      }
+    }
+
     const awemeIdToIsPinned = (videos as any)._awemeIdToIsPinned || new Map<string, boolean>();
 
     // 同步作者 ID
@@ -786,6 +814,7 @@ export class XiaohongshuCrawler {
     const postRiskCheck = await this.detectRiskControlAsync(page);
     if (postRiskCheck.detected) {
       logger.error({ userId, riskType: postRiskCheck.type }, '[XHS-Light] Risk control detected after check');
+      await teardownProbe();
       return {
         hasUpdate: false,
         updatedVideos: [],
@@ -807,6 +836,9 @@ export class XiaohongshuCrawler {
       });
       logger.info({ awemeId: v.awemeId, isFirstCrawl: v.isFirstCrawl }, '[XHS-Light] Queue item crawl mode from Phase1 decision');
     }
+
+    // 维护探针：任务结束
+    await teardownProbe();
 
     return {
       hasUpdate: updatedVideos.length > 0,
@@ -1303,6 +1335,7 @@ export class XiaohongshuCrawler {
     userId: number,
   ): Promise<Array<{ success: boolean; awemeId: string; error?: string }>> {
     logger.info({ queueLength: queue.length, userId }, '[XHS-Phase3] Processing comments queue');
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase3', 'processCommentsQueue');
 
     const results: Array<{ success: boolean; awemeId: string; error?: string }> = [];
 
@@ -1332,6 +1365,7 @@ export class XiaohongshuCrawler {
       this.commentListenerId = null;
     }
 
+    MaintenanceProbe.exitStep();
     return results;
   }
 
@@ -1344,6 +1378,7 @@ export class XiaohongshuCrawler {
     queue: XhsCommentQueueItem[],
     maxRootComments: number = 30,
   ): Promise<{ results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> }> {
+    MaintenanceProbe.enterStep('monitor', 'xiaohongshu', 'Phase3', 'processCommentsQueueSimple');
     const { prisma } = await import('../lib/prisma');
     const db = await import('../services/monitorDatabaseService');
     const results: Array<{ awemeId: string; success: boolean; commentGroups?: any[]; error?: string }> = [];
@@ -1457,6 +1492,7 @@ export class XiaohongshuCrawler {
       }
     }
 
+    MaintenanceProbe.exitStep();
     return { results };
   }
 
