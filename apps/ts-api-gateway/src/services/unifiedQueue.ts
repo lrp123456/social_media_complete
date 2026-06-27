@@ -152,6 +152,9 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
         taskType: 'reply',
         traceId: getTraceId(),
       });
+      if (!handle) {
+        throw new Error('窗口锁占用中，跳过: ' + task.windowId);
+      }
 
       await Promise.race([
         executeReplyAction(task, task.replyData, executionId!),
@@ -190,6 +193,9 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
         taskType: 'publish',
         traceId: getTraceId(),
       });
+      if (!handle) {
+        throw new Error('窗口锁占用中，跳过: ' + task.windowId);
+      }
 
       const { getPublisher } = await import('../platforms');
       const { prisma } = await import('../lib/prisma');
@@ -263,6 +269,9 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
         taskType: 'monitor',
         traceId: getTraceId(),
       });
+      if (!handle) {
+        throw new Error('窗口锁占用中，跳过: ' + task.windowId);
+      }
 
       checkCancelled();
       const { executeMonitorCheck, reportMonitorComplete, sendMonitorNotification, generateSuggestionsForNewComments } = await import('./monitorService');
@@ -409,6 +418,7 @@ async function handleJob(job: Job<PlatformTask>): Promise<any> {
       if (err.message?.includes('风控') || err.message?.includes('captcha') || err.message?.includes('验证码')) {
         await sendMonitorNotification(task.userId, task.platform, 'risk_detected').catch(() => {});
       }
+      throw err;
     } finally {
       if (handle) {
         await handle.release().catch((releaseErr: any) => {
@@ -565,4 +575,9 @@ export async function getAllJobs(states: ('active' | 'waiting' | 'delayed')[]): 
     }
   }
   return allJobs;
+}
+
+// 仅供单元测试调用
+export async function handleJobForTest(job: Job<PlatformTask>): Promise<any> {
+  return handleJob(job);
 }
