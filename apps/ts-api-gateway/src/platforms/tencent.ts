@@ -3,10 +3,11 @@
 // 登录模式参考: crawlers/tencentCrawler.ts handleLogin()
 
 import { Page } from 'patchright';
-import { HumanActions } from '@social-media/browser-core';
+import { HumanActions, RequestInterceptor } from '@social-media/browser-core';
 import { BasePublisher } from './BasePublisher';
 import { createLogger } from '../lib/logger';
 import { prisma } from '../lib/prisma';
+import { isEnabled } from '../lib/antiDetectionMode';
 import type { LoginContext, UploadContext } from './types';
 import type { PlatformName } from '@social-media/shared-config';
 
@@ -687,8 +688,33 @@ export class TencentPublisher extends BasePublisher {
 
   private async waitForPublishResult(page: Page): Promise<string> {
     const waitMs = 20_000;
-    const startTime = Date.now();
 
+    // v2: 优先通过 interceptor 等待发布 API 响应
+    if (isEnabled('tencent')) {
+      try {
+        const interceptor = new RequestInterceptor();
+        const patterns = ['/mmfinderassistant-bin/post/post_list', '/post/create'];
+        const pageId = await interceptor.register(page, patterns);
+        try {
+          const result = await interceptor.waitForResponse(patterns[0], {
+            timeoutMs: waitMs,
+            predicate: (r: any) => r?.body?.data?.aweme_id != null || r?.body?.data?.exportId != null,
+          });
+          if (result) {
+            logger.info('[腾讯视频号] ✅ 发布成功（Interceptor 检测到 API 响应）');
+            return page.url();
+          }
+        } finally {
+          interceptor.unregister(pageId);
+        }
+        logger.warn('[腾讯视频号] Interceptor 超时，回退到 DOM 兜底');
+      } catch {
+        logger.warn('[腾讯视频号] Interceptor 异常，回退到 DOM 兜底');
+      }
+    }
+
+    // legacy + fallback: DOM URL/body text 轮询
+    const startTime = Date.now();
     while (Date.now() - startTime < waitMs) {
       const currentUrl = page.url();
 

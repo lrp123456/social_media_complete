@@ -203,6 +203,20 @@ export class TencentCrawler {
 
     const maxWait = 120_000;
     const start = Date.now();
+    // v2 尝试通过 interceptor 轮询登录态
+    if (isEnabled('tencent') && this.listenerPageId) {
+      const qrStatus = await this.interceptor.pollStatus('/mmfinderassistant-bin/.*', {
+        predicate: (r: any) => r?.url?.includes('/platform') || false,
+        pollMs: 2000,
+        timeoutMs: maxWait,
+      });
+      if (qrStatus) {
+        logger.info('[Login] Login successful (via interceptor)');
+        return true;
+      }
+      logger.warn('[Login] Interceptor poll timed out, falling back to DOM check');
+    }
+    // legacy + fallback: DOM URL/body text 轮询
     while (Date.now() - start < maxWait) {
       const checkUrl = page.url();
       if (checkUrl.includes('/platform') && !checkUrl.includes('/login')) {
