@@ -76,3 +76,44 @@ export interface MaterialUpdateConfig {
   keyCooldownState: Record<string, Record<string, number>>;
   allCooldownRetryAfterMs: number;
 }
+
+// ============================================================
+// PR4: 素材候选（与后端 /material-update/candidates 对齐）
+// ============================================================
+
+export type MaterialCandidateStatus =
+  | 'pending'
+  | 'processing'
+  | 'no_url'
+  | 'accepted'
+  | 'rejected';
+
+export interface MaterialCandidate {
+  id: string;
+  platform: string;
+  videoId: string;
+  title: string | null;
+  author: string | null;
+  playCount: number | null;
+  cover: string | null;
+  videoUrl: string | null;
+  publishTime: string | null; // ISO date
+  fetchedAt: string; // ISO date
+  createdAt: string; // ISO date
+  status: MaterialCandidateStatus;
+  style: string | null;
+  likeCount: number | null;
+  commentCount: number | null;
+  rating: number | null; // 1-5
+  storagePath: string | null;
+  storageStatus: 'none' | 'pending_downloaded' | 'archived' | 'failed';
+  acceptedAt: string | null; // ISO date
+  failReason: string | null;
+}
+
+export interface MaterialCandidatesResponse {
+  items: MaterialCandidate[];
+  total: number;
+  page: number;
+  pageSize: number;
+}

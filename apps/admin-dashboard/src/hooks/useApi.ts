@@ -2146,12 +2146,30 @@ export function useMaterialStatus() {
   });
 }
 
-export function useMaterialCandidates(page = 1, pageSize = 20, platformId?: string, status?: string) {
+export function useMaterialCandidates(
+  page = 1,
+  pageSize = 20,
+  platformId?: string,
+  status?: string,
+  style?: string,
+) {
   const params: Record<string, string> = { page: String(page), pageSize: String(pageSize) };
   if (platformId) params.platformId = platformId;
   if (status) params.status = status;
+  if (style) params.style = style;
   return useQuery({
-    queryKey: ['material-candidates', page, pageSize, platformId, status],
+    queryKey: ['material-candidates', page, pageSize, platformId, status, style],
     queryFn: () => api.get('/material-update/candidates', { params }).then((r) => r.data),
+  });
+}
+
+export function useReprocessCandidate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/material-update/reprocess/${id}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['material-candidates'] });
+      qc.invalidateQueries({ queryKey: ['material-status'] });
+    },
   });
 }
