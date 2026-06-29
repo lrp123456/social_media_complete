@@ -92,11 +92,28 @@ materialUpdateRouter.get('/status', async (_req: Request, res: Response) => {
 // ============================================================
 // GET /api/v1/material-update/candidates — 候选视频分页预览
 // ============================================================
-/** 将 Prisma 返回的候选对象中的 BigInt 字段序列化为 number/string */
-function serializeCandidate(candidate: Record<string, unknown>) {
+/** 将 Prisma 返回的候选对象序列化为 JSON 安全结构（BigInt→number，Date→ISO） */
+function serializeCandidate(c: Record<string, unknown>) {
   return {
-    ...candidate,
-    playCount: candidate.playCount != null ? Number(candidate.playCount) : null,
+    id: c.id,
+    platform: c.platform,
+    videoId: c.videoId,
+    title: c.title,
+    author: c.author,
+    cover: c.cover,
+    videoUrl: c.videoUrl,
+    playCount: c.playCount != null ? Number(c.playCount) : null,
+    likeCount: c.likeCount != null ? Number(c.likeCount) : null,
+    commentCount: c.commentCount != null ? Number(c.commentCount) : null,
+    publishTime: c.publishTime ? new Date(c.publishTime as string).toISOString() : null,
+    fetchedAt: c.fetchedAt ? new Date(c.fetchedAt as string).toISOString() : null,
+    acceptedAt: c.acceptedAt ? new Date(c.acceptedAt as string).toISOString() : null,
+    status: c.status,
+    style: c.style,
+    rating: c.rating ?? null,
+    storagePath: c.storagePath,
+    storageStatus: c.storageStatus,
+    failReason: c.failReason,
   };
 }
 
