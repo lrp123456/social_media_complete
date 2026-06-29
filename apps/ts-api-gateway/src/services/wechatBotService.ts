@@ -1196,7 +1196,7 @@ async function autoStartBot(): Promise<void> {
         // 匹配实际回复文本（用户不在"回复"前缀模式下直接发送文本）
         for (const [commentCid, ctx] of botManager['pendingReplies']) {
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.user.findFirst({
+          const user = await prisma.platformAccount.findFirst({
             where: { wechatUserid: userid },
             select: { id: true },
           }).catch(() => null);
