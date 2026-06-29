@@ -167,3 +167,39 @@ describe('CDPClient.getLayoutMetrics', () => {
     });
   });
 });
+
+describe('HumanActions.cdpGetDocumentScrollState', () => {
+  it('returns scroll state from CDP getLayoutMetrics', async () => {
+    const fakeCtx = {
+      cdp: {
+        getLayoutMetrics: jest.fn().mockResolvedValue({
+          layoutViewport: { pageX: 0, pageY: 1747, clientWidth: 1366, clientHeight: 1305 },
+          contentSize: { x: 0, y: 0, width: 1366, height: 3052 },
+        }),
+      },
+      dom: {}, mouse: {}, scroller: {}, noise: {},
+    };
+    jest.spyOn(HumanActions as any, 'getCDPContext').mockResolvedValue(fakeCtx);
+    const page: any = { context: () => ({ newCDPSession: jest.fn() }) };
+
+    const state = await HumanActions.cdpGetDocumentScrollState(page);
+    expect(state).toEqual({ scrollY: 1747, clientHeight: 1305, scrollHeight: 3052 });
+    expect(fakeCtx.cdp.getLayoutMetrics).toHaveBeenCalled();
+    jest.restoreAllMocks();
+  });
+
+  it('returns null when getLayoutMetrics throws', async () => {
+    const fakeCtx = {
+      cdp: {
+        getLayoutMetrics: jest.fn().mockRejectedValue(new Error('CDP session closed')),
+      },
+      dom: {}, mouse: {}, scroller: {}, noise: {},
+    };
+    jest.spyOn(HumanActions as any, 'getCDPContext').mockResolvedValue(fakeCtx);
+    const page: any = { context: () => ({ newCDPSession: jest.fn() }) };
+
+    const state = await HumanActions.cdpGetDocumentScrollState(page);
+    expect(state).toBeNull();
+    jest.restoreAllMocks();
+  });
+});

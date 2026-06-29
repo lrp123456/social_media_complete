@@ -611,6 +611,26 @@ export class HumanActions {
   }
 
   /**
+   * 通过 CDP Page.getLayoutMetrics 读取 document 滚动状态。
+   * 返回 { scrollY, clientHeight, scrollHeight }；失败返回 null。
+   */
+  static async cdpGetDocumentScrollState(page: Page): Promise<{ scrollY: number; clientHeight: number; scrollHeight: number } | null> {
+    try {
+      return await HumanActions.withCDPContext(page, async (ctx) => {
+        const metrics = await ctx.cdp.getLayoutMetrics();
+        return {
+          scrollY: metrics.layoutViewport.pageY,
+          clientHeight: metrics.layoutViewport.clientHeight,
+          scrollHeight: metrics.contentSize.height,
+        };
+      });
+    } catch (err: any) {
+      logger.warn({ err: err.message }, '[cdpGetDocumentScrollState] failed');
+      return null;
+    }
+  }
+
+  /**
    * 在父元素范围内找匹配元素。父元素由 scopeSelector 定位 (如 form 提交栏)。
    * 用 Runtime.evaluate 在父元素内 querySelectorAll, 避免被页面其他区域的同名元素干扰
    * (例如抖音的 "发布" 既是发布按钮文本, 也是导航菜单项)。
