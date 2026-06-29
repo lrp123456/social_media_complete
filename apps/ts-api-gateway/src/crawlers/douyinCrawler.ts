@@ -5034,25 +5034,23 @@ export class DouyinCrawler {
 
       // ── B. 如果目标就是根评论 → 直接返回该根评论的"回复"按钮坐标 ──
       if (target.level === 1) {
-        // ★ 修复：传 rootX, rootY 作为位置回退（应对 :nth-child 失效）
-        const fallback = { x: rootMatch.x, y: rootMatch.y };
-        let replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel, fallback);
-        if (!replyBtn) {
-          // 按钮在视口外 → 滚 root 到视口中间再重试
-          logger.warn('[Reply::Find] Root found but reply btn off-viewport, scrolling into view');
-          await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
-          await HumanActions.wait(page, 300, 600);
-          // 滚完后 root 在视口中间，用 viewport 中心作为回退坐标
-          const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
-          const centerFallback = { x: Math.round(vp.w / 2), y: Math.round(vp.h / 2) };
-          replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel, centerFallback);
-        }
-        if (replyBtn) {
+        // ★ 修复：findRootCommentByUsernameContent 已在同一次 evaluate 内找到回复按钮，直接消费
+        if (rootMatch.replyBtn) {
           logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located');
-          return replyBtn;
+          return rootMatch.replyBtn;
         }
-        // 仍找不到：返回 null 让外层循环继续 tryExpandMoreAndScroll 加载更多，
-        // 而不是回退到 root 中心导致 replyToComment 整页搜时点到错评论。
+
+        // replyBtn 为 null：滚 root 到视口中间，再按内容重新匹配（不依赖 :nth-child）
+        logger.warn('[Reply::Find] Root found but reply btn not found, scrolling into view');
+        await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
+        await HumanActions.wait(page, 300, 600);
+
+        const rootMatch2 = await this.findRootCommentByUsernameContent(page, target, rootContainerSels);
+        if (rootMatch2?.replyBtn) {
+          logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located after scroll');
+          return rootMatch2.replyBtn;
+        }
+
         // ── 诊断：收集 HTML 帮助定位 ↕ ──
         const htmlDiag = await (async () => {
           if (isAntiDetectionV2()) {
