@@ -4579,6 +4579,7 @@ export class DouyinCrawler {
       // ★ 检测并处理客服悬浮窗遮挡发送按钮
       let submitClicked = false;
       if (sendBtn) {
+        logger.info({ x: sendBtn.x, y: sendBtn.y, viewportH: await page.evaluate(() => window.innerHeight) }, '[Reply] 发送按钮坐标');
         const isBlockedByService = await (async () => {
           if (isAntiDetectionV2()) {
             return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
@@ -4743,115 +4744,69 @@ export class DouyinCrawler {
             // 悬浮窗无法隐藏，用 evaluate 直接 click 发送按钮（合理回退）
             const evalClicked = await (async () => {
               if (isAntiDetectionV2()) {
-                return HumanActions.safeEvaluate(page, function(coords: {x: number; y: number}) {
-                  function findReplyBtn(): Element | null {
-                    var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-                    var best: Element | null = null, bestDist = Infinity;
-                    for (var i = 0; i < items.length; i++) {
-                      if ((items[i].textContent || '').trim() !== '回复') continue;
-                      var r = items[i].getBoundingClientRect();
-                      if (r.width === 0 || r.height === 0) continue;
-                      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-                      var d = Math.hypot(cx - coords.x, cy - coords.y);
-                      if (d < bestDist) { bestDist = d; best = items[i]; }
-                    }
-                    return best;
-                  }
-                  var replyBtn = findReplyBtn();
-                  if (!replyBtn) return false;
+                return HumanActions.safeEvaluate(page, function() {
+                  // ★ 修复：不依赖 btnCoords（scrollIntoView 后已陈旧），直接找可见 reply-content 面板中的"发送"按钮
                   var panels = document.querySelectorAll('[class*="reply-content-"]');
-                  var targetPanel: Element | null = null;
                   for (var i = 0; i < panels.length; i++) {
-                    var p = panels[i];
-                    var r = p.getBoundingClientRect();
-                    if (r.width === 0 || r.height === 0) continue;
-                    var rel = replyBtn.compareDocumentPosition(p);
-                    if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-                    targetPanel = p;
-                    break;
-                  }
-                  if (!targetPanel) return false;
-                  var btns = targetPanel.querySelectorAll('button');
-                  for (var j = 0; j < btns.length; j++) {
-                    var t = (btns[j].textContent || '').trim();
-                    if (t === '发送' && !(btns[j] as any).disabled) {
-                      // ★ 修复：原子化点击 — scrollIntoView + 清覆盖 + click
-                      (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
-                      var br = btns[j].getBoundingClientRect();
-                      var cx = br.left + br.width / 2;
-                      var cy = br.top + br.height / 2;
-                      // 用 elementsFromPoint 找出所有覆盖元素（不只是 1 个），全部隐藏
-                      var stack = document.elementsFromPoint(cx, cy);
-                      for (var k = 0; k < stack.length; k++) {
-                        var el = stack[k];
-                        // 找到按钮或其祖先时停止
-                        if (el === btns[j] || (el as Element).contains(btns[j])) break;
-                        // 隐藏覆盖元素（排除 html/body）
-                        if (el && el !== document.documentElement && el !== document.body) {
-                          (el as HTMLElement).style.display = 'none';
+                    var pr = panels[i].getBoundingClientRect();
+                    if (pr.width === 0 || pr.height === 0) continue;
+                    var btns = panels[i].querySelectorAll('button');
+                    for (var j = 0; j < btns.length; j++) {
+                      var t = (btns[j].textContent || '').trim();
+                      if (t === '发送' && !(btns[j] as any).disabled) {
+                        var br = btns[j].getBoundingClientRect();
+                        if (br.width === 0 || br.height === 0) continue;
+                        (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
+                        br = btns[j].getBoundingClientRect();
+                        var cx = br.left + br.width / 2;
+                        var cy = br.top + br.height / 2;
+                        var stack = document.elementsFromPoint(cx, cy);
+                        for (var k = 0; k < stack.length; k++) {
+                          var el = stack[k];
+                          if (el === btns[j] || (el as Element).contains(btns[j])) break;
+                          if (el && el !== document.documentElement && el !== document.body) {
+                            (el as HTMLElement).style.display = 'none';
+                          }
                         }
+                        (btns[j] as HTMLElement).click();
+                        return true;
                       }
-                      (btns[j] as HTMLElement).click();
-                      return true;
                     }
                   }
                   return false;
-                }, { reason: 'evaluate 直接点击发送按钮', world: 'main', args: [btnCoords] });
+                }, { reason: 'evaluate 直接点击发送按钮', world: 'main' });
               } else {
-                return page.evaluate(function(params: {btnX: number; btnY: number}) {
-                  function findReplyBtn(): Element | null {
-                    var items = document.querySelectorAll('[class*="operations-"] [class*="item-"]');
-                    var best: Element | null = null, bestDist = Infinity;
-                    for (var i = 0; i < items.length; i++) {
-                      if ((items[i].textContent || '').trim() !== '回复') continue;
-                      var r = items[i].getBoundingClientRect();
-                      if (r.width === 0 || r.height === 0) continue;
-                      var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-                      var d = Math.hypot(cx - params.btnX, cy - params.btnY);
-                      if (d < bestDist) { bestDist = d; best = items[i]; }
-                    }
-                    return best;
-                  }
-                  var replyBtn = findReplyBtn();
-                  if (!replyBtn) return false;
+                return page.evaluate(function() {
+                  // ★ 修复：不依赖 btnCoords（scrollIntoView 后已陈旧），直接找可见 reply-content 面板中的"发送"按钮
                   var panels = document.querySelectorAll('[class*="reply-content-"]');
-                  var targetPanel: Element | null = null;
                   for (var i = 0; i < panels.length; i++) {
-                    var p = panels[i];
-                    var r = p.getBoundingClientRect();
-                    if (r.width === 0 || r.height === 0) continue;
-                    var rel = replyBtn.compareDocumentPosition(p);
-                    if (!(rel & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
-                    targetPanel = p;
-                    break;
-                  }
-                  if (!targetPanel) return false;
-                  var btns = targetPanel.querySelectorAll('button');
-                  for (var j = 0; j < btns.length; j++) {
-                    var t = (btns[j].textContent || '').trim();
-                    if (t === '发送' && !(btns[j] as any).disabled) {
-                      // ★ 修复：原子化点击 — scrollIntoView + 清覆盖 + click
-                      (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
-                      var br = btns[j].getBoundingClientRect();
-                      var cx = br.left + br.width / 2;
-                      var cy = br.top + br.height / 2;
-                      // 用 elementsFromPoint 找出所有覆盖元素（不只是 1 个），全部隐藏
-                      var stack = document.elementsFromPoint(cx, cy);
-                      for (var k = 0; k < stack.length; k++) {
-                        var el = stack[k];
-                        // 找到按钮或其祖先时停止
-                        if (el === btns[j] || (el as Element).contains(btns[j])) break;
-                        // 隐藏覆盖元素（排除 html/body）
-                        if (el && el !== document.documentElement && el !== document.body) {
-                          (el as HTMLElement).style.display = 'none';
+                    var pr = panels[i].getBoundingClientRect();
+                    if (pr.width === 0 || pr.height === 0) continue;
+                    var btns = panels[i].querySelectorAll('button');
+                    for (var j = 0; j < btns.length; j++) {
+                      var t = (btns[j].textContent || '').trim();
+                      if (t === '发送' && !(btns[j] as any).disabled) {
+                        var br = btns[j].getBoundingClientRect();
+                        if (br.width === 0 || br.height === 0) continue;
+                        (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
+                        br = btns[j].getBoundingClientRect();
+                        var cx = br.left + br.width / 2;
+                        var cy = br.top + br.height / 2;
+                        var stack = document.elementsFromPoint(cx, cy);
+                        for (var k = 0; k < stack.length; k++) {
+                          var el = stack[k];
+                          if (el === btns[j] || (el as Element).contains(btns[j])) break;
+                          if (el && el !== document.documentElement && el !== document.body) {
+                            (el as HTMLElement).style.display = 'none';
+                          }
                         }
+                        (btns[j] as HTMLElement).click();
+                        return true;
                       }
-                      (btns[j] as HTMLElement).click();
-                      return true;
                     }
                   }
                   return false;
-                }, { btnX: btnCoords.x, btnY: btnCoords.y });
+                });
               }
             })();
 
