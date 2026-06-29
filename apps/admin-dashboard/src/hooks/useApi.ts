@@ -2132,7 +2132,8 @@ export function useTestPlatform() {
 export function useTriggerMaterialRun() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post('/material-update/run').then((r) => r.data),
+    mutationFn: (params?: { styleDir?: string; count?: number }) =>
+      api.post('/material-update/run', params).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['material-status'] }),
   });
 }
