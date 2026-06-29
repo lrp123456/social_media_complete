@@ -528,18 +528,28 @@ export class BrowserManager {
       if (platform === 'kuaishou') return url.includes('kuaishou.com') || url.includes('cp.kuaishou.com');
       if (platform === 'xiaohongshu') return url.includes('xiaohongshu.com') || url.includes('creator.xiaohongshu.com');
       if (platform === 'tencent') return url.includes('channels.weixin.qq.com');
+      if (platform === 'pinterest') return url.includes('pinterest.com');
       return url.includes('douyin.com') || url.includes('creator.douyin.com');
     });
+
     // 排除登录标签页（有 __login_tab_mark__ 标记的不作为工作标签页）
+    // 同时排除仍在 passport 域名的标签页（登录跳转前的页面）
     for (const p of candidates) {
       try {
+        const url = p.url();
+        // C3: 跳过 passport 域名的页面（如 passport.kuaishou.com）
+        if (url.includes('passport.')) continue;
+
         const isLoginTab = await p.evaluate(() =>
           !!localStorage.getItem('__login_tab_mark__')
         );
         if (!isLoginTab) return p;
       } catch { continue; }
     }
-    return candidates[0];
+
+    // C1: 所有候选都是登录标签页时，返回 undefined（不返回 candidates[0]）
+    // 让 connect() 走新建标签页分支
+    return undefined;
   }
 
   async focusPage(windowId: string, platform: Platform = 'douyin'): Promise<Page | null> {

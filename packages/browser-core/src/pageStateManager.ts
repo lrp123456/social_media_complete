@@ -69,6 +69,14 @@ const TARGET_PAGES: Record<Platform, { urls: string[]; types: Record<string, str
       'www.tiktok.com/creator-tools': 'creator_home',
     },
   },
+  pinterest: {
+    urls: [
+      'www.pinterest.com',
+    ],
+    types: {
+      'www.pinterest.com': 'creator_home',
+    },
+  },
 };
 
 const MIN_REFRESH_INTERVAL_MS = 30_000;
