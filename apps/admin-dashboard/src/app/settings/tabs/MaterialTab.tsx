@@ -26,7 +26,13 @@ const DEFAULT_PLATFORM: Platform = {
   enabled: true,
   request: { method: 'GET', url: '', headers: {}, params: {}, body: null, maxPages: 1, timeoutMs: 30000 },
   keyPool: { placeholder: 'API_KEY', keys: [], cooldownMs: 300000 },
-  parse: { listPath: '', fields: {} },
+  parse: {
+    listPath: '',
+    fieldMap: {
+      videoId: '', title: '', likeCount: '', commentCount: '',
+      videoUrl: '', cover: '', author: '', publishTime: '',
+    },
+  },
 };
 
 export default function MaterialTab() {
@@ -72,7 +78,20 @@ export default function MaterialTab() {
 
   const removePlatform = (idx: number) => {
     if (!form) return;
-    setForm({ ...form, platforms: form.platforms.filter((_, i) => i !== idx) });
+    const removedId = form.platforms[idx]?.id;
+    const nextPlatforms = form.platforms.filter((_, i) => i !== idx);
+    const nextStyles = removedId
+      ? form.processing.styles.map((s) => {
+          if (!s.platformOverrides?.[removedId]) return s;
+          const { [removedId]: _, ...rest } = s.platformOverrides;
+          return { ...s, platformOverrides: rest };
+        })
+      : form.processing.styles;
+    setForm({
+      ...form,
+      platforms: nextPlatforms,
+      processing: { ...form.processing, styles: nextStyles },
+    });
   };
 
   const handleTest = (platform: Platform) => {
@@ -161,7 +180,11 @@ export default function MaterialTab() {
           </div>
           <div>
             <label className="text-sm font-semibold mb-2 block">风格列表</label>
-            <StyleListEditor styles={form.processing.styles} onChange={(styles: StyleDef[]) => setForm({ ...form, processing: { ...form.processing, styles } })} />
+            <StyleListEditor
+              styles={form.processing.styles}
+              platforms={form.platforms}
+              onChange={(styles: StyleDef[]) => setForm({ ...form, processing: { ...form.processing, styles } })}
+            />
           </div>
         </div>
       </section>
