@@ -160,7 +160,7 @@ model HotVideoCandidate {
         "url": "https://api.example.com/search",
         "headers": { "X-API-Key": "{{API_KEY}}" },
         "params": {},
-        "body": "{\"searchQueries\":[\"{{QUERY}}\"],\"resultsPerPage\":{{COUNT}}}",
+        "body": "{\"searchQueries\":[\"{{QUERY}}\"],\"resultsPerPage\":\"{{COUNT}}\"}",
         "maxPages": 1,
         "timeoutMs": 30000
       },
@@ -218,9 +218,14 @@ model HotVideoCandidate {
 - `materialUpdateConfig.ts`：类型定义更新（`fieldMap` 替代 `fields`，`StyleDef.platformOverrides`，`storage` 配置段）
 - `materialUpdateService.ts`：
   - `injectPlaceholders` 扩展支持 `{{QUERY}}` / `{{COUNT}}`
-  - body JSON 嵌套替换：先 `JSON.parse` → 递归遍历 string 值替换占位符 → `JSON.stringify`
+  - body JSON 嵌套替换：先 `JSON.parse` → 递归遍历 string 值替换占位符 → `JSON.stringify`（见 §5.2）
+  - **`fetchPlatform` 变更**：现有代码 `data: platform.request.body ? JSON.parse(platform.request.body) : undefined` 改为 `data: platform.request.body ? JSON.parse(injectBodyPlaceholders(platform.request.body, vars)) : undefined`——先注入占位符再 parse
   - `parseVideoList` 改用 `fieldMap`（8 字段固定键），返回 `ParsedVideo` 含 `likeCount` / `commentCount`
-- `materialParser.ts`：解析逻辑改用 `fieldMap`，`listPath` 仍是点路径定位数组，数组每项按 `fieldMap` 取值
+  - **并发安全修复**：`Promise.allSettled` 内不再异步修改 `mergedCooldownState`，改为收集所有平台结果后统一合并（见 §5.5）
+  - **`runMaterialUpdate` 签名变更**：接受可选参数 `{ styleDir?, count? }`，cron 触发无参数时遍历所有风格（见 §5.3）
+- `materialParser.ts`：
+  - 解析逻辑改用 `fieldMap`，`listPath` 仍是点路径定位数组，数组每项按 `fieldMap` 取值
+  - **`publishTime` 多格式兼容**：源值可能是 Unix 秒（10 位）、Unix 毫秒（13 位）、ISO 8601 字符串。解析时统一转为 `Date`：若 number 且 < 1e12 视为秒（×1000），若 number 且 ≥ 1e12 视为毫秒，若 string 尝试 `new Date()` 解析
 - 迁移脚本 `scripts/migrate-parse-fields.ts`：读取现有配置，按字段名匹配映射到 `fieldMap`
 
 **前端**：
@@ -230,9 +235,12 @@ model HotVideoCandidate {
 - `StyleListEditor.tsx`：每条风格下方加「按平台覆盖」可展开区
   - 展开后：列出当前所有平台，每平台一个 input（逗号分隔关键词）
   - 空值 = 用统一 `keywords`
+- **`MaterialTab.tsx` 删除平台时清理孤儿引用**：`removePlatform` 时遍历所有 `processing.styles`，删除 `platformOverrides[deletedPlatformId]`
 - `types/material.ts`：类型同步更新
 
 ### 5.2 占位符注入规则
+
+**关键约束**：body 模板中 `{{COUNT}}` **必须加引号**写成 `"{{COUNT}}"`，使整个 body 始终是合法 JSON。`deepReplaceStrings` 检测到整个字符串值等于 `"{{COUNT}}"` 时替换为 number 类型。
 
 ```ts
 // materialUpdateService.ts
@@ -260,7 +268,13 @@ function injectBodyPlaceholders(bodyStr: string, vars: Record<string, string>): 
 }
 
 function deepReplaceStrings(obj: any, vars: Record<string, string>): any {
-  if (typeof obj === 'string') return injectPlaceholders(obj, vars);
+  if (typeof obj === 'string') {
+    // 若整个字符串就是 {{COUNT}}，替换为 number 类型（保证 JSON 中是数字而非字符串）
+    if (obj === '{{COUNT}}') {
+      return parseInt(vars.COUNT, 10);
+    }
+    return injectPlaceholders(obj, vars);
+  }
   if (Array.isArray(obj)) return obj.map(v => deepReplaceStrings(v, vars));
   if (obj && typeof obj === 'object') {
     const result: any = {};
@@ -269,6 +283,19 @@ function deepReplaceStrings(obj: any, vars: Record<string, string>): any {
   }
   return obj;
 }
+```
+
+**fetchPlatform 中的调用**（B3 修复）：
+```ts
+// 现有代码（不注入占位符）：
+// data: platform.request.body ? JSON.parse(platform.request.body) : undefined,
+
+// PR1 变更后：
+const bodyStr = platform.request.body
+  ? injectBodyPlaceholders(platform.request.body, vars)
+  : undefined;
+// ...
+data: bodyStr ? JSON.parse(bodyStr) : undefined,
 ```
 
 ### 5.3 风格 → 查询词解析
@@ -282,16 +309,70 @@ function resolveQuery(style: StyleDef, platformId: string): string {
 ```
 
 当 `runMaterialUpdate` 接受 `{ styleDir?, count? }` 参数时：
-- 若指定 `styleDir`：找到对应 style，对每个平台调用 `resolveQuery(style, platform.id)` 得到 `{{QUERY}}`
-- 若未指定：`{{QUERY}}` 不注入（保留原文字面量 `{{QUERY}}` 在模板中）——这意味着 cron 定时触发时请求体里若有 `{{QUERY}}` 会原样发送。**建议**：cron 触发场景应在请求体中不使用 `{{QUERY}}`，或为每个风格分别配置 cron（后续可迭代）。手动触发时 `/material` 页面会强制要求选风格。
+- **手动触发**（`/material` 页面）：指定 `styleDir`，找到对应 style，对每个平台调用 `resolveQuery(style, platform.id)` 得到 `{{QUERY}}`
+- **cron 定时触发**（无参数）：**遍历所有风格**——对 `processing.styles` 中每个 style 执行一轮采集，每轮用该 style 的 `resolveQuery` 作为 `{{QUERY}}`。这样 cron 就是全风格覆盖，不会因缺 `{{QUERY}}` 导致空结果
+- **无风格的平台**（请求体不含 `{{QUERY}}`）：不受 style 遍历影响，每轮 cron 只执行一次
 - `{{COUNT}}` = `count` 参数或默认 `50`（固定常量，不与 `maxPages` 挂钩）
+
+```ts
+// cron 触发：无参数 → 遍历所有风格
+async function runMaterialUpdate(options?: { styleDir?: string; count?: number }) {
+  const config = getMaterialUpdateConfig();
+  const styles = options?.styleDir
+    ? [config.processing.styles.find(s => s.dir === options.styleDir)].filter(Boolean)
+    : config.processing.styles; // 无指定 → 全部风格
+
+  for (const style of styles) {
+    await runSingleRound(config, style, options?.count ?? 50);
+  }
+  // 若 styles 为空（用户未配置任何风格），仍执行一次（不注入 {{QUERY}}）
+  if (styles.length === 0) {
+    await runSingleRound(config, null, options?.count ?? 50);
+  }
+}
+```
 
 ### 5.4 测试
 
 - `injectPlaceholders` 单测：URL / params / headers / body(string) / body(JSON 嵌套) / 未匹配原样 / COUNT 不编码
-- `parseVideoList` 单测：8 字段全映射 / 缺失字段返回 null / 嵌套路径 `stats.diggCount` / 数组展开
+- `injectBodyPlaceholders` 单测：`"{{COUNT}}"` → number 50（不是 string `"50"`） / `{{QUERY}}` 嵌套在数组中 / body 非法 JSON 时走纯字符串替换
+- `parseVideoList` 单测：8 字段全映射 / 缺失字段返回 null / 嵌套路径 `stats.diggCount` / 数组展开 / `publishTime` 三种格式（秒/毫秒/ISO）
 - `resolveQuery` 单测：有 platformOverrides / 无 platformOverrides 回退 / 空关键词
+- `runMaterialUpdate` cron 遍历单测：无参数时遍历所有 styles / 有 styleDir 时只执行一个
 - `migrate-parse-fields` 单测：已知字段名匹配 / 未知字段名留空
+
+### 5.5 并发安全修复（B5）
+
+**现有代码问题**：`Promise.allSettled` 内部异步修改 `mergedCooldownState`，并发平台间存在竞态。
+
+```ts
+// 现有代码（有竞态）：
+let mergedCooldownState = { ...config.keyCooldownState };
+const platformResults = await Promise.allSettled(
+  enabledPlatforms.map(async (platform) => {
+    const result = await fetchPlatform(platform, config, mergedCooldownState);
+    mergedCooldownState = result.newCooldownState; // ← 竞态！
+    return { platform, videos: result.videos };
+  }),
+);
+
+// PR1 修复后：
+const initialCooldownState = { ...config.keyCooldownState };
+const platformResults = await Promise.allSettled(
+  enabledPlatforms.map(async (platform) => {
+    // 每个平台用初始状态独立执行，不共享可变引用
+    const result = await fetchPlatform(platform, config, initialCooldownState);
+    return { platform, videos: result.videos, cooldownState: result.newCooldownState };
+  }),
+);
+// 收集所有结果后统一合并
+const finalCooldownState = platformResults
+  .filter((r): r is PromiseFulfilledResult<any> => r.status === 'fulfilled')
+  .reduce((acc, r) => ({ ...acc, ...r.value.cooldownState }), initialCooldownState);
+saveKeyCooldownState(finalCooldownState);
+```
+
+**说明**：每个平台独立从初始冷却状态开始执行，互不影响。执行完后再统一合并——即使平台 A 的 key 冷却了，平台 B 不会在执行期间看到 A 的中间状态。冷却状态按 `platformId` 分隔，合并时不会覆盖。
 
 ## 6. PR2 — 视频下载 + DB 扩列
 
@@ -310,7 +391,7 @@ function resolveQuery(style: StyleDef, platformId: string): string {
   - 流式拉取：Node `https`/`http` 模块 + `fs.createWriteStream`，避免大视频撑爆内存
 - `materialUpdateService.ts`：
   - `dispatchToPython` 之前先调 `downloadVideo`，更新 DB `storagePath` + `storageStatus='pending_downloaded'`
-  - 下载失败：`storageStatus='failed'` + `failReason`，仍下发 Python（让 Python 回退用 `video_url`）
+  - **下载失败（S5 修复）**：`storageStatus='failed'` + `failReason`，**不下发 Python Worker**——直接标记候选为 `status='rejected'`，避免 Python 端重复下载也失败导致候选永久卡 `processing`。仅当 `storage.enabled=false` 时跳过下载、仍用 `video_url` 下发 Python（向后兼容）
   - payload 改为传 `local_path`（绝对路径）而非 `video_url`
 - `routes/material-update.ts` webhook handler：
   - `status=accepted` 且有 `style` → `archiveVideo` 移动文件 → 更新 `storagePath` + `storageStatus='archived'` + `acceptedAt` + `rating`（从 webhook payload 的 `result.rating` 提取）
@@ -339,15 +420,37 @@ export async function downloadVideo(
   platformId: string,
   videoId: string,
 ): Promise<string> {
+  // B2 安全修复：videoId 白名单校验，防止路径遍历攻击
+  const safeVideoId = sanitizeVideoId(videoId);
+  const safePlatformId = sanitizeVideoId(platformId); // platformId 同样校验
+
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const dir = path.join(rootPath, platformId, '_pending', date);
+  const dir = path.join(rootPath, safePlatformId, '_pending', date);
   await fs.promises.mkdir(dir, { recursive: true });
   
-  const filePath = path.join(dir, `${videoId}.mp4`);
-  const relativePath = path.join(platformId, '_pending', date, `${videoId}.mp4`);
+  const filePath = path.join(dir, `${safeVideoId}.mp4`);
+  const relativePath = path.join(safePlatformId, '_pending', date, `${safeVideoId}.mp4`);
+
+  // 二次验证：确保路径未逃逸根目录
+  const resolvedPath = path.resolve(filePath);
+  const resolvedRoot = path.resolve(rootPath);
+  if (!resolvedPath.startsWith(resolvedRoot)) {
+    throw new Error(`路径遍历检测：${videoId} 导致路径逃逸 ${rootPath}`);
+  }
 
   await downloadWithRetry(videoUrl, filePath, 2);
   return relativePath;
+}
+
+/** videoId 白名单校验：仅允许字母、数字、下划线、短横线，长度 ≤ 64 */
+function sanitizeVideoId(id: string): string {
+  if (!id || id.length > 64) {
+    throw new Error(`无效 ID: 长度超限或为空`);
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw new Error(`无效 ID: 包含非法字符: ${id}`);
+  }
+  return id;
 }
 
 async function downloadWithRetry(url: string, dest: string, retries: number): Promise<void> {
@@ -390,17 +493,29 @@ function streamDownload(url: string, dest: string, maxRedirects = 5): Promise<vo
 }
 ```
 
-### 6.3 已知限制
+### 6.3 _pending 孤儿文件清理（S2 修复）
+
+webhook 丢失或 Python Worker 崩溃时，视频文件会永久留在 `_pending/` 目录。新增定时清理：
+
+- `materialUpdateScheduler.ts` 中加日清理任务（每天 04:00 执行一次）：
+  - 扫描 `{root}/{platform}/_pending/` 下超过 7 天的文件
+  - 检查对应 DB 记录：若 `storageStatus='pending_downloaded'` 且 `fetchedAt` 超 7 天 → 删除文件 + `storageStatus='none'` + `storagePath=NULL` + `failReason='pending_cleanup_expired'`
+  - 若 DB 中已无记录（被手动删除）→ 直接删文件
+- 清理日志写入 `logger.info`
+
+### 6.4 已知限制
 
 - 视频源 URL 若需鉴权（CDN 签名、cookie），当前不支持——仅支持公开 URL
 - Python Worker 需与 TS 网关挂载同一磁盘卷（Docker volume 配置）
-- 磁盘容量监控仅做只读展示，不自动清理
+- 磁盘容量监控仅做只读展示，不自动清理（仅定时清理 `_pending` 过期文件）
 
-### 6.4 测试
+### 6.5 测试
 
-- `videoStorageService` 单测：mock http 响应、流式写入、移动文件、删除文件、重试逻辑
-- webhook handler 单测：accepted 移动文件 / rejected 删除文件 / 无 storagePath 的容错
+- `videoStorageService` 单测：mock http 响应、流式写入、移动文件、删除文件、重试逻辑、**videoId 路径遍历拦截**、重定向跟随
+- webhook handler 单测：accepted 移动文件 / rejected 删除文件 / 无 storagePath 的容错 / rating 写入
 - end-to-end：采集 → 落 pending → webhook accept → 验证文件在 style 目录 + DB 更新
+- **下载失败单测**：下载失败时候选标记为 rejected，不下发 Python
+- **pending 清理单测**：7 天以上文件被删除 + DB 状态更新
 
 ## 7. PR3 — 0/0 状态 StatusPill + 跳转
 
@@ -496,7 +611,7 @@ Bento 12 列网格，左 4 / 右 8（沿用现有风格 token）。
 ```
 
 - 顶栏 filter：风格 / 平台 / 状态（pending / processing / accepted / rejected）
-- 列表：来自 `useMaterials`（已有 hook），按 `acceptedAt` 或 `fetchedAt` 倒序
+- 列表：来自 `useMaterialCandidates`（已有 hook，扩列返回新字段），按 `acceptedAt` 或 `fetchedAt` 倒序
 - 卡片信息：cover / title / 作者 / 平台 / 风格 / quality（来自 LLM 评级）/ storagePath（点击复制）
 - 「重跑 LLM」按钮：单条重新评估（POST 新 endpoint `/material-update/reprocess/{id}`）
 - 「打开文件」按钮：若有 `storagePath`，显示路径 tooltip（浏览器无法直接打开本地文件）
@@ -504,11 +619,12 @@ Bento 12 列网格，左 4 / 右 8（沿用现有风格 token）。
 ### 8.3 后端接口变更
 
 - `POST /material-update/run` 接受可选 body `{ styleDir?: string, count?: number }`
-  - 若指定 `styleDir`：`runMaterialUpdate` 对每个平台用 `resolveQuery` 得到 `{{QUERY}}`
+  - 若指定 `styleDir`：`runMaterialUpdate` 只用该风格作为 `{{QUERY}}`
+  - 若未指定 `styleDir`：遍历所有风格（见 §5.3 cron 逻辑）
   - 若指定 `count`：作为 `{{COUNT}}` 注入
-  - 若未指定：`{{QUERY}}` = 空，`{{COUNT}}` = 默认值
-- `GET /materials` 扩列返回：`storagePath, storageStatus, likeCount, commentCount, acceptedAt`
-- 新增 `POST /material-update/reprocess/:id`：重新下发单条候选到 Python Worker
+  - 若未指定 `count`：`{{COUNT}}` = 默认值 `50`
+- **端点路由明确（S4 修复）**：`/material` 页面资产库面板使用 `GET /material-update/candidates`（现有端点），不使用 `GET /materials`（后者是独立素材库，非候选视频）。`candidates` 端点扩列返回：`storagePath, storageStatus, likeCount, commentCount, rating, acceptedAt`。前端 `useMaterialCandidates` hook 类型同步扩展
+- 新增 `POST /material-update/reprocess/:id`：重新下发单条候选到 Python Worker（仅 `status=accepted/rejected` 的可触发）
 
 ### 8.4 前端类型变更
 
@@ -559,8 +675,8 @@ PR3（0/0 状态 StatusPill）—— 可与 PR2 并行
 PR4（/material 页面重设计）—— 依赖 PR1+PR2+PR3
 ```
 
-- PR1 必须先做：后续 PR 依赖新的 `fieldMap` 和占位符
-- PR2 和 PR3 可并行：PR2 改后端下载管线，PR3 改前端状态展示，无冲突
+- PR1 必须先做：后续 PR 依赖新的 `fieldMap`、占位符和并发安全修复
+- **PR2 和 PR3 串行（B4 修复）**：两者都修改 `materialUpdateService.ts` 的 `runState` / `runMaterialUpdate`，PR3 必须基于 PR2 分支开发，否则合并冲突
 - PR4 最后做：依赖前三个 PR 的后端接口
 
 ## 10. 风险与缓解
@@ -571,38 +687,28 @@ PR4（/material 页面重设计）—— 依赖 PR1+PR2+PR3
 | Python Worker 读本地文件需共享卷 | Docker 部署 | docker-compose.yml 配置 volume 挂载 |
 | 现有 `parse.fields` 配置迁移 | 用户需重配 | 迁移脚本尝试按字段名匹配；匹配不上的留空 + UI 提示 |
 | 大视频撑爆内存 | 网关 OOM | 流式下载（`pipe` 而非 `buffer`） |
-| 磁盘满 | 下载失败 | PR2 加磁盘使用量只读展示；后续可加自动清理 |
-| body JSON 占位符替换破坏结构 | 采集失败 | `deepReplaceStrings` 仅替换 string 值，不碰 number/boolean/null |
-| `{{COUNT}}` 在 JSON 中需是数字 | `resultsPerPage: "50"` 而非 `50` | `injectPlaceholders` 对 COUNT 不加引号；但 JSON.parse 后 string "50" 仍是 string — 需在 `deepReplaceStrings` 中对 COUNT 做特殊处理：若父字段值是纯 `{{COUNT}}`，替换为 number |
+| 磁盘满 | 下载失败 | PR2 加磁盘使用量只读展示；定时清理 `_pending` 过期文件（§6.3） |
+| body JSON 占位符替换破坏结构 | 采集失败 | `deepReplaceStrings` 仅替换 string 值；`{{COUNT}}` 加引号写成 `"{{COUNT}}"`，替换时转 number（§5.2） |
+| `videoId` 路径遍历攻击 | 任意文件写入 | `sanitizeVideoId` 白名单校验 + `path.resolve` 二次验证（§6.2） |
+| 下载失败 Python 端重复失败 | 候选永久卡 processing | 下载失败直接标记 rejected，不下发 Python（§6.1 S5 修复） |
+| webhook 丢失/Python 崩溃 | 孤儿文件占磁盘 | 定时清理 7 天以上 `_pending` 文件（§6.3 S2 修复） |
 
-### 10.1 COUNT 在 JSON 中的特殊处理
+### 10.1 并发采集安全
 
-```ts
-function deepReplaceStrings(obj: any, vars: Record<string, string>): any {
-  if (typeof obj === 'string') {
-    // 若整个字符串就是 {{COUNT}}，替换为 number
-    if (obj === '{{COUNT}}') {
-      return parseInt(vars.COUNT, 10);
-    }
-    return injectPlaceholders(obj, vars);
-  }
-  if (Array.isArray(obj)) return obj.map(v => deepReplaceStrings(v, vars));
-  if (obj && typeof obj === 'object') {
-    const result: any = {};
-    for (const [k, v] of Object.entries(obj)) result[k] = deepReplaceStrings(v, vars);
-    return result;
-  }
-  return obj;
-}
-```
+`runMaterialUpdate` 中并发采集多平台时，冷却状态合并已改为「先收集后合并」（见 §5.5），避免 `Promise.allSettled` 内异步修改共享变量。
 
 ## 11. 验收标准
 
 ### PR1 验收
 - [ ] 在 PlatformCard 中配置 8 字段映射，测试请求能正确解析出视频列表
-- [ ] 在请求体中写 `{"searchQueries":["{{QUERY}}"],"resultsPerPage":{{COUNT}}}`，切换风格后 `{{QUERY}}` 正确替换
-- [ ] `{{COUNT}}` 在 JSON 中替换为 number 类型（不是 string）
+- [ ] 在请求体中写 `{"searchQueries":["{{QUERY}}"],"resultsPerPage":"{{COUNT}}"}`（COUNT 加引号），切换风格后 `{{QUERY}}` 正确替换
+- [ ] `{{COUNT}}` 在 JSON 中替换为 number 类型（不是 string `"50"`）
+- [ ] `fetchPlatform` 中 body 先经 `injectBodyPlaceholders` 处理再 `JSON.parse`
 - [ ] 现有 `parse.fields` 配置迁移脚本运行后，`fieldMap` 正确填充
+- [ ] `publishTime` 支持 Unix 秒/毫秒/ISO 三种格式
+- [ ] cron 触发时遍历所有风格
+- [ ] 并发采集时冷却状态无竞态（`Promise.allSettled` 内不修改共享变量）
+- [ ] 删除平台时 `platformOverrides` 孤儿引用被清理
 
 ### PR2 验收
 - [ ] 采集后视频文件出现在 `{root}/{platform}/_pending/{date}/{videoId}.mp4`
@@ -610,7 +716,12 @@ function deepReplaceStrings(obj: any, vars: Record<string, string>): any {
 - [ ] Python Worker 收到 `local_path` 并能读取本地文件
 - [ ] webhook accepted 后文件移动到 `{root}/{platform}/{styleDir}/{date}/{videoId}.mp4`
 - [ ] webhook rejected 后 pending 文件被删除
-- [ ] 下载失败时 `storageStatus='failed'` + `failReason` 记录
+- [ ] 下载失败时 `storageStatus='failed'` + `failReason` 记录，**候选直接标记 rejected，不下发 Python**
+- [ ] `videoId` 包含 `../` 等非法字符时被 `sanitizeVideoId` 拦截
+- [ ] 7 天以上 `_pending` 文件被定时清理任务删除
+- [ ] 302 重定向 URL 能正确跟随下载，**不下发 Python**
+- [ ] `videoId` 含 `../` 等非法字符时被 `sanitizeVideoId` 拦截
+- [ ] 7 天以上 `_pending` 文件被定时清理 + DB 状态更新
 
 ### PR3 验收
 - [ ] 平台 `keys=[]` 且 `enabled=true` 时，运行状态面板显示「未配置 API Key」StatusPill
