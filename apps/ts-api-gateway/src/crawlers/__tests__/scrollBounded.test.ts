@@ -83,32 +83,30 @@ describe('scrollCommentArea bounded', () => {
 
 describe('tryExpandMoreAndScroll reads document bottom', () => {
   beforeEach(() => {
+    cdpSmartScrollMock.mockClear();
     getScrollStateMock.mockClear();
   });
 
-  it('false when bottom reached', async () => {
+  it('returns false when document at bottom (not tabs-content)', async () => {
     getScrollStateMock.mockResolvedValue({ scrollY: 1747, clientHeight: 1305, scrollHeight: 3052 });
-    const page = { evaluate: jest.fn().mockResolvedValue(false) } as any;
-    const crawler: any = new DouyinCrawler('fp_test');
+    const page = { evaluate: jest.fn().mockResolvedValue(null) } as any;
+    const crawler = new DouyinCrawler('fp_test') as any;
     crawler.injectEsbuildPolyfill = jest.fn().mockResolvedValue(undefined);
-    crawler.scrollCommentArea = jest.fn().mockResolvedValue(true);
-
-    const result = await crawler.tryExpandMoreAndScroll(page, 0);
-    expect(result).toBe(false);
-    expect(crawler.scrollCommentArea).not.toHaveBeenCalled();
+    const result = await crawler.tryExpandMoreAndScroll(page, 1);
+    expect(result).toBe(false); // 1747+1305=3052 >= 3052-10 → 到底
+    expect(cdpSmartScrollMock).not.toHaveBeenCalled();  // 到底不滚
   });
 
-  it('true when not bottom, calls scrollCommentArea', async () => {
+  it('scrolls page (empty selectors) and returns true when not at bottom', async () => {
     getScrollStateMock.mockResolvedValue({ scrollY: 800, clientHeight: 1305, scrollHeight: 3052 });
-    const page = { evaluate: jest.fn().mockResolvedValue(false) } as any;
-    const crawler: any = new DouyinCrawler('fp_test');
+    const page = { evaluate: jest.fn().mockResolvedValue(null) } as any;
+    const crawler = new DouyinCrawler('fp_test') as any;
     crawler.injectEsbuildPolyfill = jest.fn().mockResolvedValue(undefined);
-    crawler.scrollCommentArea = jest.fn().mockResolvedValue(true);
-
-    const result = await crawler.tryExpandMoreAndScroll(page, 0);
+    const result = await crawler.tryExpandMoreAndScroll(page, 1);
     expect(result).toBe(true);
-    expect(crawler.scrollCommentArea).toHaveBeenCalledTimes(1);
-    // scrollCommentArea 被调用时第二个参数 ≈ clientHeight * 0.6 = 783
-    expect(crawler.scrollCommentArea.mock.calls[0][1]).toBeCloseTo(783, -1);
+    // ★ 关键断言：走空 selectors 强制页面滚动（不走 inner 容器）
+    expect(cdpSmartScrollMock).toHaveBeenCalledWith(
+      page, [], expect.any(Number), 'down'
+    );
   });
 });
