@@ -148,7 +148,7 @@ export default function MaterialTab() {
         <div className="p-4 space-y-3">
           {form.platforms.length === 0 && <p className="text-sm text-on-surface-variant italic text-center py-4">尚未配置采集平台，点击「新增平台」开始</p>}
           {form.platforms.map((p, i) => (
-            <PlatformCard key={p.id} platform={p} onChange={(np) => updatePlatform(i, np)} onRemove={() => removePlatform(i)} onTest={() => handleTest(p)} testing={testingPlatformId === p.id} testResult={testResults[p.id] || null} keyChips={getKeyChips(p.id)} />
+            <PlatformCard key={p.id} platform={p} onChange={(np) => updatePlatform(i, np)} onRemove={() => removePlatform(i)} onTest={() => handleTest(p)} testing={testingPlatformId === p.id} testResult={testResults[p.id] || null} keyChips={getKeyChips(p.id)} hasWarning={!!statusQuery.data?.warnings?.find((w: any) => w.platformId === p.id)} />
           ))}
         </div>
       </section>
