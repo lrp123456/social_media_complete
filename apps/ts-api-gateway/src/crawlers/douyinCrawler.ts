@@ -4520,7 +4520,8 @@ export class DouyinCrawler {
               var t = (btns[j].textContent || '').trim();
               if (t === '发送' && !(btns[j] as any).disabled) {
                 // ★ 修复：发送按钮可能在视口外（y > viewportHeight）→ scrollIntoView 后再读坐标
-                (btns[j] as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+                // block:'start' 把按钮滚到视口顶部，远离右下角客服悬浮窗
+                (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
                 var br = btns[j].getBoundingClientRect();
                 return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
               }
@@ -4564,7 +4565,8 @@ export class DouyinCrawler {
               var t = (btns[j].textContent || '').trim();
               if (t === '发送' && !(btns[j] as any).disabled) {
                 // ★ 修复：发送按钮可能在视口外（y > viewportHeight）→ scrollIntoView 后再读坐标
-                (btns[j] as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+                // block:'start' 把按钮滚到视口顶部，远离右下角客服悬浮窗
+                (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
                 var br = btns[j].getBoundingClientRect();
                 return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
               }
@@ -4773,6 +4775,22 @@ export class DouyinCrawler {
                   for (var j = 0; j < btns.length; j++) {
                     var t = (btns[j].textContent || '').trim();
                     if (t === '发送' && !(btns[j] as any).disabled) {
+                      // ★ 修复：原子化点击 — scrollIntoView + 清覆盖 + click
+                      (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
+                      var br = btns[j].getBoundingClientRect();
+                      var cx = br.left + br.width / 2;
+                      var cy = br.top + br.height / 2;
+                      // 用 elementsFromPoint 找出所有覆盖元素（不只是 1 个），全部隐藏
+                      var stack = document.elementsFromPoint(cx, cy);
+                      for (var k = 0; k < stack.length; k++) {
+                        var el = stack[k];
+                        // 找到按钮或其祖先时停止
+                        if (el === btns[j] || (el as Element).contains(btns[j])) break;
+                        // 隐藏覆盖元素（排除 html/body）
+                        if (el && el !== document.documentElement && el !== document.body) {
+                          (el as HTMLElement).style.display = 'none';
+                        }
+                      }
                       (btns[j] as HTMLElement).click();
                       return true;
                     }
@@ -4812,6 +4830,22 @@ export class DouyinCrawler {
                   for (var j = 0; j < btns.length; j++) {
                     var t = (btns[j].textContent || '').trim();
                     if (t === '发送' && !(btns[j] as any).disabled) {
+                      // ★ 修复：原子化点击 — scrollIntoView + 清覆盖 + click
+                      (btns[j] as HTMLElement).scrollIntoView({ block: 'start', behavior: 'instant' });
+                      var br = btns[j].getBoundingClientRect();
+                      var cx = br.left + br.width / 2;
+                      var cy = br.top + br.height / 2;
+                      // 用 elementsFromPoint 找出所有覆盖元素（不只是 1 个），全部隐藏
+                      var stack = document.elementsFromPoint(cx, cy);
+                      for (var k = 0; k < stack.length; k++) {
+                        var el = stack[k];
+                        // 找到按钮或其祖先时停止
+                        if (el === btns[j] || (el as Element).contains(btns[j])) break;
+                        // 隐藏覆盖元素（排除 html/body）
+                        if (el && el !== document.documentElement && el !== document.body) {
+                          (el as HTMLElement).style.display = 'none';
+                        }
+                      }
                       (btns[j] as HTMLElement).click();
                       return true;
                     }
