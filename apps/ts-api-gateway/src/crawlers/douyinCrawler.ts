@@ -3580,15 +3580,40 @@ export class DouyinCrawler {
     // 'top' / 'bottom'：有界滚动 + 到顶/到底即停
     // 通过 CDP Page.getLayoutMetrics 读取 document 滚动状态，不再依赖特定容器选择器
     const dir = direction === 'top' ? 'up' : 'down';
+
+    // ★ 前置边界检查：已在边界时跳过滚动，避免不必要的动画抖动
+    const initialState = await HumanActions.cdpGetDocumentScrollState(page);
+    if (initialState) {
+      if (direction === 'top' && initialState.scrollY <= 0) {
+        logger.info({ direction, scrollY: initialState.scrollY }, '[scrollCommentArea] already at boundary, skipping');
+        return true;
+      }
+      if (direction === 'bottom' && initialState.scrollY + initialState.clientHeight >= initialState.scrollHeight - 10) {
+        logger.info({ direction, scrollY: initialState.scrollY }, '[scrollCommentArea] already at boundary, skipping');
+        return true;
+      }
+    }
+
     for (let round = 0; round < SCROLL_MAX_ROUNDS; round++) {
-      await HumanActions.cdpSmartScroll(page, selectors, SCROLL_BOUNDED_PX, dir);
+      // ★ 修复：与 tryExpandMoreAndScroll 同模式，传空 selectors 使 cdpSmartScroll 直接 scrollPage
+      await HumanActions.cdpSmartScroll(page, [], SCROLL_BOUNDED_PX, dir);
       await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
 
       // 读取 document 滚动状态
       const state = await HumanActions.cdpGetDocumentScrollState(page);
-      if (!state) break;
-      if (direction === 'top' && state.scrollY <= 0) break;
-      if (direction === 'bottom' && state.scrollY + state.clientHeight >= state.scrollHeight - 10) break;
+      if (!state) {
+        logger.warn({ round, direction }, '[scrollCommentArea] document state read failed, abort');
+        break;
+      }
+      if (direction === 'top' && state.scrollY <= 0) {
+        logger.info({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] reached top/bottom');
+        break;
+      }
+      if (direction === 'bottom' && state.scrollY + state.clientHeight >= state.scrollHeight - 10) {
+        logger.info({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] reached top/bottom');
+        break;
+      }
+      logger.debug({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] round state');
     }
 
     logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
@@ -5009,21 +5034,46 @@ export class DouyinCrawler {
 
       // ── B. 如果目标就是根评论 → 直接返回该根评论的"回复"按钮坐标 ──
       if (target.level === 1) {
-        let replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
-        if (!replyBtn) {
-          // 按钮在视口外 → 滚 root 到视口中间再重试
-          logger.warn('[Reply::Find] Root found but reply btn off-viewport, scrolling into view');
-          await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
-          await HumanActions.wait(page, 300, 600);
-          replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
-        }
-        if (replyBtn) {
+        // ★ 修复：findRootCommentByUsernameContent 已在同一次 evaluate 内找到回复按钮，直接消费
+        if (rootMatch.replyBtn) {
           logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located');
-          return replyBtn;
+          return rootMatch.replyBtn;
         }
-        // 仍找不到：返回 null 让外层循环继续 tryExpandMoreAndScroll 加载更多，
-        // 而不是回退到 root 中心导致 replyToComment 整页搜时点到错评论。
-        logger.warn('[Reply::Find] Root found but reply btn still missing after scrollIntoView');
+
+        // replyBtn 为 null：滚 root 到视口中间，再按内容重新匹配（不依赖 :nth-child）
+        logger.warn('[Reply::Find] Root found but reply btn not found, scrolling into view');
+        await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
+        await HumanActions.wait(page, 300, 600);
+
+        const rootMatch2 = await this.findRootCommentByUsernameContent(page, target, rootContainerSels);
+        if (rootMatch2?.replyBtn) {
+          logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located after scroll');
+          return rootMatch2.replyBtn;
+        }
+
+        // ── 诊断：收集 HTML 帮助定位 ↕ ──
+        const htmlDiag = await (async () => {
+          if (isAntiDetectionV2()) {
+            return await HumanActions.safeEvaluate(page, function(sel: string) {
+              var container = document.querySelector(sel);
+              if (!container) return { containerOuter: null, operationsHtml: null };
+              var containerOuter = container.outerHTML.substring(0, 1500);
+              var opsEl = container.querySelector('[class*="operations-"]');
+              var operationsHtml = opsEl ? opsEl.outerHTML.substring(0, 1500) : null;
+              return { containerOuter, operationsHtml };
+            }, { reason: '诊断回复按钮HTML', world: 'main', args: [rootMatch.containerSel] }) as unknown as { containerOuter: string | null; operationsHtml: string | null };
+          } else {
+            return await page.evaluate(function(sel) {
+              var container = document.querySelector(sel);
+              if (!container) return { containerOuter: null, operationsHtml: null };
+              var containerOuter = container.outerHTML.substring(0, 1500);
+              var opsEl = container.querySelector('[class*="operations-"]');
+              var operationsHtml = opsEl ? opsEl.outerHTML.substring(0, 1500) : null;
+              return { containerOuter, operationsHtml };
+            }, rootMatch.containerSel) as unknown as { containerOuter: string | null; operationsHtml: string | null };
+          }
+        })();
+        logger.error({ containerSel: rootMatch.containerSel, htmlDiag }, '[Reply::Find] Root found but reply btn still missing after scrollIntoView');
         return null;
       }
 
@@ -5095,6 +5145,7 @@ export class DouyinCrawler {
   ): Promise<{
     x: number; y: number; containerSel: string;
     isExpanded: boolean; subReplyCountInPage: number;
+    replyBtn: { x: number; y: number } | null;
   } | null> {
     await this.injectEsbuildPolyfill(page);
     // ★ Bugfix: level=2 时用 root* 字段匹配根评论，level=1 时用 target 字段
@@ -5127,6 +5178,22 @@ export class DouyinCrawler {
         var sels = params.sels;
         var vh = window.innerHeight;
 
+        function findReplyBtnIn(container: Element, vh: number): { x: number; y: number } | null {
+          var opsAreas = container.querySelectorAll('[class*="operations-"]');
+          for (var oi = 0; oi < opsAreas.length; oi++) {
+            var items = opsAreas[oi].querySelectorAll('[class*="item-"]');
+            for (var ri = 0; ri < items.length; ri++) {
+              if ((items[ri].textContent || '').trim() === '回复') {
+                var r = (items[ri] as HTMLElement).getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.top < vh) {
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                }
+              }
+            }
+          }
+          return null;
+        }
+
         for (var si = 0; si < sels.length; si++) {
           var containers = document.querySelectorAll(sels[si]);
           for (var ci = 0; ci < containers.length; ci++) {
@@ -5190,6 +5257,14 @@ export class DouyinCrawler {
             if (rect.top < vh && rect.bottom > 0 && rect.width > 0 && rect.height > 0) {
               var containerSel = sels[si] + ':nth-child(' + (ci + 1) + ')';
 
+              // ★ 在匹配容器内查找"回复"按钮坐标（用容器 DOM 引用，不依赖 :nth-child / elementFromPoint）
+              var replyBtn = findReplyBtnIn(container, vh);
+              // 回复按钮不可见（视口外）→ 滚入视口中央再找一次
+              if (!replyBtn) {
+                (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+                replyBtn = findReplyBtnIn(container, vh);
+              }
+
               if (foundSubReplyCount < 0 && isExpanded) {
                 foundSubReplyCount = subReplyCount >= 0 ? subReplyCount : 0;
               }
@@ -5200,12 +5275,13 @@ export class DouyinCrawler {
                 containerSel: containerSel,
                 isExpanded: isExpanded,
                 subReplyCountInPage: foundSubReplyCount >= 0 ? foundSubReplyCount : 0,
+                replyBtn: replyBtn,
               };
             }
           }
         }
         return null;
-      }, { reason: '通过用户名+内容匹配根评论', world: 'main', args: [{ username: targetUsername, text: targetText, subReplyCount: targetSubReplyCount, sels: containerSels }] }) as { x: number; y: number; containerSel: string; isExpanded: boolean; subReplyCountInPage: number; } | null;
+      }, { reason: '通过用户名+内容匹配根评论', world: 'main', args: [{ username: targetUsername, text: targetText, subReplyCount: targetSubReplyCount, sels: containerSels }] }) as { x: number; y: number; containerSel: string; isExpanded: boolean; subReplyCountInPage: number; replyBtn: { x: number; y: number } | null; } | null;
     } else {
       return await page.evaluate(function(params) {
         var username = params.username;
@@ -5214,6 +5290,22 @@ export class DouyinCrawler {
         var sels = params.sels;
         var vh = window.innerHeight;
 
+        function findReplyBtnIn(container: Element, vh: number): { x: number; y: number } | null {
+          var opsAreas = container.querySelectorAll('[class*="operations-"]');
+          for (var oi = 0; oi < opsAreas.length; oi++) {
+            var items = opsAreas[oi].querySelectorAll('[class*="item-"]');
+            for (var ri = 0; ri < items.length; ri++) {
+              if ((items[ri].textContent || '').trim() === '回复') {
+                var r = (items[ri] as HTMLElement).getBoundingClientRect();
+                if (r.width > 0 && r.height > 0 && r.top < vh) {
+                  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+                }
+              }
+            }
+          }
+          return null;
+        }
+
         for (var si = 0; si < sels.length; si++) {
           var containers = document.querySelectorAll(sels[si]);
           for (var ci = 0; ci < containers.length; ci++) {
@@ -5277,6 +5369,14 @@ export class DouyinCrawler {
             if (rect.top < vh && rect.bottom > 0 && rect.width > 0 && rect.height > 0) {
               var containerSel = sels[si] + ':nth-child(' + (ci + 1) + ')';
 
+              // ★ 在匹配容器内查找"回复"按钮坐标（用容器 DOM 引用，不依赖 :nth-child / elementFromPoint）
+              var replyBtn = findReplyBtnIn(container, vh);
+              // 回复按钮不可见（视口外）→ 滚入视口中央再找一次
+              if (!replyBtn) {
+                (container as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
+                replyBtn = findReplyBtnIn(container, vh);
+              }
+
               if (foundSubReplyCount < 0 && isExpanded) {
                 foundSubReplyCount = subReplyCount >= 0 ? subReplyCount : 0;
               }
@@ -5287,6 +5387,7 @@ export class DouyinCrawler {
                 containerSel: containerSel,
                 isExpanded: isExpanded,
                 subReplyCountInPage: foundSubReplyCount >= 0 ? foundSubReplyCount : 0,
+                replyBtn: replyBtn,
               };
             }
           }
@@ -5297,7 +5398,7 @@ export class DouyinCrawler {
         text: targetText,
         subReplyCount: targetSubReplyCount,
         sels: containerSels,
-      });
+      }) as { x: number; y: number; containerSel: string; isExpanded: boolean; subReplyCountInPage: number; replyBtn: { x: number; y: number } | null; } | null;
     }
   }
 
@@ -5307,11 +5408,87 @@ export class DouyinCrawler {
   private async findReplyBtnInContainer(
     page: Page,
     containerSel: string,
+    fallbackCoords?: { x: number; y: number },
   ): Promise<{ x: number; y: number } | null> {
     await this.injectEsbuildPolyfill(page);
+    // ── 诊断收集：诊断回复按钮找不到的原因 ──
+    const diag = await (async () => {
+      if (isAntiDetectionV2()) {
+        return await HumanActions.safeEvaluate(page, function(sel: string) {
+          var container = document.querySelector(sel);
+          var d: Record<string, any> = { containerFound: !!container, viewportHeight: window.innerHeight };
+          if (container) {
+            var cr = container.getBoundingClientRect();
+            d.containerRect = { top: cr.top, bottom: cr.bottom, width: cr.width, height: cr.height };
+            var ops = container.querySelectorAll('[class*="operations-"]');
+            d.opsAreasTotal = ops.length;
+            var hidden = 0; var visible: any[] = [];
+            for (var oi = 0; oi < ops.length; oi++) {
+              var r = ops[oi].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) { hidden++; continue; }
+              var items = ops[oi].querySelectorAll('[class*="item-"]');
+              var texts: string[] = []; var replyCount = 0;
+              for (var ri = 0; ri < items.length; ri++) { var t = (items[ri].textContent || '').trim(); texts.push(t); if (t === '回复') replyCount++; }
+              visible.push({ rect: { top: r.top, bottom: r.bottom, width: r.width, height: r.height }, itemsText: texts, replyItemCount: replyCount });
+            }
+            d.opsAreasHidden = hidden;
+            d.opsAreasVisible = visible;
+            var allReply: any[] = [];
+            var allItems = container.querySelectorAll('[class*="item-"]');
+            for (var ai = 0; ai < allItems.length; ai++) {
+              if ((allItems[ai].textContent || '').trim() === '回复') { var rr = allItems[ai].getBoundingClientRect(); allReply.push({ text: '回复', rect: { top: rr.top, bottom: rr.bottom, width: rr.width, height: rr.height, left: rr.left }, className: (allItems[ai] as any).className || '' }); }
+            }
+            d.allReplyItemsInContainer = allReply;
+          }
+          return d;
+        }, { reason: '诊断回复按钮查找', world: 'main', args: [containerSel] }) as Promise<Record<string, any>>;
+      } else {
+        return await page.evaluate(function(sel) {
+          var container = document.querySelector(sel);
+          var d: Record<string, any> = { containerFound: !!container, viewportHeight: window.innerHeight };
+          if (container) {
+            var cr = container.getBoundingClientRect();
+            d.containerRect = { top: cr.top, bottom: cr.bottom, width: cr.width, height: cr.height };
+            var ops = container.querySelectorAll('[class*="operations-"]');
+            d.opsAreasTotal = ops.length;
+            var hidden = 0; var visible: any[] = [];
+            for (var oi = 0; oi < ops.length; oi++) {
+              var r = ops[oi].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) { hidden++; continue; }
+              var items = ops[oi].querySelectorAll('[class*="item-"]');
+              var texts: string[] = []; var replyCount = 0;
+              for (var ri = 0; ri < items.length; ri++) { var t = (items[ri].textContent || '').trim(); texts.push(t); if (t === '回复') replyCount++; }
+              visible.push({ rect: { top: r.top, bottom: r.bottom, width: r.width, height: r.height }, itemsText: texts, replyItemCount: replyCount });
+            }
+            d.opsAreasHidden = hidden;
+            d.opsAreasVisible = visible;
+            var allReply: any[] = [];
+            var allItems = container.querySelectorAll('[class*="item-"]');
+            for (var ai = 0; ai < allItems.length; ai++) {
+              if ((allItems[ai].textContent || '').trim() === '回复') { var rr = allItems[ai].getBoundingClientRect(); allReply.push({ text: '回复', rect: { top: rr.top, bottom: rr.bottom, width: rr.width, height: rr.height, left: rr.left }, className: (allItems[ai] as any).className || '' }); }
+            }
+            d.allReplyItemsInContainer = allReply;
+          }
+          return d;
+        }, containerSel) as Promise<Record<string, any>>;
+      }
+    })();
+    logger.warn({ containerSel, diag }, '[findReplyBtnInContainer] DIAG');
+    // ── 诊断结束 ──
     if (isAntiDetectionV2()) {
-      return await HumanActions.safeEvaluate(page, function(sel: string) {
-        var container = document.querySelector(sel);
+      return await HumanActions.safeEvaluate(page, function(params: { sel: string; coords: {x: number; y: number} | null }) {
+        var sel = params.sel;
+        var coords = params.coords;
+        var container: Element | null = document.querySelector(sel);
+        // ★ 修复：selector 失败时用 elementFromPoint + closest 回退（与 expandRootRepliesIfNeeded 模式一致）
+        if (!container && coords) {
+          for (var dx = -2; dx <= 2 && !container; dx += 2) {
+            for (var dy = -2; dy <= 2 && !container; dy += 2) {
+              var el = document.elementFromPoint(coords.x + dx, coords.y + dy);
+              if (el) container = el.closest('div[class*="container-"]');
+            }
+          }
+        }
         if (!container) return null;
         var vh = window.innerHeight;
         var opsAreas = container.querySelectorAll('[class*="operations-"]');
@@ -5327,10 +5504,20 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, { reason: '在容器内查找回复按钮', world: 'main', args: [containerSel] }) as { x: number; y: number } | null;
+      }, { reason: '在容器内查找回复按钮', world: 'main', args: [{ sel: containerSel, coords: fallbackCoords || null }] }) as { x: number; y: number } | null;
     } else {
-      return await page.evaluate(function(sel) {
-        var container = document.querySelector(sel);
+      return await page.evaluate(function(params: { sel: string; coords: {x: number; y: number} | null }) {
+        var sel = params.sel;
+        var coords = params.coords;
+        var container: Element | null = document.querySelector(sel);
+        if (!container && coords) {
+          for (var dx = -2; dx <= 2 && !container; dx += 2) {
+            for (var dy = -2; dy <= 2 && !container; dy += 2) {
+              var el = document.elementFromPoint(coords.x + dx, coords.y + dy);
+              if (el) container = el.closest('div[class*="container-"]');
+            }
+          }
+        }
         if (!container) return null;
         var vh = window.innerHeight;
         var opsAreas = container.querySelectorAll('[class*="operations-"]');
@@ -5346,7 +5533,7 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, containerSel);
+      }, { sel: containerSel, coords: fallbackCoords || null });
     }
   }
 
