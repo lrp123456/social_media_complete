@@ -19,11 +19,17 @@ jest.mock('@social-media/shared-config', () => ({
   PlatformName: 'douyin',
 }));
 
+jest.mock('../../lib/antiDetectionMode', () => ({
+  isAntiDetectionV2: jest.fn().mockReturnValue(false),
+  isEnabled: jest.fn().mockReturnValue(false),
+}));
+
 jest.mock('@social-media/browser-core', () => ({
   // 被测方法
   HumanActions: {
     cdpSmartScroll: cdpSmartScrollMock,
     cdpGetDocumentScrollState: getScrollStateMock,
+    safeEvaluate: jest.fn(),
     wait: jest.fn().mockResolvedValue(undefined),
   },
   // logger 桩
@@ -72,5 +78,37 @@ describe('scrollCommentArea bounded', () => {
     for (const call of cdpSmartScrollMock.mock.calls) {
       expect(call[2]).toBeLessThan(99999);
     }
+  });
+});
+
+describe('tryExpandMoreAndScroll reads document bottom', () => {
+  beforeEach(() => {
+    getScrollStateMock.mockClear();
+  });
+
+  it('false when bottom reached', async () => {
+    getScrollStateMock.mockResolvedValue({ scrollY: 1747, clientHeight: 1305, scrollHeight: 3052 });
+    const page = { evaluate: jest.fn().mockResolvedValue(false) } as any;
+    const crawler: any = new DouyinCrawler('fp_test');
+    crawler.injectEsbuildPolyfill = jest.fn().mockResolvedValue(undefined);
+    crawler.scrollCommentArea = jest.fn().mockResolvedValue(true);
+
+    const result = await crawler.tryExpandMoreAndScroll(page, 0);
+    expect(result).toBe(false);
+    expect(crawler.scrollCommentArea).not.toHaveBeenCalled();
+  });
+
+  it('true when not bottom, calls scrollCommentArea', async () => {
+    getScrollStateMock.mockResolvedValue({ scrollY: 800, clientHeight: 1305, scrollHeight: 3052 });
+    const page = { evaluate: jest.fn().mockResolvedValue(false) } as any;
+    const crawler: any = new DouyinCrawler('fp_test');
+    crawler.injectEsbuildPolyfill = jest.fn().mockResolvedValue(undefined);
+    crawler.scrollCommentArea = jest.fn().mockResolvedValue(true);
+
+    const result = await crawler.tryExpandMoreAndScroll(page, 0);
+    expect(result).toBe(true);
+    expect(crawler.scrollCommentArea).toHaveBeenCalledTimes(1);
+    // scrollCommentArea 被调用时第二个参数 ≈ clientHeight * 0.6 = 783
+    expect(crawler.scrollCommentArea.mock.calls[0][1]).toBeCloseTo(783, -1);
   });
 });

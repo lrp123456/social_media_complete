@@ -5853,73 +5853,59 @@ export class DouyinCrawler {
    */
   private async tryExpandMoreAndScroll(page: Page, scrollRound: number): Promise<boolean> {
     await this.injectEsbuildPolyfill(page);
-    // 每 3 轮诊断一次容器状态
-    if (scrollRound % 3 === 0) {
-      const expandMoreClicked = await (async () => {
-        if (isAntiDetectionV2()) {
-          return HumanActions.safeEvaluate(page, function() {
-            var btns = document.querySelectorAll('span, div, button, a');
-            for (var i = 0; i < btns.length; i++) {
-              var t = (btns[i].textContent || '').trim();
-              if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
-                var rect = btns[i].getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                  (btns[i] as HTMLElement).click();
-                  return true;
-                }
-              }
-            }
-            return false;
-          }, { reason: '点击展开更多评论按钮', world: 'main' });
-        } else {
-          return page.evaluate(function() {
-            var btns = document.querySelectorAll('span, div, button, a');
-            for (var i = 0; i < btns.length; i++) {
-              var t = (btns[i].textContent || '').trim();
-              if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
-                var rect = btns[i].getBoundingClientRect();
-                if (rect.width > 0 && rect.height > 0) {
-                  (btns[i] as HTMLElement).click();
-                  return true;
-                }
-              }
-            }
-            return false;
-          });
-        }
-      })();
-      if (expandMoreClicked) {
-        logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Clicked "展开更多评论"');
-        await HumanActions.wait(page, 1500, 2500);
-        return true;
-      }
-    }
-
-    // ── 滚动加载更多 ──
-    const sh = await (async () => {
+    // 每轮都尝试点击"展开更多评论"按钮（不再每 3 轮限一次）
+    const expandMoreClicked = await (async () => {
       if (isAntiDetectionV2()) {
         return HumanActions.safeEvaluate(page, function() {
-          var c = document.querySelector('.douyin-creator-interactive-tabs-content');
-          return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
-        }, { reason: '读取评论区滚动状态', world: 'main' });
+          var btns = document.querySelectorAll('span, div, button, a');
+          for (var i = 0; i < btns.length; i++) {
+            var t = (btns[i].textContent || '').trim();
+            if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
+              var rect = btns[i].getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                (btns[i] as HTMLElement).click();
+                return true;
+              }
+            }
+          }
+          return false;
+        }, { reason: '点击展开更多评论按钮', world: 'main' });
       } else {
         return page.evaluate(function() {
-          var c = document.querySelector('.douyin-creator-interactive-tabs-content');
-          return c ? { sh: c.scrollHeight, st: c.scrollTop, ch: c.clientHeight } : null;
+          var btns = document.querySelectorAll('span, div, button, a');
+          for (var i = 0; i < btns.length; i++) {
+            var t = (btns[i].textContent || '').trim();
+            if (t === '展开更多评论' || t === '展开更多' || t === '查看更多评论') {
+              var rect = btns[i].getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                (btns[i] as HTMLElement).click();
+                return true;
+              }
+            }
+          }
+          return false;
         });
       }
-    })() as { st: number; ch: number; sh: number } | null;
-    if (!sh) {
-      logger.warn('[Reply::Find] Container gone, stopping');
+    })();
+    if (expandMoreClicked) {
+      logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Clicked "展开更多评论"');
+      await HumanActions.wait(page, 1500, 2500);
+      return true;
+    }
+
+    // ── 滚动加载更多（基于 document 滚动状态，不再依赖 .douyin-creator-interactive-tabs-content）──
+    const state = await HumanActions.cdpGetDocumentScrollState(page);
+    if (!state) {
+      logger.warn({}, '[Reply::Find] cdpGetDocumentScrollState failed, stopping');
       return false;
     }
 
-    if (sh.st + sh.ch >= sh.sh - 10) {
+    if (state.scrollY + state.clientHeight >= state.scrollHeight - 10) {
       logger.info({ scrollRound: scrollRound + 1 }, '[Reply::Find] Bottom reached');
       return false;
     }
 
-    await this.scrollCommentArea(page, sh.ch * 0.6);
+    await this.scrollCommentArea(page, state.clientHeight * 0.6);
     await HumanActions.wait(page, 1000, 1500);
     return true;
   }
