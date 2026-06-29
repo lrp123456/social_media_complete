@@ -718,10 +718,8 @@ PR4（/material 页面重设计）—— 依赖 PR1+PR2+PR3
 - [ ] webhook rejected 后 pending 文件被删除
 - [ ] 下载失败时 `storageStatus='failed'` + `failReason` 记录，**候选直接标记 rejected，不下发 Python**
 - [ ] `videoId` 包含 `../` 等非法字符时被 `sanitizeVideoId` 拦截
-- [ ] 7 天以上 `_pending` 文件被定时清理任务删除
-- [ ] 302 重定向 URL 能正确跟随下载，**不下发 Python**
-- [ ] `videoId` 含 `../` 等非法字符时被 `sanitizeVideoId` 拦截
-- [ ] 7 天以上 `_pending` 文件被定时清理 + DB 状态更新
+- [ ] 7 天以上 `_pending` 文件被定时清理任务删除 + DB 状态更新
+- [ ] 302 重定向 URL 能正确跟随下载
 
 ### PR3 验收
 - [ ] 平台 `keys=[]` 且 `enabled=true` 时，运行状态面板显示「未配置 API Key」StatusPill
