@@ -213,10 +213,10 @@ export class KuaishouCrawler {
         if (hasSidebar) return true;
       }
 
-      return true;
+      return false;
     } catch (error: any) {
       logger.warn({ error: error.message }, '[Login] Error checking login status');
-      return true;
+      return false;
     }
   }
 
@@ -2151,47 +2151,100 @@ export class KuaishouCrawler {
     for (let scrollAttempt = 0; scrollAttempt <= MAX_SCROLL_ATTEMPTS; scrollAttempt++) {
       await HumanActions.wait(page, 400, 700);
 
-      const matchResult = await this.evaluateOrSafe(
-        page,
-        (params: { createTimeNum: number; tolerance: number }) => {
-          const { createTimeNum: createTimeNum, tolerance } = params;
-          const items = Array.from(document.querySelectorAll('.video-item'));
-          let minTimestamp = Infinity;
-          let maxTimestamp = -Infinity;
-          let itemCount = 0;
-          const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
+      let matchResult;
+      try {
+        matchResult = await this.evaluateOrSafe(
+          page,
+          (params: { createTimeNum: number; tolerance: number }) => {
+            const { createTimeNum: createTimeNum, tolerance } = params;
+            const items = Array.from(document.querySelectorAll('.video-item'));
+            let minTimestamp = Infinity;
+            let maxTimestamp = -Infinity;
+            let itemCount = 0;
+            const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
 
-          for (const item of items) {
-            const titleEl = item.querySelector('.video-info__content__title');
-            const dateEl = item.querySelector('.video-info__content__date');
-            const title = titleEl?.textContent?.trim() || '';
-            const dateText = dateEl?.textContent?.trim() || '';
-            const fullText = `${title} ${dateText}`;
+            for (const item of items) {
+              const titleEl = item.querySelector('.video-info__content__title');
+              const dateEl = item.querySelector('.video-info__content__date');
+              const title = titleEl?.textContent?.trim() || '';
+              const dateText = dateEl?.textContent?.trim() || '';
+              const fullText = `${title} ${dateText}`;
 
-            const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
-            if (!dateMatch) continue;
-            const [, y, m, d, h, min, s] = dateMatch;
-            const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
+              const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+              if (!dateMatch) continue;
+              const [, y, m, d, h, min, s] = dateMatch;
+              const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
 
-            itemCount++;
-            if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
-            if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
+              itemCount++;
+              if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
+              if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
 
-            if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
-              candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
+              if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
+                candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
+              }
             }
-          }
 
-          return {
-            itemCount,
-            minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
-            maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
-            candidates,
-          };
-        },
-        [{ createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE }],
-        'drawer-video-timestamp-matching',
-      );
+            return {
+              itemCount,
+              minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
+              maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
+              candidates,
+            };
+          },
+          [{ createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE }],
+          'drawer-video-timestamp-matching',
+        );
+      } catch (evalErr: any) {
+        if (evalErr.message?.includes('Cannot find context')) {
+          logger.warn({ awemeId, error: evalErr.message }, '[Drawer] CDP context lost, clearing isolated world cache and retrying');
+          // E2: 清除隔离世界缓存，让 getIsolatedWorldId 重新创建
+          HumanActions.isolatedWorldIds.delete(page);
+          await HumanActions.wait(page, 2000, 3000);
+          matchResult = await this.evaluateOrSafe(
+            page,
+            (params: { createTimeNum: number; tolerance: number }) => {
+              const { createTimeNum: createTimeNum, tolerance } = params;
+              const items = Array.from(document.querySelectorAll('.video-item'));
+              let minTimestamp = Infinity;
+              let maxTimestamp = -Infinity;
+              let itemCount = 0;
+              const candidates: Array<{ domTimestamp: number; title: string; dateText: string; fullText: string }> = [];
+
+              for (const item of items) {
+                const titleEl = item.querySelector('.video-info__content__title');
+                const dateEl = item.querySelector('.video-info__content__date');
+                const title = titleEl?.textContent?.trim() || '';
+                const dateText = dateEl?.textContent?.trim() || '';
+                const fullText = `${title} ${dateText}`;
+
+                const dateMatch = dateText.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/);
+                if (!dateMatch) continue;
+                const [, y, m, d, h, min, s] = dateMatch;
+                const domTimestamp = Math.floor(new Date(`${y}-${m}-${d}T${h}:${min}:${s}+08:00`).getTime() / 1000);
+
+                itemCount++;
+                if (domTimestamp < minTimestamp) minTimestamp = domTimestamp;
+                if (domTimestamp > maxTimestamp) maxTimestamp = domTimestamp;
+
+                if (Math.abs(domTimestamp - createTimeNum) <= tolerance) {
+                  candidates.push({ domTimestamp, title: title.substring(0, 80), dateText, fullText });
+                }
+              }
+
+              return {
+                itemCount,
+                minTimestamp: Number.isFinite(minTimestamp) ? minTimestamp : null,
+                maxTimestamp: Number.isFinite(maxTimestamp) ? maxTimestamp : null,
+                candidates,
+              };
+            },
+            [{ createTimeNum: createTime, tolerance: TIMESTAMP_TOLERANCE }],
+            'drawer-video-timestamp-matching-retry',
+          );
+        } else {
+          throw evalErr;
+        }
+      }
 
       logger.info({ scrollAttempt, loadedItems: matchResult.itemCount, latestDate: matchResult.maxTimestamp, oldestDate: matchResult.minTimestamp, targetCreateTime: createTime }, '[Drawer] Scroll diagnostic');
 
@@ -3333,45 +3386,75 @@ export class KuaishouCrawler {
           retryCount: dbVideoInfo?.rootCommentRetryCount ?? 0,
         }, '[Simple] Phase3 start');
 
-        // ── 清空拦截器中旧的评论响应 ──
-        for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
-          this.interceptor.clear(p);
+        // ── Pre-check：检查 comment/home 是否已匹配目标视频（页面默认选中的视频可能就是目标）──
+        let precheckMatched = false;
+        let precheckCommentResp: any = null;
+
+        const homeResp = this.interceptor.getResponses(COMMENT_HOME_PATTERN);
+        if (homeResp.length > 0) {
+          const latestHome = homeResp[homeResp.length - 1];
+          const currentPhotoId = latestHome.body?.data?.photo?.photoId || '';
+          if (currentPhotoId === item.awemeId) {
+            logger.info({ awemeId: item.awemeId, currentPhotoId }, '[Simple] Pre-check: home API matches target video');
+            const listResp = this.interceptor.getResponses(COMMENT_LIST_PATTERN);
+            if (listResp.length > 0) {
+              precheckCommentResp = listResp[listResp.length - 1];
+              precheckMatched = true;
+              logger.info({ awemeId: item.awemeId }, '[Simple] Pre-check: commentList response found, skipping drawer');
+            }
+          } else {
+            logger.info({ awemeId: item.awemeId, currentPhotoId }, '[Simple] Pre-check: current video is different, need drawer');
+          }
         }
 
-        // ── 打开抽屉 ──
-        const drawerOpened = await this.openSelectVideoDrawer(page);
-        if (!drawerOpened) {
-          logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to open drawer, skipping');
-          results.push({ awemeId: item.awemeId, success: false, error: 'Failed to open drawer' });
-          continue;
-        }
-        logger.info({
-          awemeId: item.awemeId,
-          visible: true,
-        }, '[Simple] Drawer opened');
+        let firstCommentResponse: any = null;
 
-        // ── 点击视频 ──
-        const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
-        if (!clicked) {
-          logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to click video, skipping');
-          results.push({ awemeId: item.awemeId, success: false, error: 'Failed to click video' });
-          continue;
-        }
-        logger.info({
-          awemeId: item.awemeId,
-          matched: true,
-          matchType: 'exact',
-        }, '[Simple] Video clicked');
+        if (precheckMatched) {
+          // Pre-check 命中：直接使用已有响应，不清空、不开抽屉
+          firstCommentResponse = precheckCommentResp;
+        } else {
+          // Pre-check 未命中：走原有抽屉流程
 
-        // ── 等待 API 响应 ──
-        await HumanActions.wait(page, 3000, 5000);
+          // ── 清空拦截器中旧的评论响应 ──
+          for (const p of ALL_KUAISHOU_COMMENT_PATTERNS) {
+            this.interceptor.clear(p);
+          }
 
-        // 1. 短等待首个 commentList，避免无响应视频阻塞整轮队列
-        const firstCommentResponse = await this.waitForCommentResponse(page, 8000);
-        if (!firstCommentResponse) {
-          logger.warn({ awemeId: item.awemeId }, '[Simple] No commentList after selecting video — skipping');
-          results.push({ awemeId: item.awemeId, success: false, error: 'No commentList after selecting video' });
-          continue;
+          // ── 打开抽屉 ──
+          const drawerOpened = await this.openSelectVideoDrawer(page);
+          if (!drawerOpened) {
+            logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to open drawer, skipping');
+            results.push({ awemeId: item.awemeId, success: false, error: 'Failed to open drawer' });
+            continue;
+          }
+          logger.info({
+            awemeId: item.awemeId,
+            visible: true,
+          }, '[Simple] Drawer opened');
+
+          // ── 点击视频 ──
+          const clicked = await this.findAndClickVideoInDrawer(page, item.awemeId, item.description, item.createTime);
+          if (!clicked) {
+            logger.warn({ awemeId: item.awemeId }, '[Simple] Failed to click video, skipping');
+            results.push({ awemeId: item.awemeId, success: false, error: 'Failed to click video' });
+            continue;
+          }
+          logger.info({
+            awemeId: item.awemeId,
+            matched: true,
+            matchType: 'exact',
+          }, '[Simple] Video clicked');
+
+          // ── 等待 API 响应 ──
+          await HumanActions.wait(page, 3000, 5000);
+
+          // 1. 短等待首个 commentList，避免无响应视频阻塞整轮队列
+          firstCommentResponse = await this.waitForCommentResponse(page, 8000);
+          if (!firstCommentResponse) {
+            logger.warn({ awemeId: item.awemeId }, '[Simple] No commentList after selecting video — skipping');
+            results.push({ awemeId: item.awemeId, success: false, error: 'No commentList after selecting video' });
+            continue;
+          }
         }
         {
           const bodyKeys = Object.keys(firstCommentResponse.body || {});

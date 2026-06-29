@@ -72,7 +72,7 @@ export type PierceHandler = (page: Page, params: any) => Promise<unknown | null>
 export class HumanActions {
   private static traceCollector: { recordMouseTrace: (point: any) => void } | null = null;
   private static cdpContexts = new WeakMap<Page, CDPContext>();
-  private static isolatedWorldIds = new WeakMap<Page, number>();
+  static isolatedWorldIds = new WeakMap<Page, number>();
   private static stepMetricsCollector: { collect: (m: { actionPath: string; extra?: Record<string, any> }) => void } | null = null;
   private static platformPierceRegistry = new Map<string, Map<string, PierceHandler>>();
 

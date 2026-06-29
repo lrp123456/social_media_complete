@@ -1,4 +1,4 @@
-export type Platform = 'douyin' | 'kuaishou' | 'xiaohongshu';
+export type Platform = 'douyin' | 'kuaishou' | 'xiaohongshu' | 'pinterest';
 
 export type CrawlMode = 'deep' | 'light';
 
@@ -114,6 +114,8 @@ export interface LoginTabRecord {
   flowId: string;
   openedAt: number;
   userId: number;
+  /** 登录页 URL（用于 unregister 时判定是否发生跨域跳转） */
+  loginUrl: string;
 }
 
 /**

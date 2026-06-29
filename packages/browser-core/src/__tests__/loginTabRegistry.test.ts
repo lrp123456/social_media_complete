@@ -40,6 +40,7 @@ describe('LoginTabRegistry', () => {
       flowId: 'mainsite',
       openedAt: Date.now(),
       userId: 42,
+      loginUrl: 'https://www.xiaohongshu.com/explore',
     };
     registry.register('window123', 'mainsite', record);
     const memKey = 'window123:mainsite';
@@ -52,6 +53,7 @@ describe('LoginTabRegistry', () => {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
       openedAt: Date.now(), userId: 42,
+      loginUrl: 'https://www.xiaohongshu.com/explore',
     };
     registry.register('window123', 'mainsite', record);
     registry.unregister('window123', 'mainsite');
@@ -63,11 +65,13 @@ describe('LoginTabRegistry', () => {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
       openedAt: Date.now(), userId: 42,
+      loginUrl: 'https://www.xiaohongshu.com/explore',
     };
     const creator = {
       page: mockPage('https://creator.xiaohongshu.com/home', 'target-2'),
       targetId: 'target-2', domain: 'creator.xiaohongshu.com', flowId: 'creator',
       openedAt: Date.now(), userId: 42,
+      loginUrl: 'https://creator.xiaohongshu.com/home',
     };
     registry.register('window123', 'mainsite', mainsite);
     registry.register('window123', 'creator', creator);
@@ -140,5 +144,43 @@ describe('LoginTabRegistry', () => {
     };
     const state = await registry.checkLoginState(mockP, config);
     expect(state).toBe('logged_out');
+  });
+
+  it('should close page on unregister when URL crossed domains (kuaishou)', async () => {
+    let closed = false;
+    const page = mockPage('https://cp.kuaishou.com/article/comment', 'target-ks');
+    page.close = () => { closed = true; return Promise.resolve(); };
+    const record = {
+      page,
+      targetId: 'target-ks',
+      domain: 'cp.kuaishou.com',
+      flowId: 'creator',
+      openedAt: Date.now(),
+      userId: 11,
+      loginUrl: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api',
+    };
+    registry.register('windowKS', 'creator', record);
+    await registry.unregister('windowKS', 'creator');
+    expect(closed).toBe(true);
+    expect(registry.tabs.has('windowKS:creator')).toBe(false);
+  });
+
+  it('should NOT close page on unregister when URL is same domain (douyin)', async () => {
+    let closed = false;
+    const page = mockPage('https://creator.douyin.com/creator-micro/home', 'target-dy');
+    page.close = () => { closed = true; return Promise.resolve(); };
+    const record = {
+      page,
+      targetId: 'target-dy',
+      domain: 'creator.douyin.com',
+      flowId: 'creator',
+      openedAt: Date.now(),
+      userId: 7,
+      loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    };
+    registry.register('windowDY', 'creator', record);
+    await registry.unregister('windowDY', 'creator');
+    expect(closed).toBe(false);
+    expect(registry.tabs.has('windowDY:creator')).toBe(false);
   });
 });

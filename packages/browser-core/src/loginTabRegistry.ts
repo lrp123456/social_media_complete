@@ -15,19 +15,46 @@ export class LoginTabRegistry {
     this.tabs.set(key, record);
   }
 
-  /** 从内存注册表移除并清除 localStorage 标记 */
+  /** 从内存注册表移除并清除 localStorage 标记。跨域跳转的标签页会被关闭。 */
   async unregister(windowId: string, flowId: string): Promise<void> {
     const key = `${windowId}:${flowId}`;
     const record = this.tabs.get(key);
     if (record) {
-      // Delete from memory first (synchronous) so callers without await still work
       this.tabs.delete(key);
-      // Fire-and-forget localStorage cleanup
+
+      // 清除 localStorage 标记（在当前域名下操作）
       try {
         await record.page.evaluate(({ markKey }: { markKey: string }) => {
           localStorage.removeItem(markKey);
         }, { markKey: LOGIN_TAB_MARK_KEY }).catch(() => {});
       } catch { /* 页面可能已关闭 */ }
+
+      // C2: 跨域跳转检测 — 如果页面 URL 已离开登录域名，关闭标签页防止成为孤儿
+      try {
+        if (record.page.isClosed()) return;
+        const currentUrl = record.page.url();
+
+        // 从 loginUrl 提取域名
+        let loginDomain = '';
+        try {
+          loginDomain = new URL(record.loginUrl).hostname;
+        } catch { /* loginUrl 无效则跳过关闭 */ }
+        if (!loginDomain || currentUrl === 'about:blank') return;
+
+        // 提取当前 URL 域名并精确比较（处理子域名情况）
+        let currentHostname = '';
+        try {
+          currentHostname = new URL(currentUrl).hostname;
+        } catch { /* URL 无效则跳过关闭 */ }
+        if (!currentHostname) return;
+
+        const isSameDomain = currentHostname === loginDomain
+          || currentHostname.endsWith('.' + loginDomain);
+        if (!isSameDomain) {
+          await record.page.close();
+          console.info(`[LoginTabRegistry] unregister: closed cross-domain tab (loginUrl domain=${loginDomain}, currentHostname=${currentHostname})`);
+        }
+      } catch { /* 页面操作失败，忽略 */ }
     }
   }
 
@@ -62,15 +89,16 @@ export class LoginTabRegistry {
            const raw = localStorage.getItem(markKey);
            return raw ? JSON.parse(raw) : null;
          }, { markKey: LOGIN_TAB_MARK_KEY });
-         if (markData && markData.flowId === flowId) {
-           const record: LoginTabRecord = {
-             page,
-             targetId: markData.targetId || '',
-             domain,
-             flowId,
-             openedAt: markData.openedAt || Date.now(),
-             userId: markData.userId || 0,
-           };
+          if (markData && markData.flowId === flowId) {
+            const record: LoginTabRecord = {
+              page,
+              targetId: markData.targetId || '',
+              domain,
+              flowId,
+              openedAt: markData.openedAt || Date.now(),
+              userId: markData.userId || 0,
+              loginUrl: markData.loginUrl || '',
+            };
            this.tabs.set(key, record);
            return record;
          }
@@ -111,24 +139,38 @@ export class LoginTabRegistry {
   async captureQR(page: any, config: LoginFlowConfig): Promise<Buffer | null> {
     const selectors = config.qrSelectors || [];
 
-    // 0. 如配置了激活选择器，先点击它（如小红书创作者中心需点缩略图弹出 QR 弹窗）
+    // 0. 如配置了激活选择器，先检查 QR 是否已可见，不可见才点击激活
     if (config.qrActivationSelector) {
       try {
-        const activator = await page.$(config.qrActivationSelector);
-        if (activator) {
-          // 优先用 CDP 坐标点击（绕过 React 合成事件），降级用 element.click()
-          const box = await activator.boundingBox();
-          if (box) {
-            await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-          } else {
-            await activator.click();
+        // 先检查 QR 是否已经可见（避免对切换按钮多次点击导致 QR 消失）
+        let qrAlreadyVisible = false;
+        for (const sel of selectors) {
+          try {
+            const el = await page.$(sel);
+            if (el && await el.isVisible().catch(() => false)) {
+              qrAlreadyVisible = true;
+              break;
+            }
+          } catch { continue; }
+        }
+
+        if (!qrAlreadyVisible) {
+          const activator = await page.$(config.qrActivationSelector);
+          if (activator) {
+            const box = await activator.boundingBox();
+            if (box) {
+              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            } else {
+              await activator.click();
+            }
+            await page.waitForTimeout(2000);
+            for (const sel of selectors) {
+              try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); break; } catch { continue; }
+            }
+            console.info(`[LoginTabRegistry] captureQR: activated QR via "${config.qrActivationSelector}"`);
           }
-          await page.waitForTimeout(2000);
-          // 等待弹窗出现
-          for (const sel of selectors) {
-            try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); break; } catch { continue; }
-          }
-          console.info(`[LoginTabRegistry] captureQR: activated QR via "${config.qrActivationSelector}"`);
+        } else {
+          console.info('[LoginTabRegistry] captureQR: QR already visible, skipping activation click');
         }
       } catch (err: any) {
         console.warn(`[LoginTabRegistry] captureQR: activation selector "${config.qrActivationSelector}" failed: ${err.message}`);
@@ -205,7 +247,7 @@ export class LoginTabRegistry {
       console.info(`[LoginTabRegistry] openLoginTab: navigating to ${config.loginUrl}`);
       await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(3000);
-      const markData = JSON.stringify({ flowId, userId, openedAt: Date.now() });
+      const markData = JSON.stringify({ flowId, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
       await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
         localStorage.setItem(markKey, data);
       }, { data: markData, markKey: LOGIN_TAB_MARK_KEY });
@@ -213,6 +255,7 @@ export class LoginTabRegistry {
       const record: LoginTabRecord = {
         page, targetId, domain: config.domain, flowId,
         openedAt: Date.now(), userId,
+        loginUrl: config.loginUrl,
       };
       this.register(windowId, flowId, record);
       console.info(`[LoginTabRegistry] openLoginTab: success, tab registered (${windowId}:${flowId})`);

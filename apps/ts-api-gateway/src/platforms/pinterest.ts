@@ -74,7 +74,7 @@ export class PinterestScraper {
 
       // 2. CDP 连接已有指纹浏览器窗口
       const bm = getBrowserManager();
-      const { browser, page } = await bm.connect(task.windowId, '', 'douyin');
+      const { browser, page } = await bm.connect(task.windowId, '', 'pinterest');
       this.browser = browser;
       this.page = page;
 

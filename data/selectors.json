@@ -4317,7 +4317,8 @@
             "img[alt=\"qrcode\"]",
             "img[src*=\"data:image/\"]",
             "canvas"
-          ]
+          ],
+          "qrActivationSelector": "div.platform-switch"
         }
       }
     },
