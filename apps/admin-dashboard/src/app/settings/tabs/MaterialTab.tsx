@@ -17,6 +17,7 @@ import {
   useTriggerMaterialRun,
   useMaterialStatus,
   useMaterialCandidates,
+  useMaterialDiskUsage,
 } from '@/hooks/useApi';
 import type { MaterialUpdateConfig, Platform } from '@/types/material';
 
@@ -106,6 +107,8 @@ export default function MaterialTab() {
   if (configQuery.isError) return <QueryError />;
   if (!form) return null;
 
+  const diskUsageQuery = useMaterialDiskUsage();
+
   const getKeyChips = (platformId: string) => {
     const platformStatus = statusQuery.data?.platforms?.find((p: any) => p.platformId === platformId);
     return platformStatus?.keys?.map((k: any) => ({ key: '', masked: k.masked, cooledDown: k.cooledDown, cooldownRemaining: k.cooldownRemaining }));
@@ -159,7 +162,33 @@ export default function MaterialTab() {
         </div>
       </section>
 
-      {/* 面板 3: 处理与评估 */}
+      {/* 面板 3: 视频存储设置 (PR2 新增) */}
+      <section className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
+        <AccentBar color="primary" />
+        <HeaderStrip>
+          <h3 className="text-lg font-semibold">视频存储设置</h3>
+          <button type="button" onClick={() => setForm({ ...form, storage: { ...form.storage, enabled: !form.storage.enabled } })} className={`toggle-track ${form.storage.enabled ? 'bg-primary' : 'bg-surface-container-high'}`}>
+            <span className={`toggle-thumb ${form.storage.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </HeaderStrip>
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="text-xs text-on-surface-variant mb-1 block">存储根路径</label>
+            <input type="text" className="form-input text-sm w-full font-mono" value={form.storage.rootPath} onChange={(e) => setForm({ ...form, storage: { ...form.storage, rootPath: e.target.value } })} placeholder="/data/videos" disabled={!form.storage.enabled} />
+            <p className="text-xs text-on-surface-variant mt-1">视频文件存储根目录，需与 Python Worker 共享磁盘卷</p>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-on-surface-variant">磁盘使用量：</span>
+            {diskUsageQuery.isLoading ? <span className="text-on-surface-variant text-xs">计算中...</span> : diskUsageQuery.data?.data?.enabled ? (
+              <span className="font-mono text-sm">{diskUsageQuery.data.data.usedHuman}</span>
+            ) : (
+              <span className="text-on-surface-variant text-xs">存储未启用</span>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* 面板 4: 处理与评估 */}
       <section className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
         <AccentBar color="tertiary" />
         <HeaderStrip><h3 className="text-lg font-semibold">处理与评估</h3></HeaderStrip>

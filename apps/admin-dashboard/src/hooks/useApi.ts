@@ -2155,3 +2155,11 @@ export function useMaterialCandidates(page = 1, pageSize = 20, platformId?: stri
     queryFn: () => api.get('/material-update/candidates', { params }).then((r) => r.data),
   });
 }
+
+export function useMaterialDiskUsage() {
+  return useQuery({
+    queryKey: ['material-disk-usage'],
+    queryFn: () => api.get('/material-update/disk-usage').then((r) => r.data),
+    refetchInterval: 3600000, // 每小时刷新一次
+  });
+}
