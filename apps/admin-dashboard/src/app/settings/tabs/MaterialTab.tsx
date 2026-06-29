@@ -194,7 +194,7 @@ export default function MaterialTab() {
         <AccentBar color="error" />
         <HeaderStrip>
           <h3 className="text-lg font-semibold">运行状态</h3>
-          <button onClick={() => triggerRun.mutate()} disabled={statusQuery.data?.running} className="btn-primary text-sm">
+          <button onClick={() => triggerRun.mutate(undefined)} disabled={statusQuery.data?.running} className="btn-primary text-sm">
             <MaterialIcon icon="play_arrow" size="sm" />
             立即执行
           </button>
