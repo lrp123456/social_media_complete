@@ -1,4 +1,5 @@
-// materialUpdateService.ts — 核心编排：读配置 → 并发 curl → 解析 → 去重 → 下发 Python Worker
+// materialUpdateService.ts — 核心编排：读配置 → 并发 curl → 解析 → 去重 → 视频下载 → 下发 Python Worker
+import path from 'path';
 import axios from 'axios';
 import { prisma } from '../lib/prisma';
 import { getConfig } from '@social-media/shared-config';
@@ -18,6 +19,7 @@ import {
   resolveQuery,
   runStyleSelection,
 } from './materialUpdateInjection';
+import { downloadVideo } from './videoStorageService';
 
 // 运行态
 interface RunState {
@@ -131,19 +133,22 @@ async function fetchPlatform(
 
 /**
  * 下发候选视频到 Python Worker。
+ * @param localPath - 视频本地绝对路径（若已下载），null 表示用 video_url
  */
 async function dispatchToPython(
   candidateId: string,
   videoUrl: string,
+  localPath: string | null,
   platformId: string,
   config: MaterialUpdateConfig,
 ): Promise<void> {
   const appConfig = getConfig();
-  const payload = {
+  const payload: Record<string, unknown> = {
     task_id: candidateId,
     task_type: 'material_update',
     candidate_id: candidateId,
     video_url: videoUrl,
+    local_path: localPath, // 优先读本地，回退 video_url
     platform: platformId,
     oss_urls: [],
     frame_interval_ms: config.processing.frameIntervalMs,
@@ -158,7 +163,7 @@ async function dispatchToPython(
       payload,
       { headers: { 'Content-Type': 'application/json' }, timeout: 10000 },
     );
-    logger.info(`[materialUpdate] 候选 ${candidateId} 已下发 Python Worker`);
+    logger.info(`[materialUpdate] 候选 ${candidateId} 已下发 Python Worker${localPath ? ` (local_path=${localPath})` : ' (video_url 回退)'}`);
   } catch (err) {
     logger.error(`[materialUpdate] 候选 ${candidateId} 下发失败: ${err}`);
     // 标记为 pending 以便后续重试
@@ -170,8 +175,13 @@ async function dispatchToPython(
 }
 
 /**
- * 对一轮采集结果执行去重 upsert + 下发。
+ * 对一轮采集结果执行去重 upsert + 视频下载 + 下发 Python Worker。
  * 注意：不再写入 playCount（DB 列保留兼容历史）。
+ *
+ * PR2: 在 dispatchToPython 之前先下载视频。
+ * - 下载成功 → storageStatus='pending_downloaded' + storagePath 写入
+ * - 下载失败 → storageStatus='failed' + failReason，候选直接 rejected，不下发 Python
+ * - storage.enabled=false → 跳过下载，仍用 video_url 下发（向后兼容）
  */
 async function processPlatformResults(
   platformResults: Array<PromiseSettledResult<{ platform: Platform; videos: ParsedVideo[] }>>,
@@ -217,16 +227,54 @@ async function processPlatformResults(
             : {},
         });
 
-        // 仅新候选或重新处理的候选才下发
+        // 仅新候选或重新处理的候选才处理
         if (!existing || isReprocess) {
-          if (candidate.videoUrl) {
-            await prisma.hotVideoCandidate.update({
-              where: { id: candidate.id },
-              data: { status: 'processing' },
-            });
-            await dispatchToPython(candidate.id, candidate.videoUrl!, platform.id, config);
-            newCount++;
+          if (!candidate.videoUrl) continue;
+
+          // PR2: 视频下载（仅 storage.enabled=true 时执行）
+          let localPath: string | null = null;
+          if (config.storage.enabled) {
+            try {
+              const relativePath = await downloadVideo(
+                candidate.videoUrl,
+                config.storage.rootPath,
+                platform.id,
+                video.videoId,
+              );
+              localPath = path.resolve(config.storage.rootPath, relativePath);
+
+              await prisma.hotVideoCandidate.update({
+                where: { id: candidate.id },
+                data: {
+                  storagePath: relativePath,
+                  storageStatus: 'pending_downloaded',
+                },
+              });
+              logger.info(`[materialUpdate] 候选 ${candidate.id} 视频下载成功: ${relativePath}`);
+            } catch (downloadErr) {
+              // 下载失败 → 标记 failed + rejected，不下发 Python
+              logger.error(`[materialUpdate] 候选 ${candidate.id} 视频下载失败: ${downloadErr}`);
+              await prisma.hotVideoCandidate.update({
+                where: { id: candidate.id },
+                data: {
+                  status: 'rejected',
+                  storageStatus: 'failed',
+                  failReason: String(downloadErr),
+                },
+              });
+              errors.push(`下载失败: ${downloadErr}`);
+              continue; // 不再下发 Python
+            }
           }
+
+          // 标记 processing 并下发 Python Worker
+          await prisma.hotVideoCandidate.update({
+            where: { id: candidate.id },
+            data: { status: 'processing' },
+          });
+
+          await dispatchToPython(candidate.id, candidate.videoUrl, localPath, platform.id, config);
+          newCount++;
         }
       } catch (err) {
         errors.push(String(err));
