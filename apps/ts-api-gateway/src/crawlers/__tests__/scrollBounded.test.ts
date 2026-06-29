@@ -1,5 +1,5 @@
 const cdpSmartScrollMock = jest.fn().mockResolvedValue(undefined);
-const evaluateMock = jest.fn();
+const getScrollStateMock = jest.fn();
 
 // 根日志桩：满足 menuSelectors / browser-core 内部模块的需求
 const stubLogger = {
@@ -23,6 +23,7 @@ jest.mock('@social-media/browser-core', () => ({
   // 被测方法
   HumanActions: {
     cdpSmartScroll: cdpSmartScrollMock,
+    cdpGetDocumentScrollState: getScrollStateMock,
     wait: jest.fn().mockResolvedValue(undefined),
   },
   // logger 桩
@@ -46,13 +47,13 @@ import { DouyinCrawler } from '../douyinCrawler';
 describe('scrollCommentArea bounded', () => {
   beforeEach(() => {
     cdpSmartScrollMock.mockClear();
-    evaluateMock.mockClear();
+    getScrollStateMock.mockClear();
   });
 
-  it('top: stops when scrollTop<=0, never passes 99999', async () => {
-    // 第一轮 evaluate 返回已到顶
-    evaluateMock.mockResolvedValue({ scrollTop: 0, scrollHeight: 5000, clientHeight: 800 });
-    const page = { evaluate: evaluateMock } as any;
+  it('top: stops when scrollY<=0, never passes 99999', async () => {
+    // 第一次读文档状态即返回已到顶
+    getScrollStateMock.mockResolvedValue({ scrollY: 0, clientHeight: 1305, scrollHeight: 3052 });
+    const page = {} as any;
     const crawler = new DouyinCrawler('fp_test');
     await (crawler as any).scrollCommentArea(page, 'top');
 
@@ -64,8 +65,8 @@ describe('scrollCommentArea bounded', () => {
   });
 
   it('bottom: stops when at bottom', async () => {
-    evaluateMock.mockResolvedValue({ scrollTop: 4200, scrollHeight: 5000, clientHeight: 800 });
-    const page = { evaluate: evaluateMock } as any;
+    getScrollStateMock.mockResolvedValue({ scrollY: 4200, clientHeight: 800, scrollHeight: 5000 });
+    const page = {} as any;
     const crawler = new DouyinCrawler('fp_test');
     await (crawler as any).scrollCommentArea(page, 'bottom');
     for (const call of cdpSmartScrollMock.mock.calls) {

@@ -3578,30 +3578,17 @@ export class DouyinCrawler {
     }
 
     // 'top' / 'bottom'：有界滚动 + 到顶/到底即停
+    // 通过 CDP Page.getLayoutMetrics 读取 document 滚动状态，不再依赖特定容器选择器
     const dir = direction === 'top' ? 'up' : 'down';
     for (let round = 0; round < SCROLL_MAX_ROUNDS; round++) {
       await HumanActions.cdpSmartScroll(page, selectors, SCROLL_BOUNDED_PX, dir);
       await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
 
-      // 读取容器滚动状态，判断是否到顶/到底
-      let state: { scrollTop: number; scrollHeight: number; clientHeight: number } | null = null;
-      try {
-        state = await page.evaluate((sels: string[]) => {
-          for (const s of sels) {
-            const el = document.querySelector(s) as HTMLElement | null;
-            if (el) return { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight };
-          }
-          return null;
-        }, selectors);
-      } catch (evalErr: any) {
-        // evaluate 失败：降级为按有界量滚动一轮即返回，不阻塞主流程
-        logger.warn({ err: evalErr.message }, '[scrollCommentArea] state read failed, bounded return');
-        break;
-      }
-
+      // 读取 document 滚动状态
+      const state = await HumanActions.cdpGetDocumentScrollState(page);
       if (!state) break;
-      if (direction === 'top' && state.scrollTop <= 0) break;
-      if (direction === 'bottom' && state.scrollTop + state.clientHeight >= state.scrollHeight - 10) break;
+      if (direction === 'top' && state.scrollY <= 0) break;
+      if (direction === 'bottom' && state.scrollY + state.clientHeight >= state.scrollHeight - 10) break;
     }
 
     logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
