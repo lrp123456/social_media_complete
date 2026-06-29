@@ -103,6 +103,18 @@ export interface StorageConfig {
   rootPath: string;
 }
 
+/** 标准解析输出视频对象 */
+export interface ParsedVideo {
+  videoId: string;
+  title?: string;
+  author?: string;
+  likeCount?: number;
+  commentCount?: number;
+  cover?: string;
+  videoUrl?: string;
+  publishTime?: Date;
+}
+
 export interface MaterialUpdateConfig {
   platforms: Platform[];
   schedule: Schedule;
