@@ -3581,14 +3581,25 @@ export class DouyinCrawler {
     // 通过 CDP Page.getLayoutMetrics 读取 document 滚动状态，不再依赖特定容器选择器
     const dir = direction === 'top' ? 'up' : 'down';
     for (let round = 0; round < SCROLL_MAX_ROUNDS; round++) {
-      await HumanActions.cdpSmartScroll(page, selectors, SCROLL_BOUNDED_PX, dir);
+      // ★ 修复：与 tryExpandMoreAndScroll 同模式，传空 selectors 使 cdpSmartScroll 直接 scrollPage
+      await HumanActions.cdpSmartScroll(page, [], SCROLL_BOUNDED_PX, dir);
       await new Promise(r => setTimeout(r, 200 + Math.random() * 300));
 
       // 读取 document 滚动状态
       const state = await HumanActions.cdpGetDocumentScrollState(page);
-      if (!state) break;
-      if (direction === 'top' && state.scrollY <= 0) break;
-      if (direction === 'bottom' && state.scrollY + state.clientHeight >= state.scrollHeight - 10) break;
+      if (!state) {
+        logger.warn({ round, direction }, '[scrollCommentArea] document state read failed, abort');
+        break;
+      }
+      if (direction === 'top' && state.scrollY <= 0) {
+        logger.info({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] reached top/bottom');
+        break;
+      }
+      if (direction === 'bottom' && state.scrollY + state.clientHeight >= state.scrollHeight - 10) {
+        logger.info({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] reached top/bottom');
+        break;
+      }
+      logger.debug({ round, direction, scrollY: state.scrollY, clientHeight: state.clientHeight, scrollHeight: state.scrollHeight }, '[scrollCommentArea] round state');
     }
 
     logger.info({ direction, totalMs: Date.now() - t0 }, '[scrollCommentArea] Completed');
