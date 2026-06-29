@@ -5905,7 +5905,9 @@ export class DouyinCrawler {
       return false;
     }
 
-    await this.scrollCommentArea(page, state.clientHeight * 0.6);
+    // ★ 修复：直接调 cdpSmartScroll 走空 selectors 强制 scrollPage（页面滚动），
+    // 避免 findScrollContainer 命中 tabs-content inner 容器导致 document 不动。
+    await HumanActions.cdpSmartScroll(page, [], state.clientHeight * 0.6, 'down');
     await HumanActions.wait(page, 1000, 1500);
     return true;
   }
