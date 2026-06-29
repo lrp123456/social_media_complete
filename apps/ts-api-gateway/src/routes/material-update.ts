@@ -83,6 +83,8 @@ materialUpdateRouter.get('/status', async (_req: Request, res: Response) => {
         lastResult: runState.lastResult,
         platforms: platformStatus,
         candidateCounts,
+        runHealth: runState.runHealth,
+        warnings: runState.warnings,
       },
     });
   } catch (err) {
