@@ -17,6 +17,7 @@ import {
   useTriggerMaterialRun,
   useMaterialStatus,
   useMaterialCandidates,
+  useMaterialDiskUsage,
 } from '@/hooks/useApi';
 import type { MaterialUpdateConfig, Platform } from '@/types/material';
 
@@ -94,6 +95,11 @@ export default function MaterialTab() {
     });
   };
 
+  const scrollToPlatform = (platformId: string) => {
+    const el = document.querySelector(`[data-platform-id="${platformId}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   const handleTest = (platform: Platform) => {
     setTestingPlatformId(platform.id);
     testPlatform.mutate(platform, {
@@ -105,6 +111,8 @@ export default function MaterialTab() {
   if (configQuery.isLoading) return <PanelSkeleton rows={8} />;
   if (configQuery.isError) return <QueryError />;
   if (!form) return null;
+
+  const diskUsageQuery = useMaterialDiskUsage();
 
   const getKeyChips = (platformId: string) => {
     const platformStatus = statusQuery.data?.platforms?.find((p: any) => p.platformId === platformId);
@@ -140,7 +148,7 @@ export default function MaterialTab() {
         <div className="p-4 space-y-3">
           {form.platforms.length === 0 && <p className="text-sm text-on-surface-variant italic text-center py-4">尚未配置采集平台，点击「新增平台」开始</p>}
           {form.platforms.map((p, i) => (
-            <PlatformCard key={p.id} platform={p} onChange={(np) => updatePlatform(i, np)} onRemove={() => removePlatform(i)} onTest={() => handleTest(p)} testing={testingPlatformId === p.id} testResult={testResults[p.id] || null} keyChips={getKeyChips(p.id)} />
+            <PlatformCard key={p.id} platform={p} onChange={(np) => updatePlatform(i, np)} onRemove={() => removePlatform(i)} onTest={() => handleTest(p)} testing={testingPlatformId === p.id} testResult={testResults[p.id] || null} keyChips={getKeyChips(p.id)} hasWarning={!!statusQuery.data?.warnings?.find((w: any) => w.platformId === p.id)} />
           ))}
         </div>
       </section>
@@ -159,7 +167,33 @@ export default function MaterialTab() {
         </div>
       </section>
 
-      {/* 面板 3: 处理与评估 */}
+      {/* 面板 3: 视频存储设置 (PR2 新增) */}
+      <section className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
+        <AccentBar color="primary" />
+        <HeaderStrip>
+          <h3 className="text-lg font-semibold">视频存储设置</h3>
+          <button type="button" onClick={() => setForm({ ...form, storage: { ...form.storage, enabled: !form.storage.enabled } })} className={`toggle-track ${form.storage.enabled ? 'bg-primary' : 'bg-surface-container-high'}`}>
+            <span className={`toggle-thumb ${form.storage.enabled ? 'translate-x-5' : 'translate-x-0.5'}`} />
+          </button>
+        </HeaderStrip>
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="text-xs text-on-surface-variant mb-1 block">存储根路径</label>
+            <input type="text" className="form-input text-sm w-full font-mono" value={form.storage.rootPath} onChange={(e) => setForm({ ...form, storage: { ...form.storage, rootPath: e.target.value } })} placeholder="/data/videos" disabled={!form.storage.enabled} />
+            <p className="text-xs text-on-surface-variant mt-1">视频文件存储根目录，需与 Python Worker 共享磁盘卷</p>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-on-surface-variant">磁盘使用量：</span>
+            {diskUsageQuery.isLoading ? <span className="text-on-surface-variant text-xs">计算中...</span> : diskUsageQuery.data?.data?.enabled ? (
+              <span className="font-mono text-sm">{diskUsageQuery.data.data.usedHuman}</span>
+            ) : (
+              <span className="text-on-surface-variant text-xs">存储未启用</span>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* 面板 4: 处理与评估 */}
       <section className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
         <AccentBar color="tertiary" />
         <HeaderStrip><h3 className="text-lg font-semibold">处理与评估</h3></HeaderStrip>
@@ -194,10 +228,20 @@ export default function MaterialTab() {
         <AccentBar color="error" />
         <HeaderStrip>
           <h3 className="text-lg font-semibold">运行状态</h3>
-          <button onClick={() => triggerRun.mutate(undefined)} disabled={statusQuery.data?.running} className="btn-primary text-sm">
-            <MaterialIcon icon="play_arrow" size="sm" />
-            立即执行
-          </button>
+          <div className="flex items-center gap-2">
+            {(() => {
+              const health = statusQuery.data?.runHealth;
+              if (health === 'no_keys') return <StatusPill tone="error" dot>存在未配置 Key 的平台</StatusPill>;
+              if (health === 'all_keys_cooldown') return <StatusPill tone="warning" dot>所有 Key 均冷却中</StatusPill>;
+              if (health === 'parse_mismatch') return <StatusPill tone="warning" dot>存在解析异常的平台</StatusPill>;
+              if (health === 'ok') return <StatusPill tone="success" dot>运行正常</StatusPill>;
+              return null;
+            })()}
+            <button onClick={() => triggerRun.mutate(undefined)} disabled={statusQuery.data?.running} className="btn-primary text-sm">
+              <MaterialIcon icon="play_arrow" size="sm" />
+              立即执行
+            </button>
+          </div>
         </HeaderStrip>
         <div className="p-4">
           {statusQuery.isLoading ? <PanelSkeleton rows={3} /> : statusQuery.data ? (
@@ -211,13 +255,30 @@ export default function MaterialTab() {
                   </StatusPill>
                 ))}
               </div>
-              {statusQuery.data.platforms?.map((p: any) => (
-                <div key={p.platformId} className="flex items-center gap-2 text-sm">
-                  <span className="font-medium">{p.platformName}</span>
-                  <span className="text-on-surface-variant">{p.keys.filter((k: any) => !k.cooledDown).length}/{p.keys.length} key 可用</span>
-                  {p.keys.some((k: any) => k.cooledDown) && <span className="text-xs text-error">{p.keys.filter((k: any) => k.cooledDown).length} 个冷却中</span>}
-                </div>
-              ))}
+              {statusQuery.data.platforms?.map((p: any) => {
+                const warning = statusQuery.data?.warnings?.find((w: any) => w.platformId === p.platformId);
+                const healthTone = !warning ? 'success' : warning.kind === 'no_keys' ? 'error' : 'warning';
+                const healthLabel = !warning ? '正常' : warning.kind === 'no_keys' ? '未配置 Key' : warning.kind === 'all_keys_cooldown' ? 'Key 冷却中' : '解析异常';
+                return (
+                  <div key={p.platformId} data-platform-id={p.platformId} className="flex items-center gap-2 text-sm">
+                    <span className="font-medium">{p.platformName}</span>
+                    <span className="text-on-surface-variant">{p.keys.filter((k: any) => !k.cooledDown).length}/{p.keys.length} key 可用</span>
+                    {p.keys.some((k: any) => k.cooledDown) && <span className="text-xs text-error">{p.keys.filter((k: any) => k.cooledDown).length} 个冷却中</span>}
+                    <span className="ml-auto flex items-center gap-2">
+                      <StatusPill tone={healthTone as any}>{healthLabel}</StatusPill>
+                      {warning && (
+                        <button
+                          type="button"
+                          onClick={() => scrollToPlatform(p.platformId)}
+                          className="text-xs text-primary hover:underline whitespace-nowrap"
+                        >
+                          前往设置
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           ) : <QueryError />}
         </div>

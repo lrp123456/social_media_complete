@@ -42,6 +42,7 @@ async def process_material_update(ctx, task_data: dict) -> dict:
     frame_interval_ms = task_data.get("frame_interval_ms", 1000)
     platform = task_data.get("platform", "unknown")
     video_url = task_data.get("video_url")
+    local_path = task_data.get("local_path")  # PR2: TS 侧下载后的本地路径
 
     logger.info(f"🎬 素材更新开始: {task_id} (candidate={candidate_id})")
 
@@ -49,9 +50,16 @@ async def process_material_update(ctx, task_data: dict) -> dict:
     downloaded = []
 
     try:
-        # 1. 下载素材（入参分发）
-        if video_url:
-            # 新路径: HTTP 直链下载
+        # 1. 获取素材（PR2: 优先读 local_path，回退 video_url，再回退 oss_urls）
+        if local_path and os.path.isfile(local_path):
+            # PR2 新路径: 使用 TS 侧已下载的本地文件（共享卷挂载）
+            ext = os.path.splitext(local_path)[1] or ".mp4"
+            local = os.path.join(temp_dir, f"source_video{ext}")
+            shutil.copy2(local_path, local)
+            downloaded.append(local)
+            logger.info(f"本地文件复制: {local_path} → {os.path.basename(local)}")
+        elif video_url:
+            # 新路径: HTTP 直链下载（向后兼容）
             local = os.path.join(temp_dir, f"source_video{_ext_from_url(video_url)}")
             await download_from_url(video_url, local)
             downloaded.append(local)
@@ -96,6 +104,7 @@ async def process_material_update(ctx, task_data: dict) -> dict:
             status="completed",
             style=primary_result.get("style") if primary_result.get("accepted") else None,
             accepted=primary_result.get("accepted", False),
+            rating=primary_result.get("rating"),
             total=len(downloaded),
             moved=moved,
         )
@@ -286,13 +295,14 @@ async def _callback_material(
     status: str,
     style: str | None,
     accepted: bool,
-    total: int,
-    moved: int,
+    rating: int | None = None,
+    total: int = 0,
+    moved: int = 0,
     error: str | None = None,
 ) -> None:
     """
     回调 TS 侧 /api/v1/material-update/webhook。
-    带 candidate_id + style + status。
+    带 candidate_id + style + status + rating。
     """
     if not candidate_id:
         await callback_ts_webhook(WebhookCallback(
@@ -304,12 +314,16 @@ async def _callback_material(
         return
 
     trace_id = get_trace_id()
+    result_payload: dict = {"total": total, "classified": moved, "accepted": accepted}
+    if rating is not None:
+        result_payload["rating"] = rating
+
     payload = {
         "candidate_id": candidate_id,
         "task_id": task_id,
         "status": status,
         "style": style if accepted else None,
-        "result": {"total": total, "classified": moved, "accepted": accepted},
+        "result": result_payload,
         "error": error,
     }
 

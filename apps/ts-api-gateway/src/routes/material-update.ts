@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { prisma } from '../lib/prisma';
 import { getMaterialUpdateConfig } from '../services/materialUpdateConfig';
 import { runMaterialUpdate, isRunning, getRunState } from '../services/materialUpdateService';
+import { archiveVideo, deletePending, getDiskUsage } from '../services/videoStorageService';
 import { logger } from '../lib/logger';
 
 export const materialUpdateRouter = Router();
@@ -82,6 +83,8 @@ materialUpdateRouter.get('/status', async (_req: Request, res: Response) => {
         lastResult: runState.lastResult,
         platforms: platformStatus,
         candidateCounts,
+        runHealth: runState.runHealth,
+        warnings: runState.warnings,
       },
     });
   } catch (err) {
@@ -91,6 +94,7 @@ materialUpdateRouter.get('/status', async (_req: Request, res: Response) => {
 
 // ============================================================
 // GET /api/v1/material-update/candidates — 候选视频分页预览
+// PR2: 扩列返回 storagePath, storageStatus, likeCount, commentCount, rating, acceptedAt
 // ============================================================
 /** 将 Prisma 返回的候选对象序列化为 JSON 安全结构（BigInt→number，Date→ISO） */
 function serializeCandidate(c: Record<string, unknown>) {
@@ -172,7 +176,36 @@ materialUpdateRouter.get('/candidates', async (req: Request, res: Response) => {
 });
 
 // ============================================================
+// GET /api/v1/material-update/disk-usage — 磁盘使用量（PR2 新增）
+// ============================================================
+materialUpdateRouter.get('/disk-usage', async (_req: Request, res: Response) => {
+  try {
+    const config = getMaterialUpdateConfig();
+    if (!config.storage.enabled || !config.storage.rootPath) {
+      res.json({ success: true, data: { enabled: false, usedBytes: 0, usedHuman: '0B' } });
+      return;
+    }
+
+    const usage = await getDiskUsage(config.storage.rootPath);
+    res.json({
+      success: true,
+      data: {
+        enabled: true,
+        rootPath: config.storage.rootPath,
+        ...usage,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: String(err) });
+  }
+});
+
+// ============================================================
 // POST /api/v1/material-update/webhook — Python Worker 完成回调
+// 更新内容（PR2）：
+//   - accepted 且有 style → archiveVideo 移动文件 + 更新 storagePath/storageStatus/acceptedAt/rating
+//   - rejected → deletePending + storageStatus='none' + storagePath=NULL
+//   - rating 范围校验（1-5）
 // ============================================================
 const webhookBodySchema = z.object({
   candidate_id: z.string().optional(),
@@ -190,7 +223,7 @@ materialUpdateRouter.post('/webhook', async (req: Request, res: Response) => {
     return;
   }
 
-  const { candidate_id, status, style } = parsed.data;
+  const { candidate_id, status, style, result, error } = parsed.data;
 
   logger.info(`[material-update] webhook 回调: candidate=${candidate_id} status=${status} style=${style}`);
 
@@ -200,13 +233,105 @@ materialUpdateRouter.post('/webhook', async (req: Request, res: Response) => {
         ? (style ? 'accepted' : 'rejected')
         : 'rejected';
 
-      await prisma.hotVideoCandidate.update({
+      // 提取 result.rating（PR2: 范围校验 1-5）
+      let ratingValue: number | undefined;
+      if (result && typeof result.rating === 'number') {
+        const r = result.rating;
+        if (r >= 1 && r <= 5) {
+          ratingValue = r;
+        } else {
+          logger.warn(`[material-update] 候选 ${candidate_id} rating 超出范围: ${r}，忽略`);
+        }
+      }
+
+      // 获取当前候选记录
+      const candidate = await prisma.hotVideoCandidate.findUnique({
         where: { id: candidate_id },
-        data: {
-          status: candidateStatus,
-          style: style || null,
-        },
       });
+
+      if (candidate) {
+        if (candidateStatus === 'accepted' && style) {
+          // accepted: 归档视频文件
+          if (candidate.storagePath && candidate.storageStatus === 'pending_downloaded') {
+            try {
+              const config = getMaterialUpdateConfig();
+              const newPath = await archiveVideo(
+                candidate.storagePath,
+                config.storage.rootPath,
+                candidate.platform,
+                style,
+              );
+              await prisma.hotVideoCandidate.update({
+                where: { id: candidate_id },
+                data: {
+                  status: candidateStatus,
+                  style: style || null,
+                  storagePath: newPath,
+                  storageStatus: 'archived',
+                  acceptedAt: new Date(),
+                  ...(ratingValue !== undefined ? { rating: ratingValue } : {}),
+                },
+              });
+              logger.info(`[material-update] 候选 ${candidate_id} 已归档: ${newPath}`);
+            } catch (archiveErr) {
+              logger.error(`[material-update] 候选 ${candidate_id} 归档失败: ${archiveErr}`);
+              // 归档失败仍更新状态
+              await prisma.hotVideoCandidate.update({
+                where: { id: candidate_id },
+                data: {
+                  status: candidateStatus,
+                  style: style || null,
+                  ...(ratingValue !== undefined ? { rating: ratingValue } : {}),
+                },
+              });
+            }
+          } else {
+            // 无 storagePath（storage 未启用或旧数据），仅更新状态
+            await prisma.hotVideoCandidate.update({
+              where: { id: candidate_id },
+              data: {
+                status: candidateStatus,
+                style: style || null,
+                acceptedAt: new Date(),
+                ...(ratingValue !== undefined ? { rating: ratingValue } : {}),
+              },
+            });
+          }
+        } else if (candidateStatus === 'rejected') {
+          // rejected: 删除 pending 文件 + 清理 storage 字段
+          if (candidate.storagePath && candidate.storageStatus === 'pending_downloaded') {
+            try {
+              const config = getMaterialUpdateConfig();
+              await deletePending(candidate.storagePath, config.storage.rootPath);
+            } catch (deleteErr) {
+              logger.warn(`[material-update] 候选 ${candidate_id} 删除 pending 文件失败: ${deleteErr}`);
+            }
+          }
+
+          await prisma.hotVideoCandidate.update({
+            where: { id: candidate_id },
+            data: {
+              status: candidateStatus,
+              style: style || null,
+              storagePath: null,
+              storageStatus: 'none',
+            },
+          });
+        } else {
+          // 通用更新（无 style 的 completed → rejected）
+          await prisma.hotVideoCandidate.update({
+            where: { id: candidate_id },
+            data: {
+              status: candidateStatus,
+              style: style || null,
+              ...(ratingValue !== undefined ? { rating: ratingValue } : {}),
+            },
+          });
+        }
+      } else {
+        logger.warn(`[material-update] 候选 ${candidate_id} 不存在，跳过`);
+      }
+
       logger.info(`[material-update] 候选 ${candidate_id} 更新为 ${candidateStatus}`);
     } catch (err) {
       logger.error(`[material-update] 更新候选 ${candidate_id} 失败: ${err}`);

@@ -585,20 +585,29 @@ model ConfigSnapshot {
 // ============================================================
 
 model HotVideoCandidate {
-  id           String   @id @default(cuid())
-  platform     String   @db.VarChar(64)
-  videoId      String   @map("video_id") @db.VarChar(256)
-  title        String?  @db.VarChar(512)
-  author       String?  @db.VarChar(256)
-  playCount    BigInt?  @map("play_count")
-  cover        String?  @db.VarChar(1024)
-  videoUrl     String?  @map("video_url") @db.VarChar(1024)
-  publishTime  DateTime? @map("publish_time")
-  rawJson      Json?    @map("raw_json")
-  fetchedAt    DateTime @default(now()) @map("fetched_at")
-  createdAt    DateTime @default(now()) @map("created_at")
-  status       String   @default("pending") @db.VarChar(32) // pending|processing|no_url|accepted|rejected
-  style        String?  @db.VarChar(64)
+  id            String    @id @default(cuid())
+  platform      String    @db.VarChar(64)
+  videoId       String    @map("video_id") @db.VarChar(256)
+  title         String?   @db.VarChar(512)
+  author        String?   @db.VarChar(256)
+  playCount     BigInt?   @map("play_count")
+  cover         String?   @db.VarChar(1024)
+  videoUrl      String?   @map("video_url") @db.VarChar(1024)
+  publishTime   DateTime? @map("publish_time")
+  rawJson       Json?     @map("raw_json")
+  fetchedAt     DateTime  @default(now()) @map("fetched_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  status        String    @default("pending") @db.VarChar(32) // pending|processing|no_url|accepted|rejected
+  style         String?   @db.VarChar(64)
+
+  // PR2: 视频下载 + 互动数据
+  likeCount     Int?      @map("like_count")
+  commentCount  Int?      @map("comment_count")
+  rating        Int?      // LLM 品质评级 1-5
+  storagePath   String?   @map("storage_path") @db.VarChar(1024)
+  storageStatus String    @default("none") @map("storage_status") @db.VarChar(32) // none|pending_downloaded|archived|failed
+  acceptedAt    DateTime? @map("accepted_at")
+  failReason    String?   @map("fail_reason") @db.Text
 
   // PR2: 视频下载 + 互动数据
   likeCount     Int?      @map("like_count")

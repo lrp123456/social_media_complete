@@ -25,6 +25,7 @@ export function PlatformCard({
   testing,
   testResult,
   keyChips,
+  hasWarning,
 }: {
   platform: Platform;
   onChange: (p: Platform) => void;
@@ -33,6 +34,7 @@ export function PlatformCard({
   testing: boolean;
   testResult: { videoCount: number; videos: any[] } | null;
   keyChips?: KeyChip[];
+  hasWarning?: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
   const colorName = PLATFORM_COLORS[platform.id.split('_')[0]] || DEFAULT_COLOR;
@@ -50,7 +52,8 @@ export function PlatformCard({
   };
 
   return (
-    <section className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
+    <section data-platform-id={platform.id} className="relative overflow-hidden bg-surface-container-lowest border border-outline-variant rounded-xl">
+      {hasWarning && <div className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-error z-10" />}
       <AccentBar color={colorName as any} />
       <div className="flex items-center gap-3 p-4 border-b border-outline-variant">
         <button type="button" onClick={() => setExpanded(!expanded)} className="btn-ghost shrink-0">
