@@ -20,18 +20,31 @@ import {
   runStyleSelection,
 } from './materialUpdateInjection';
 import { downloadVideo } from './videoStorageService';
+import { computeRunHealth, type RunHealthKind, type PlatformRunInput } from './materialRunHealth';
+
+// === PR3: Warning 类型 ===
+export interface RunWarning {
+  kind: 'no_keys' | 'all_keys_cooldown' | 'parse_mismatch';
+  platformId: string;
+  platformName: string;
+  message: string;
+}
 
 // 运行态
 interface RunState {
   running: boolean;
   lastRunAt: number | null;
   lastResult: Record<string, { fetched: number; newCandidates: number; errors: string[] }>;
+  runHealth: RunHealthKind;
+  warnings: RunWarning[];
 }
 
 const runState: RunState = {
   running: false,
   lastRunAt: null,
   lastResult: {},
+  runHealth: 'ok',
+  warnings: [],
 };
 
 export function isRunning(): boolean {
@@ -361,8 +374,32 @@ export async function runMaterialUpdate(options?: { styleDir?: string; count?: n
     await runSingleRound(config, null, count);
   }
 
+  // PR3: 计算运行健康度
+  const healthInputs: PlatformRunInput[] = config.platforms
+    .filter((p) => p.enabled)
+    .map((p) => {
+      const state = config.keyCooldownState[p.id] || {};
+      const availableCount = p.keyPool.keys.filter((k) => !(state[k] && state[k] > Date.now())).length;
+      return {
+        platformId: p.id,
+        platformName: p.name,
+        keyCount: p.keyPool.keys.length,
+        availableKeyCount: availableCount,
+        fetched: runState.lastResult[p.id]?.fetched ?? 0,
+      };
+    });
+
+  const health = computeRunHealth(healthInputs);
+  runState.warnings = health.warnings.map((w) => ({
+    kind: w.health as RunWarning['kind'],
+    platformId: w.platformId,
+    platformName: w.platformName,
+    message: w.message,
+  }));
+  runState.runHealth = health.overall;
+
   runState.running = false;
-  logger.info(`[materialUpdate] 采集完成: ${JSON.stringify(runState.lastResult)}`);
+  logger.info(`[materialUpdate] 采集完成: runHealth=${health.overall}, warnings=${health.warnings.length}`);
 }
 
 /**
