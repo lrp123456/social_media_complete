@@ -3580,6 +3580,20 @@ export class DouyinCrawler {
     // 'top' / 'bottom'：有界滚动 + 到顶/到底即停
     // 通过 CDP Page.getLayoutMetrics 读取 document 滚动状态，不再依赖特定容器选择器
     const dir = direction === 'top' ? 'up' : 'down';
+
+    // ★ 前置边界检查：已在边界时跳过滚动，避免不必要的动画抖动
+    const initialState = await HumanActions.cdpGetDocumentScrollState(page);
+    if (initialState) {
+      if (direction === 'top' && initialState.scrollY <= 0) {
+        logger.info({ direction, scrollY: initialState.scrollY }, '[scrollCommentArea] already at boundary, skipping');
+        return true;
+      }
+      if (direction === 'bottom' && initialState.scrollY + initialState.clientHeight >= initialState.scrollHeight - 10) {
+        logger.info({ direction, scrollY: initialState.scrollY }, '[scrollCommentArea] already at boundary, skipping');
+        return true;
+      }
+    }
+
     for (let round = 0; round < SCROLL_MAX_ROUNDS; round++) {
       // ★ 修复：与 tryExpandMoreAndScroll 同模式，传空 selectors 使 cdpSmartScroll 直接 scrollPage
       await HumanActions.cdpSmartScroll(page, [], SCROLL_BOUNDED_PX, dir);

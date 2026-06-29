@@ -56,28 +56,33 @@ describe('scrollCommentArea bounded', () => {
     getScrollStateMock.mockClear();
   });
 
-  it('top: stops when scrollY<=0, never passes 99999', async () => {
-    // 第一次读文档状态即返回已到顶
+  it('top: skips scroll when already at top (scrollY<=0)', async () => {
+    // 已在顶部 → 前置边界检查命中，不触发任何滚动动画
     getScrollStateMock.mockResolvedValue({ scrollY: 0, clientHeight: 1305, scrollHeight: 3052 });
     const page = {} as any;
     const crawler = new DouyinCrawler('fp_test');
-    await (crawler as any).scrollCommentArea(page, 'top');
-
-    // cdpSmartScroll 入参不应出现 99999
-    for (const call of cdpSmartScrollMock.mock.calls) {
-      expect(call[2]).toBeLessThan(99999);
-    }
-    expect(cdpSmartScrollMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const result = await (crawler as any).scrollCommentArea(page, 'top');
+    expect(result).toBe(true);
+    expect(cdpSmartScrollMock).not.toHaveBeenCalled();
   });
 
-  it('bottom: stops when at bottom', async () => {
+  it('bottom: skips scroll when already at bottom', async () => {
+    // 4200+800=5000 >= 5000-10 → 已到底，不触发滚动
     getScrollStateMock.mockResolvedValue({ scrollY: 4200, clientHeight: 800, scrollHeight: 5000 });
     const page = {} as any;
     const crawler = new DouyinCrawler('fp_test');
-    await (crawler as any).scrollCommentArea(page, 'bottom');
-    for (const call of cdpSmartScrollMock.mock.calls) {
-      expect(call[2]).toBeLessThan(99999);
-    }
+    const result = await (crawler as any).scrollCommentArea(page, 'bottom');
+    expect(result).toBe(true);
+    expect(cdpSmartScrollMock).not.toHaveBeenCalled();
+  });
+
+  it('top: scrolls when not at boundary', async () => {
+    // scrollY=500 不在顶部 → 进入循环，触发滚动
+    getScrollStateMock.mockResolvedValue({ scrollY: 500, clientHeight: 1305, scrollHeight: 3052 });
+    const page = {} as any;
+    const crawler = new DouyinCrawler('fp_test');
+    await (crawler as any).scrollCommentArea(page, 'top');
+    expect(cdpSmartScrollMock).toHaveBeenCalled();
   });
 });
 
