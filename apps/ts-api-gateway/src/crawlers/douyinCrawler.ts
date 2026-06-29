@@ -5009,14 +5009,22 @@ export class DouyinCrawler {
 
       // ── B. 如果目标就是根评论 → 直接返回该根评论的"回复"按钮坐标 ──
       if (target.level === 1) {
-        const replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
+        let replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
+        if (!replyBtn) {
+          // 按钮在视口外 → 滚 root 到视口中间再重试
+          logger.warn('[Reply::Find] Root found but reply btn off-viewport, scrolling into view');
+          await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
+          await HumanActions.wait(page, 300, 600);
+          replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
+        }
         if (replyBtn) {
           logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located');
           return replyBtn;
         }
-        logger.warn('[Reply::Find] Root found but reply btn missing');
-        // 回退：返回根评论中心坐标
-        return { x: rootMatch.x, y: rootMatch.y };
+        // 仍找不到：返回 null 让外层循环继续 tryExpandMoreAndScroll 加载更多，
+        // 而不是回退到 root 中心导致 replyToComment 整页搜时点到错评论。
+        logger.warn('[Reply::Find] Root found but reply btn still missing after scrollIntoView');
+        return null;
       }
 
       // ── C. level=2：展开根评论下的子评论 ──
