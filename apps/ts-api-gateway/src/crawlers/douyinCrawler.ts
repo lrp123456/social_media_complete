@@ -4519,6 +4519,8 @@ export class DouyinCrawler {
             for (var j = 0; j < btns.length; j++) {
               var t = (btns[j].textContent || '').trim();
               if (t === '发送' && !(btns[j] as any).disabled) {
+                // ★ 修复：发送按钮可能在视口外（y > viewportHeight）→ scrollIntoView 后再读坐标
+                (btns[j] as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
                 var br = btns[j].getBoundingClientRect();
                 return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
               }
@@ -4561,6 +4563,8 @@ export class DouyinCrawler {
             for (var j = 0; j < btns.length; j++) {
               var t = (btns[j].textContent || '').trim();
               if (t === '发送' && !(btns[j] as any).disabled) {
+                // ★ 修复：发送按钮可能在视口外（y > viewportHeight）→ scrollIntoView 后再读坐标
+                (btns[j] as HTMLElement).scrollIntoView({ block: 'center', behavior: 'instant' });
                 var br = btns[j].getBoundingClientRect();
                 return { x: Math.round(br.left + br.width / 2), y: Math.round(br.top + br.height / 2) };
               }
