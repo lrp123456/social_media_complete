@@ -5020,13 +5020,18 @@ export class DouyinCrawler {
 
       // ── B. 如果目标就是根评论 → 直接返回该根评论的"回复"按钮坐标 ──
       if (target.level === 1) {
-        let replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
+        // ★ 修复：传 rootX, rootY 作为位置回退（应对 :nth-child 失效）
+        const fallback = { x: rootMatch.x, y: rootMatch.y };
+        let replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel, fallback);
         if (!replyBtn) {
           // 按钮在视口外 → 滚 root 到视口中间再重试
           logger.warn('[Reply::Find] Root found but reply btn off-viewport, scrolling into view');
           await this.scrollRootIntoView(page, rootMatch.x, rootMatch.y);
           await HumanActions.wait(page, 300, 600);
-          replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel);
+          // 滚完后 root 在视口中间，用 viewport 中心作为回退坐标
+          const vp = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+          const centerFallback = { x: Math.round(vp.w / 2), y: Math.round(vp.h / 2) };
+          replyBtn = await this.findReplyBtnInContainer(page, rootMatch.containerSel, centerFallback);
         }
         if (replyBtn) {
           logger.info({ elapsedMs: Date.now() - startT0 }, '[Reply::Find] Root reply btn located');
@@ -5340,6 +5345,7 @@ export class DouyinCrawler {
   private async findReplyBtnInContainer(
     page: Page,
     containerSel: string,
+    fallbackCoords?: { x: number; y: number },
   ): Promise<{ x: number; y: number } | null> {
     await this.injectEsbuildPolyfill(page);
     // ── 诊断收集：诊断回复按钮找不到的原因 ──
@@ -5407,8 +5413,19 @@ export class DouyinCrawler {
     logger.warn({ containerSel, diag }, '[findReplyBtnInContainer] DIAG');
     // ── 诊断结束 ──
     if (isAntiDetectionV2()) {
-      return await HumanActions.safeEvaluate(page, function(sel: string) {
-        var container = document.querySelector(sel);
+      return await HumanActions.safeEvaluate(page, function(params: { sel: string; coords: {x: number; y: number} | null }) {
+        var sel = params.sel;
+        var coords = params.coords;
+        var container: Element | null = document.querySelector(sel);
+        // ★ 修复：selector 失败时用 elementFromPoint + closest 回退（与 expandRootRepliesIfNeeded 模式一致）
+        if (!container && coords) {
+          for (var dx = -2; dx <= 2 && !container; dx += 2) {
+            for (var dy = -2; dy <= 2 && !container; dy += 2) {
+              var el = document.elementFromPoint(coords.x + dx, coords.y + dy);
+              if (el) container = el.closest('div[class*="container-"]');
+            }
+          }
+        }
         if (!container) return null;
         var vh = window.innerHeight;
         var opsAreas = container.querySelectorAll('[class*="operations-"]');
@@ -5424,10 +5441,20 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, { reason: '在容器内查找回复按钮', world: 'main', args: [containerSel] }) as { x: number; y: number } | null;
+      }, { reason: '在容器内查找回复按钮', world: 'main', args: [{ sel: containerSel, coords: fallbackCoords || null }] }) as { x: number; y: number } | null;
     } else {
-      return await page.evaluate(function(sel) {
-        var container = document.querySelector(sel);
+      return await page.evaluate(function(params: { sel: string; coords: {x: number; y: number} | null }) {
+        var sel = params.sel;
+        var coords = params.coords;
+        var container: Element | null = document.querySelector(sel);
+        if (!container && coords) {
+          for (var dx = -2; dx <= 2 && !container; dx += 2) {
+            for (var dy = -2; dy <= 2 && !container; dy += 2) {
+              var el = document.elementFromPoint(coords.x + dx, coords.y + dy);
+              if (el) container = el.closest('div[class*="container-"]');
+            }
+          }
+        }
         if (!container) return null;
         var vh = window.innerHeight;
         var opsAreas = container.querySelectorAll('[class*="operations-"]');
@@ -5443,7 +5470,7 @@ export class DouyinCrawler {
           }
         }
         return null;
-      }, containerSel);
+      }, { sel: containerSel, coords: fallbackCoords || null });
     }
   }
 
