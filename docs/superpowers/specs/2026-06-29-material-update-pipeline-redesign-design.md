@@ -53,6 +53,8 @@
 | 0/0 状态反馈 | StatusPill 全面覆盖 + 「前往设置」跳转 |
 | 交付方式 | 分 4 个 PR 提交，同一设计分步验收 |
 
+> **注**：现有 DB 中 `playCount` 列保留以兼容历史数据，但不再作为 8 标准字段之一。新采集通过 `likeCount` / `commentCount` 替代播放数指标。
+
 ## 3. 整体架构与数据流
 
 ```
@@ -392,7 +394,8 @@ saveKeyCooldownState(finalCooldownState);
 - `materialUpdateService.ts`：
   - `dispatchToPython` 之前先调 `downloadVideo`，更新 DB `storagePath` + `storageStatus='pending_downloaded'`
   - **下载失败（S5 修复）**：`storageStatus='failed'` + `failReason`，**不下发 Python Worker**——直接标记候选为 `status='rejected'`，避免 Python 端重复下载也失败导致候选永久卡 `processing`。仅当 `storage.enabled=false` 时跳过下载、仍用 `video_url` 下发 Python（向后兼容）
-  - payload 改为传 `local_path`（绝对路径）而非 `video_url`
+  - payload 改为传 `local_path`（绝对路径）+ `video_url`（始终保留作为回退）。`storage.enabled=false` 或下载未执行时 `local_path=null`，Python Worker 优先读 `local_path`，为 null 时回退用 `video_url`
+  - **webhook `rating` 范围校验**：handler 提取 `result.rating` 时校验 `typeof rating === 'number' && rating >= 1 && rating <= 5`，不合法则不写入 DB `rating` 列（保持 NULL）
 - `routes/material-update.ts` webhook handler：
   - `status=accepted` 且有 `style` → `archiveVideo` 移动文件 → 更新 `storagePath` + `storageStatus='archived'` + `acceptedAt` + `rating`（从 webhook payload 的 `result.rating` 提取）
   - `status=rejected` → `deletePending` → `storageStatus='none'` + `storagePath=NULL`
@@ -670,7 +673,7 @@ PR1（占位符 + 标准解析字段）
   ↓ 依赖
 PR2（视频下载 + DB 扩列）
   ↓ 依赖
-PR3（0/0 状态 StatusPill）—— 可与 PR2 并行
+PR3（0/0 状态 StatusPill）—— 依赖 PR2（串行）
   ↓ 依赖
 PR4（/material 页面重设计）—— 依赖 PR1+PR2+PR3
 ```
