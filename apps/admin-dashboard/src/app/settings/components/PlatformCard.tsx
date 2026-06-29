@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { MaterialIcon } from '@/components/ui/MaterialIcon';
 import { AccentBar } from '@/components/ui/Bento';
 import { KeyValueEditor } from '../shared/KeyValueEditor';
+import { FieldMapEditor } from './FieldMapEditor';
 import { KeyPoolEditor, type KeyChip } from './KeyPoolEditor';
 import type { Platform } from '@/types/material';
 
@@ -133,7 +134,13 @@ export function PlatformCard({
             </div>
             <div>
               <label className="text-xs text-on-surface-variant mb-1 block">字段映射</label>
-              <KeyValueEditor value={platform.parse.fields} onChange={(v) => updateParse({ fields: v })} />
+              <FieldMapEditor
+                value={platform.parse.fieldMap || {
+                  videoId: '', title: '', likeCount: '', commentCount: '',
+                  videoUrl: '', cover: '', author: '', publishTime: '',
+                }}
+                onChange={(v) => updateParse({ fieldMap: v })}
+              />
             </div>
           </div>
 
