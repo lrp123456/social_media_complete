@@ -31,18 +31,28 @@ export class LoginTabRegistry {
 
       // C2: 跨域跳转检测 — 如果页面 URL 已离开登录域名，关闭标签页防止成为孤儿
       try {
-        if (!record.page.isClosed()) {
-          const currentUrl = record.page.url();
-          // 从 loginUrl 提取域名
-          let loginDomain = '';
-          try {
-            loginDomain = new URL(record.loginUrl).hostname;
-          } catch { /* loginUrl 无效则跳过关闭 */ }
+        if (record.page.isClosed()) return;
+        const currentUrl = record.page.url();
 
-          if (loginDomain && !currentUrl.includes(loginDomain) && currentUrl !== 'about:blank') {
-            await record.page.close();
-            console.info(`[LoginTabRegistry] unregister: closed cross-domain tab (loginUrl domain=${loginDomain}, currentUrl=${currentUrl})`);
-          }
+        // 从 loginUrl 提取域名
+        let loginDomain = '';
+        try {
+          loginDomain = new URL(record.loginUrl).hostname;
+        } catch { /* loginUrl 无效则跳过关闭 */ }
+        if (!loginDomain || currentUrl === 'about:blank') return;
+
+        // 提取当前 URL 域名并精确比较（处理子域名情况）
+        let currentHostname = '';
+        try {
+          currentHostname = new URL(currentUrl).hostname;
+        } catch { /* URL 无效则跳过关闭 */ }
+        if (!currentHostname) return;
+
+        const isSameDomain = currentHostname === loginDomain
+          || currentHostname.endsWith('.' + loginDomain);
+        if (!isSameDomain) {
+          await record.page.close();
+          console.info(`[LoginTabRegistry] unregister: closed cross-domain tab (loginUrl domain=${loginDomain}, currentHostname=${currentHostname})`);
         }
       } catch { /* 页面操作失败，忽略 */ }
     }
