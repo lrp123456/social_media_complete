@@ -5,6 +5,42 @@ import { getSection, saveSection } from '../lib/settingsStore';
 // 类型定义
 // ============================================================
 
+/** 8 标准解析字段 */
+export type TargetField =
+  | 'videoId'
+  | 'title'
+  | 'likeCount'
+  | 'commentCount'
+  | 'videoUrl'
+  | 'cover'
+  | 'author'
+  | 'publishTime';
+
+/** 固定 8 键的字段映射表，未配置的键值为空串 '' */
+export type FieldMap = Record<TargetField, string>;
+
+export const TARGET_FIELDS: TargetField[] = [
+  'videoId',
+  'title',
+  'likeCount',
+  'commentCount',
+  'videoUrl',
+  'cover',
+  'author',
+  'publishTime',
+];
+
+export const DEFAULT_FIELD_MAP: FieldMap = {
+  videoId: '',
+  title: '',
+  likeCount: '',
+  commentCount: '',
+  videoUrl: '',
+  cover: '',
+  author: '',
+  publishTime: '',
+};
+
 export interface KeyPool {
   placeholder: string;
   keys: string[];
@@ -13,7 +49,10 @@ export interface KeyPool {
 
 export interface ParseConfig {
   listPath: string;
-  fields: Record<string, string>;
+  /** 旧版自由键值映射（PR1 迁移用），新配置使用 fieldMap */
+  fields?: Record<string, string>;
+  /** 标准 8 字段映射表 */
+  fieldMap: FieldMap;
 }
 
 export interface PlatformRequest {
@@ -39,6 +78,8 @@ export interface StyleDef {
   name: string;
   dir: string;
   keywords: string[];
+  /** 按平台覆盖查询关键词，key=平台ID，value=关键词列表 */
+  platformOverrides?: Record<string, string[]>;
 }
 
 export interface Processing {
@@ -57,10 +98,16 @@ export interface KeyCooldownState {
   [platformId: string]: Record<string, number>; // key -> cooldown expiry timestamp (ms)
 }
 
+export interface StorageConfig {
+  enabled: boolean;
+  rootPath: string;
+}
+
 export interface MaterialUpdateConfig {
   platforms: Platform[];
   schedule: Schedule;
   processing: Processing;
+  storage: StorageConfig;
   keyCooldownState: KeyCooldownState;
   allCooldownRetryAfterMs: number;
 }
@@ -85,6 +132,11 @@ export const DEFAULT_PROCESSING: Processing = {
   minRating: 4,
 };
 
+export const DEFAULT_STORAGE: StorageConfig = {
+  enabled: false,
+  rootPath: '/data/videos',
+};
+
 export const DEFAULT_CONFIG: MaterialUpdateConfig = {
   platforms: [],
   schedule: {
@@ -92,6 +144,7 @@ export const DEFAULT_CONFIG: MaterialUpdateConfig = {
     enabled: false,
   },
   processing: DEFAULT_PROCESSING,
+  storage: DEFAULT_STORAGE,
   keyCooldownState: {},
   allCooldownRetryAfterMs: 1800000,
 };
