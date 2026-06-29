@@ -5034,7 +5034,29 @@ export class DouyinCrawler {
         }
         // 仍找不到：返回 null 让外层循环继续 tryExpandMoreAndScroll 加载更多，
         // 而不是回退到 root 中心导致 replyToComment 整页搜时点到错评论。
-        logger.warn('[Reply::Find] Root found but reply btn still missing after scrollIntoView');
+        // ── 诊断：收集 HTML 帮助定位 ↕ ──
+        const htmlDiag = await (async () => {
+          if (isAntiDetectionV2()) {
+            return await HumanActions.safeEvaluate(page, function(sel: string) {
+              var container = document.querySelector(sel);
+              if (!container) return { containerOuter: null, operationsHtml: null };
+              var containerOuter = container.outerHTML.substring(0, 1500);
+              var opsEl = container.querySelector('[class*="operations-"]');
+              var operationsHtml = opsEl ? opsEl.outerHTML.substring(0, 1500) : null;
+              return { containerOuter, operationsHtml };
+            }, { reason: '诊断回复按钮HTML', world: 'main', args: [rootMatch.containerSel] }) as unknown as { containerOuter: string | null; operationsHtml: string | null };
+          } else {
+            return await page.evaluate(function(sel) {
+              var container = document.querySelector(sel);
+              if (!container) return { containerOuter: null, operationsHtml: null };
+              var containerOuter = container.outerHTML.substring(0, 1500);
+              var opsEl = container.querySelector('[class*="operations-"]');
+              var operationsHtml = opsEl ? opsEl.outerHTML.substring(0, 1500) : null;
+              return { containerOuter, operationsHtml };
+            }, rootMatch.containerSel) as unknown as { containerOuter: string | null; operationsHtml: string | null };
+          }
+        })();
+        logger.error({ containerSel: rootMatch.containerSel, htmlDiag }, '[Reply::Find] Root found but reply btn still missing after scrollIntoView');
         return null;
       }
 
@@ -5320,6 +5342,70 @@ export class DouyinCrawler {
     containerSel: string,
   ): Promise<{ x: number; y: number } | null> {
     await this.injectEsbuildPolyfill(page);
+    // ── 诊断收集：诊断回复按钮找不到的原因 ──
+    const diag = await (async () => {
+      if (isAntiDetectionV2()) {
+        return await HumanActions.safeEvaluate(page, function(sel: string) {
+          var container = document.querySelector(sel);
+          var d: Record<string, any> = { containerFound: !!container, viewportHeight: window.innerHeight };
+          if (container) {
+            var cr = container.getBoundingClientRect();
+            d.containerRect = { top: cr.top, bottom: cr.bottom, width: cr.width, height: cr.height };
+            var ops = container.querySelectorAll('[class*="operations-"]');
+            d.opsAreasTotal = ops.length;
+            var hidden = 0; var visible: any[] = [];
+            for (var oi = 0; oi < ops.length; oi++) {
+              var r = ops[oi].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) { hidden++; continue; }
+              var items = ops[oi].querySelectorAll('[class*="item-"]');
+              var texts: string[] = []; var replyCount = 0;
+              for (var ri = 0; ri < items.length; ri++) { var t = (items[ri].textContent || '').trim(); texts.push(t); if (t === '回复') replyCount++; }
+              visible.push({ rect: { top: r.top, bottom: r.bottom, width: r.width, height: r.height }, itemsText: texts, replyItemCount: replyCount });
+            }
+            d.opsAreasHidden = hidden;
+            d.opsAreasVisible = visible;
+            var allReply: any[] = [];
+            var allItems = container.querySelectorAll('[class*="item-"]');
+            for (var ai = 0; ai < allItems.length; ai++) {
+              if ((allItems[ai].textContent || '').trim() === '回复') { var rr = allItems[ai].getBoundingClientRect(); allReply.push({ text: '回复', rect: { top: rr.top, bottom: rr.bottom, width: rr.width, height: rr.height, left: rr.left }, className: (allItems[ai] as any).className || '' }); }
+            }
+            d.allReplyItemsInContainer = allReply;
+          }
+          return d;
+        }, { reason: '诊断回复按钮查找', world: 'main', args: [containerSel] }) as Promise<Record<string, any>>;
+      } else {
+        return await page.evaluate(function(sel) {
+          var container = document.querySelector(sel);
+          var d: Record<string, any> = { containerFound: !!container, viewportHeight: window.innerHeight };
+          if (container) {
+            var cr = container.getBoundingClientRect();
+            d.containerRect = { top: cr.top, bottom: cr.bottom, width: cr.width, height: cr.height };
+            var ops = container.querySelectorAll('[class*="operations-"]');
+            d.opsAreasTotal = ops.length;
+            var hidden = 0; var visible: any[] = [];
+            for (var oi = 0; oi < ops.length; oi++) {
+              var r = ops[oi].getBoundingClientRect();
+              if (r.width === 0 || r.height === 0) { hidden++; continue; }
+              var items = ops[oi].querySelectorAll('[class*="item-"]');
+              var texts: string[] = []; var replyCount = 0;
+              for (var ri = 0; ri < items.length; ri++) { var t = (items[ri].textContent || '').trim(); texts.push(t); if (t === '回复') replyCount++; }
+              visible.push({ rect: { top: r.top, bottom: r.bottom, width: r.width, height: r.height }, itemsText: texts, replyItemCount: replyCount });
+            }
+            d.opsAreasHidden = hidden;
+            d.opsAreasVisible = visible;
+            var allReply: any[] = [];
+            var allItems = container.querySelectorAll('[class*="item-"]');
+            for (var ai = 0; ai < allItems.length; ai++) {
+              if ((allItems[ai].textContent || '').trim() === '回复') { var rr = allItems[ai].getBoundingClientRect(); allReply.push({ text: '回复', rect: { top: rr.top, bottom: rr.bottom, width: rr.width, height: rr.height, left: rr.left }, className: (allItems[ai] as any).className || '' }); }
+            }
+            d.allReplyItemsInContainer = allReply;
+          }
+          return d;
+        }, containerSel) as Promise<Record<string, any>>;
+      }
+    })();
+    logger.warn({ containerSel, diag }, '[findReplyBtnInContainer] DIAG');
+    // ── 诊断结束 ──
     if (isAntiDetectionV2()) {
       return await HumanActions.safeEvaluate(page, function(sel: string) {
         var container = document.querySelector(sel);
