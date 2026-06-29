@@ -609,15 +609,6 @@ model HotVideoCandidate {
   acceptedAt    DateTime? @map("accepted_at")
   failReason    String?   @map("fail_reason") @db.Text
 
-  // PR2: 视频下载 + 互动数据
-  likeCount     Int?      @map("like_count")
-  commentCount  Int?      @map("comment_count")
-  rating        Int?      // LLM 品质评级 1-5
-  storagePath   String?   @map("storage_path") @db.VarChar(1024)
-  storageStatus String    @default("none") @map("storage_status") @db.VarChar(32) // none|pending_downloaded|archived|failed
-  acceptedAt    DateTime? @map("accepted_at")
-  failReason    String?   @map("fail_reason") @db.Text
-
   @@unique([platform, videoId], name: "uq_hot_video_platform_video")
   @@index([fetchedAt], name: "idx_hot_video_fetched_at")
   @@index([status], name: "idx_hot_video_status")
