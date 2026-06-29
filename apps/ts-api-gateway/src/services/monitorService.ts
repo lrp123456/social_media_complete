@@ -412,11 +412,11 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
  * 4. captureQR 截取二维码 → sendLoginAlert 发送企微通知
  * 5. 若 openLoginTab 失败，fallback 到 captureAndSendQR（当前页面截图）
  */
-async function sendLoginQR(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
+export async function sendLoginQR(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
   try {
     const user = await prisma.platformAccount.findUnique({
       where: { id: userId },
-      select: { wechatUserid: true, windowId: true },
+      select: { wechatUserid: true, windowId: true, window: { select: { externalId: true } } },
     });
     if (!user?.wechatUserid) {
       logger.warn({ userId }, `[${platform}] 用户无 wechatUserid，无法发送登录二维码`);
@@ -448,7 +448,7 @@ async function sendLoginQR(page: any, userId: number, platform: string, flowId: 
       logger.warn({ userId, platform }, `[${platform}] 当前页面 captureQR 失败，尝试 openLoginTab`);
     }
 
-    const windowId = String(user.windowId);
+    const windowId = user.window?.externalId ? String(user.window.externalId) : String(user.windowId);
     const { ensureLoginTab } = await import('./loginFlowHelpers');
     const record = await ensureLoginTab(windowId, userId, platform, flowId);
     if (!record) {
