@@ -654,25 +654,18 @@ async function autoStartBot(): Promise<void> {
 
           // 动态导入 prisma（避免循环依赖）
           const { prisma } = await import('../lib/prisma');
-          const user = await prisma.user.findFirst({
-            where: { wechatUserid: userid },
-            select: { id: true },
+          const acct = await prisma.platformAccount.findFirst({
+            where: { wechatUserid: userid, platform },
+            select: { id: true, window: { select: { externalId: true } } },
           }).catch(() => null);
 
-          if (!user) return;
-
-          const window = await (prisma as any).browserWindow?.findFirst({
-            where: { userId: user.id, platform },
-            select: { fingerprintWindowId: true },
-          }).catch(() => null);
-
-          if (!window) {
+          if (!acct?.window?.externalId) {
             await botManager.sendTextMessage([userid], '❌ 未找到关联的浏览器窗口');
             return;
           }
 
           botManager.setPendingReply(commentCid, {
-            videoId: awemeId, awemeId, userId: user.id, windowId: window.fingerprintWindowId, platform,
+            videoId: awemeId, awemeId, userId: acct.id, windowId: acct.window.externalId, platform,
           });
 
           await botManager.sendTextMessage([userid], `💬 已选择回复评论，请直接发送回复内容（5分钟内有效）`);
@@ -970,7 +963,7 @@ async function autoStartBot(): Promise<void> {
             genRootText = root?.text;
           }
 
-          const genUser = await prismaGen.user.findUnique({
+          const genUser = await prismaGen.platformAccount.findUnique({
             where: { id: genComment.video.userId },
             select: { platform: true },
           }).catch(() => null);
@@ -1120,7 +1113,7 @@ async function autoStartBot(): Promise<void> {
               sendRootText = root?.text;
             }
 
-            const sendUser = await prismaSend.user.findUnique({
+            const sendUser = await prismaSend.platformAccount.findUnique({
               where: { id: sendComment.video.userId },
               select: { platform: true },
             }).catch(() => null);
@@ -1161,9 +1154,9 @@ async function autoStartBot(): Promise<void> {
           }
 
           // 查找用户和窗口
-          const sendUser = await prismaSend.user.findUnique({
+          const sendUser = await prismaSend.platformAccount.findUnique({
             where: { id: sendComment.video.userId },
-            select: { id: true, platform: true, fingerprintWindowId: true },
+            select: { id: true, platform: true, window: { select: { externalId: true } } },
           }).catch(() => null);
 
           if (!sendUser) {
@@ -1185,8 +1178,8 @@ async function autoStartBot(): Promise<void> {
             taskId: `reply_${Date.now()}_${sendCommentCid}`,
             userId: sendUser.id,
             platform: sendUser.platform as any,
-            windowId: sendUser.fingerprintWindowId,
-            windowExternalId: sendUser.fingerprintWindowId,
+            windowId: sendUser.window.externalId,
+            windowExternalId: sendUser.window.externalId,
             replyData: {
               videoId: sendComment.videoId,
               commentCid: sendCommentCid,
