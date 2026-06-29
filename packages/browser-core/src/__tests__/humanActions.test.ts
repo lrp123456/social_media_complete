@@ -148,3 +148,22 @@ describe('HumanActions stepMetricsCollector', () => {
     HumanActions.setStepMetricsCollector(null);
   });
 });
+
+describe('CDPClient.getLayoutMetrics', () => {
+  it('calls Page.getLayoutMetrics and returns full structure', async () => {
+    const fakeSend = jest.fn().mockResolvedValue({
+      layoutViewport: { pageX: 0, pageY: 0, clientWidth: 1366, clientHeight: 768 },
+      contentSize: { x: 0, y: 0, width: 1366, height: 3000 },
+      visualViewport: { offsetX: 0, offsetY: 0, pageX: 0, pageY: 0, clientWidth: 1366, clientHeight: 768, scale: 1 },
+    });
+    const fakeSession = { send: fakeSend };
+    const { CDPClient } = require('../cdpClient');
+    const client = new CDPClient(fakeSession as any);
+    const metrics = await client.getLayoutMetrics();
+    expect(fakeSend).toHaveBeenCalledWith('Page.getLayoutMetrics', {});
+    expect(metrics).toEqual({
+      layoutViewport: { pageX: 0, pageY: 0, clientWidth: 1366, clientHeight: 768 },
+      contentSize: { x: 0, y: 0, width: 1366, height: 3000 },
+    });
+  });
+});

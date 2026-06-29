@@ -688,6 +688,17 @@ export class CDPClient {
     return result.layoutViewport;
   }
 
+  async getLayoutMetrics(): Promise<{
+    layoutViewport: { pageX: number; pageY: number; clientWidth: number; clientHeight: number };
+    contentSize: { x: number; y: number; width: number; height: number };
+  }> {
+    const result = await this.send('Page.getLayoutMetrics', {});
+    return {
+      layoutViewport: result.layoutViewport,
+      contentSize: result.contentSize,
+    };
+  }
+
   static quadToRect(quad: number[]): ViewportRect {
     const x1 = quad[0];
     const y1 = quad[1];
