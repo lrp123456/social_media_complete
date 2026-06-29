@@ -9,20 +9,34 @@ import { logger } from '../lib/logger';
 export const materialUpdateRouter = Router();
 
 // ============================================================
-// POST /api/v1/material-update/run — 手动触发一次全量采集
+// POST /api/v1/material-update/run — 手动触发采集（支持 styleDir/count 覆盖）
+// 请求体: { styleDir?: string, count?: number }
 // ============================================================
-materialUpdateRouter.post('/run', async (_req: Request, res: Response) => {
+const runBodySchema = z.object({
+  styleDir: z.string().optional(),
+  count: z.number().int().positive().optional(),
+});
+
+materialUpdateRouter.post('/run', async (req: Request, res: Response) => {
+  const parsed = runBodySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ success: false, error: parsed.error.flatten() });
+    return;
+  }
+
   if (isRunning()) {
     res.status(409).json({ success: false, error: '采集正在运行中' });
     return;
   }
 
+  const { styleDir, count } = parsed.data;
+
   // 非阻塞触发
-  runMaterialUpdate().catch((err) => {
+  runMaterialUpdate({ styleDir, count }).catch((err) => {
     logger.error(`[material-update] 手动触发失败: ${err}`);
   });
 
-  res.status(202).json({ success: true, message: '采集已触发' });
+  res.status(202).json({ success: true, message: styleDir ? `采集已触发（风格: ${styleDir}）` : '采集已触发（全部风格）' });
 });
 
 // ============================================================
