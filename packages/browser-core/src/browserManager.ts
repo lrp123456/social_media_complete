@@ -256,22 +256,31 @@ export class BrowserManager {
         } catch { this.userSessions.delete(key); }
       }
     }
-    // 3. 建立新 CDP 连接
-    try {
-      const wsEndpoint = await this.getOrCreateWsEndpoint(windowId, resolvedVendor);
-      const browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 30000 });
-      // 注册轻量 session 防资源泄漏
-      const loginSessionKey = `${windowId}_login`;
-      this.userSessions.set(loginSessionKey, {
-        browser, page: null, windowId, platform: 'login' as any,
-        connectedAt: Date.now(), lastActiveAt: Date.now(),
-        reuseCount: 0, maxReuse: 999,
-      });
-      return browser;
-    } catch (err: any) {
-      logger.error({ windowId, err: err.message }, 'getBrowser: CDP 连接失败');
+    // 3. 建立新 CDP 连接（握手失败重试一次，应对并发争抢/瞬时握手失败）
+    const loginSessionKey = `${windowId}_login`;
+    let browser: Browser | null = null;
+    let lastErr: any = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const wsEndpoint = await this.getOrCreateWsEndpoint(windowId, resolvedVendor);
+        browser = await chromium.connectOverCDP(wsEndpoint, { timeout: 30000 });
+        break;
+      } catch (err: any) {
+        lastErr = err;
+        logger.warn({ windowId, attempt, err: err.message }, 'getBrowser: CDP 握手失败，重试');
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
+    if (!browser) {
+      logger.error({ windowId, err: lastErr?.message }, 'getBrowser: CDP 连接失败');
       return null;
     }
+    this.userSessions.set(loginSessionKey, {
+      browser, page: null, windowId, platform: 'login' as any,
+      connectedAt: Date.now(), lastActiveAt: Date.now(),
+      reuseCount: 0, maxReuse: 999,
+    });
+    return browser;
   }
 
   async connect(windowId: string, spaceId: string, platform: Platform = 'douyin', vendor?: string): Promise<{ browser: Browser; page: Page }> {
