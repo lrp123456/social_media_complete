@@ -702,18 +702,25 @@ async function autoStartBot(): Promise<void> {
           const loginHost = getLoginHost(config.loginUrl, config.domain);
           const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, loginHost);
           if (record) {
-            // 检查登录标签页是否已从登录页跳转（URL 不再包含 login/passport）
-            let tabUrl = record.page.url();
-            let isStillOnLoginPage = tabUrl.includes('login') || tabUrl.includes('passport');
-            if (isStillOnLoginPage) {
-              // 主动导航到平台首页，验证是否真正登录
-              try {
-                await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-                await record.page.waitForTimeout(3000);
-                tabUrl = record.page.url();
+            // 导航到快手 profile 页验证登录态（登录成功后右上角 .user-info-dpd 存在；失效会回退到登录页）
+            // 其他平台仍用原 loginUrl 跳转后看是否仍在登录页
+            let isStillOnLoginPage = false;
+            try {
+              const checkUrl = targetPlatform === 'kuaishou'
+                ? 'https://cp.kuaishou.com/profile'
+                : config.loginUrl;
+              await record.page.goto(checkUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+              await record.page.waitForTimeout(3000);
+              if (targetPlatform === 'kuaishou') {
+                // 快手：看右上角用户状态栏是否存在
+                const { HumanActions } = await import('@social-media/browser-core');
+                const isLoggedIn = await HumanActions.cdpIsElementVisible(record.page, '.user-info-dpd');
+                isStillOnLoginPage = !isLoggedIn;
+              } else {
+                const tabUrl = record.page.url();
                 isStillOnLoginPage = tabUrl.includes('login') || tabUrl.includes('passport');
-              } catch { /* navigation failed, assume still on login */ }
-            }
+              }
+            } catch { /* navigation failed, assume still on login */ isStillOnLoginPage = true; }
             if (isStillOnLoginPage) {
               // 仍在登录页 → 设置 15min 自动重试
               const { enqueueMonitor } = await import('./unifiedQueue');
