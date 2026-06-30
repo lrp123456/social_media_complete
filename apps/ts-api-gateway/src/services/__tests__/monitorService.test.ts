@@ -119,9 +119,7 @@ describe('Phase1 wrong-page fast-fail', () => {
     const page = { url: () => 'https://www.douyin.com/foryou' };
     const task = { userId: 13, windowId: 'w4', platform: 'douyin' } as any;
     const { runDouyinCheck } = require('../monitorService');
-    const result = await runDouyinCheck(page, task, undefined);
-    expect(result.phase).toBe('Phase1');
-    expect(result.hasUpdate).toBe(false);
+    await expect(runDouyinCheck(page, task, undefined)).rejects.toThrow(/偏离工作页/);
   });
 
   it('should fast-fail kuaishou Phase1 when page is on non-video-manage page', async () => {
