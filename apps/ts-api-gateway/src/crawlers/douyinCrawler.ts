@@ -112,6 +112,11 @@ const MAX_SCROLL_NO_NEW_DATA = 10;
 const RISK_CONTROL_KEYWORDS = ['captcha', 'login', '安全验证', '验证码', '账号异常', 'risk', 'verify'];
 const RISK_CONTROL_URLS = ['/login', '/passport', '/verify', '/captcha'];
 
+/** 抖音工作页判定：作品首页或作品管理页。供 runDouyinCheck 入口与 navigateToCreatorHome 共用，避免跳过条件漂移。 */
+export function isOnDouyinWorkPage(url: string): boolean {
+  return url.includes('/creator-micro/home') || url.includes('/creator-micro/content/manage');
+}
+
 export interface CommentQueueItem {
   awemeId: string;
   description: string;
@@ -195,8 +200,8 @@ export class DouyinCrawler {
     try {
       const currentUrl = page.url();
 
-      if (currentUrl.includes('creator.douyin.com')) {
-        logger.info({ currentUrl }, 'Already on douyin creator page, skipping navigation');
+      if (isOnDouyinWorkPage(currentUrl)) {
+        logger.info({ currentUrl }, 'Already on douyin work page, skipping navigation');
       } else {
         logger.info('Navigating to douyin creator home via click-based menu');
         // 尝试点击"创作者服务平台"链接（防风控）, 失败时回退到 goto
