@@ -1224,13 +1224,17 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     }
 
     // Add to BullMQ queue
-    const job = await enqueueMonitor({
+    const result = await enqueueMonitor({
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
       windowId: user.windowExternalId,
       windowExternalId: user.windowExternalId,
     });
+    if (!result.enqueued) {
+      return res.status(409).json({ error: '同窗口同平台已有监控任务运行中', reason: result.reason });
+    }
+    const job = result.job;
 
     // 重置该 (窗口, 平台) 的调度器倒计时
     resetSchedulerTimer(user.windowExternalId, user.platform);
@@ -1288,14 +1292,16 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     const jobIds: string[] = [];
     for (const [, userGroup] of byWindow) {
       for (const user of userGroup) {
-        const job = await enqueueMonitor({
+        const result = await enqueueMonitor({
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,
           windowId: user.windowExternalId,
           windowExternalId: user.windowExternalId,
         });
-        jobIds.push(job.id);
+        if (result.enqueued) {
+          jobIds.push(result.job.id);
+        }
       }
     }
 

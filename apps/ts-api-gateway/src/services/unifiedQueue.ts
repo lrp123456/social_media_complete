@@ -505,16 +505,34 @@ function createWindowWorker(windowId: string, queue: Queue<PlatformTask>): Worke
 // 入队辅助函数
 // ============================================================
 
-/** 入队监控任务 */
+export type EnqueueMonitorResult = { enqueued: true; job: Job } | { enqueued: false; reason: 'duplicate' };
+
+/** 入队监控任务（per-(windowId,platform) 去重：同窗口同平台已有活跃/等待任务 → 拒绝入队） */
 export async function enqueueMonitor(task: {
   taskId: string;
   userId: number;
   platform: PlatformName;
   windowId: string;
   windowExternalId: string;
-}, options?: { jobId?: string }): Promise<Job> {
+}, options?: { jobId?: string }): Promise<EnqueueMonitorResult> {
   const q = await getWindowQueue(task.windowId);
-  return q.add('monitor', {
+
+  // per-(windowId, platform) 去重
+  const [activeJobs, waitingJobs] = await Promise.all([
+    q.getJobs(['active']),
+    q.getJobs(['waiting']),
+  ]);
+  for (const j of [...activeJobs, ...waitingJobs]) {
+    const data = j.data as any;
+    if (!data) continue;
+    if (data.windowId === task.windowId && data.platform === task.platform) {
+      if (await j.isActive() || await j.isWaiting()) {
+        return { enqueued: false, reason: 'duplicate' };
+      }
+    }
+  }
+
+  const job = await q.add('monitor', {
     taskType: 'monitor',
     ...task,
   }, {
@@ -522,6 +540,7 @@ export async function enqueueMonitor(task: {
     attempts: 2,
     backoff: { type: 'fixed', delay: 300_000 },
   });
+  return { enqueued: true, job };
 }
 
 /** 入队发布任务 */

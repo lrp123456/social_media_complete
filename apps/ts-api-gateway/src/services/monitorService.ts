@@ -1860,14 +1860,14 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
         logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：已有运行中的任务');
         continue;
       }
-      await enqueueMonitor({
+      const result = await enqueueMonitor({
         taskId: `mon_${Date.now()}_${u.id}`,
         userId: u.id,
         platform: u.platform as PlatformName,
         windowId: u.windowExternalId,
         windowExternalId: u.windowExternalId,
       });
-      queued++;
+      if (result.enqueued) queued++;
     }
 
     if (queued === 0 && activeUserIds.size > 0) {
