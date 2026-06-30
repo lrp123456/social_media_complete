@@ -438,6 +438,8 @@ export async function sendLoginQR(page: any, userId: number, platform: string, f
     const isOnLoginPage = currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl === config.loginUrl;
     if (isOnLoginPage) {
       logger.info({ userId, platform, url: currentUrl }, `[${platform}] 当前页面已在登录域，直接用当前页截图`);
+      const { activatePlatformQR } = await import('./loginFlowHelpers');
+      await activatePlatformQR(page, platform, config);
       const qrBuf = await loginTabRegistry.captureQR(page, config);
       if (qrBuf) {
         const { botManager } = await import('./wechatBotService');
