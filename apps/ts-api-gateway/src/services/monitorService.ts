@@ -1045,12 +1045,15 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
   // 注册 API 拦截器（item_list 已屏蔽，只用 work_list）
   await dy.registerListener(page, ['/work_list', '/comment/list/select']);
 
-  const currentUrl = page.url();
-  if (!currentUrl.includes('creator.douyin.com')) {
+  // 入口按"是否在工作页"判导航（而非是否在 douyin 域），
+  // 避免上一轮退出策略残留子页（/data/following/follower 等）直接 fast-fail 0s 假成功
+  const entryUrl = page.url();
+  const onWorkPage = entryUrl.includes('/creator-micro/home') || entryUrl.includes('/creator-micro/content/manage');
+  if (!onWorkPage) {
     await dy.navigateToCreatorHome(page);
   }
 
-  // wrong-page fast-fail：偏离 creator-micro 主页/内容管理 → fast-fail
+  // 导航后再次校验，仍偏离才 fast-fail（兜底，非常态）
   const dyUrl = page.url();
   const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
   if (!dyOk) {
