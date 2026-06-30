@@ -234,6 +234,87 @@ export class KuaishouCrawler {
     }
   }
 
+  /** 快手 account/current 接口 URL 片段 */
+  private static readonly KS_ACCOUNT_CURRENT_PATTERN = '/rest/v2/creator/pc/authority/account/current';
+
+  /**
+   * 登录态检测 V2（HAR 主 + DOM 兜底）。
+   * 主：拦截 account/current 响应 — result:1+logined:true 已登录 / result:109 未登录 / 403,429,超时抛 UNKNOWN_EXCEPTION。
+   * 兜底：5s 未拦截到接口则 DOM 智能轮询（500ms 步长、8s 上限），命中登录/未登录强特征；都不命中抛 PAGE_RENDER_TIMEOUT。
+   */
+  async detectKuaishouLoginV2(page: Page): Promise<boolean> {
+    const pid = await this.interceptor.register(page, [KuaishouCrawler.KS_ACCOUNT_CURRENT_PATTERN]);
+    try {
+      const resp = await this.interceptor.waitForResponse(
+        KuaishouCrawler.KS_ACCOUNT_CURRENT_PATTERN,
+        { timeoutMs: 5000 },
+      );
+      if (resp) {
+        const status = resp.status ?? 200;
+        const body = resp.body ?? {};
+        if (status === 403 || status === 429) {
+          throw new Error('UNKNOWN_EXCEPTION: account/current 风控/限流 ' + status);
+        }
+        const result = (body as any)?.result;
+        if (result === 1 && (body as any)?.data?.logined === true) return true;
+        if (result === 109 || (body as any)?.loginUrl || (body as any)?.data?.logined === false) return false;
+        throw new Error('UNKNOWN_EXCEPTION: account/current 非预期 result=' + result);
+      }
+      return await this.detectKuaishouLoginByDom(page);
+    } finally {
+      this.interceptor.unregister(pid);
+    }
+  }
+
+  /** DOM 兜底：500ms 步长、8s 上限，命中强特征返回，超时抛 PAGE_RENDER_TIMEOUT。 */
+  private async detectKuaishouLoginByDom(page: Page): Promise<boolean> {
+    const MAX_MS = 8000;
+    const STEP_MS = 500;
+    const start = Date.now();
+    while (Date.now() - start < MAX_MS) {
+      const hasMenu = await HumanActions.exists(page, 'ul.el-menu', STEP_MS).catch(() => false);
+      if (hasMenu) {
+        const hasName = await HumanActions.exists(page, '.user__name', STEP_MS).catch(() => false);
+        if (hasName) return true;
+      }
+      const hasLoginModal = await HumanActions.exists(page, 'div.passport-login-container', STEP_MS).catch(() => false);
+      if (hasLoginModal) return false;
+      const hasLogoutLink = await page
+        .evaluate(() => !!document.querySelector('a[href*="/rest/infra/logout"]'))
+        .catch(() => false);
+      if (hasLogoutLink) return false;
+      await new Promise((r) => setTimeout(r, STEP_MS));
+    }
+    throw new Error('PAGE_RENDER_TIMEOUT: 快手页面 8s 内未渲染出登录/未登录强特征');
+  }
+
+  /**
+   * 在当前 cp 页（未登录拦截态）点击"立即登录"，跳转到 passport 登录页。
+   * 用于 performLoginOnCurrentTab 流程：不新建标签页，在当前页完成跳转。
+   * 返回是否成功跳转（URL 变为 passport 域）。
+   */
+  async clickLoginEntry(page: Page): Promise<boolean> {
+    try {
+      const candidates = ['button:has-text("立即登录")', 'a:has-text("立即登录")', '.passport-login-container button', '.login-btn'];
+      for (const sel of candidates) {
+        const clicked = await HumanActions.exists(page, sel, 2000).catch(() => false);
+        if (clicked) {
+          await HumanActions.click(page, sel).catch(() => {});
+          await HumanActions.wait(page, 1500, 3000);
+          if (page.url().includes('passport.kuaishou.com') || page.url().includes('id.kuaishou.com')) {
+            logger.info({ url: page.url() }, '[Login] 点击立即登录后已跳转登录页');
+            return true;
+          }
+        }
+      }
+      logger.warn({ url: page.url() }, '[Login] 未找到立即登录入口或未跳转');
+      return false;
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[Login] clickLoginEntry error');
+      return false;
+    }
+  }
+
   async handleLogin(
     page: Page,
     userId: number,
@@ -294,56 +375,9 @@ export class KuaishouCrawler {
     if (!qrSent) {
       await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
     }
-    onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: '已发送二维码到企业微信，请扫码登录' });
+    onProgress?.({ phase: '登录', step: '已发送二维码', percent: 8, detail: '已发送二维码到企业微信，请扫码登录' });
 
-    const maxWait = 300_000;
-    const start = Date.now();
-    let qrRefreshCount = 0;
-    const maxQrRefreshes = 3;
-
-    while (Date.now() - start < maxWait) {
-      await HumanActions.wait(page, 3000, 4000);
-
-      const elapsed = Math.floor((Date.now() - start) / 1000);
-      const remaining = Math.floor((maxWait - (Date.now() - start)) / 1000);
-      onProgress?.({ phase: '登录', step: '等待扫码', percent: 8, detail: `已等待 ${elapsed}秒，剩余 ${remaining}秒` });
-
-      const currentUrl = page.url();
-      if (!currentUrl.startsWith('https://passport.kuaishou.com')) {
-        logger.info({ waitMs: Date.now() - start, url: currentUrl }, '[Login] Login successful');
-        onProgress?.({ phase: '登录', step: '登录成功', percent: 10, detail: '扫码登录成功' });
-        return true;
-      }
-
-      const bodyText = await HumanActions.cdpGetBodyText(page);
-      if ((bodyText.includes('已过期') || bodyText.includes('刷新')) && qrRefreshCount < maxQrRefreshes) {
-        logger.info('[Login] QR code expired, refreshing');
-        qrRefreshCount++;
-        if (isEnabled('kuaishou')) {
-          // v2: 通过 HumanActions 点击刷新按钮
-          await HumanActions.click(page, '.refresh-btn');
-          await HumanActions.wait(page, 1000, 2000);
-        } else {
-          const refreshBtn = page.locator('.refresh-btn, [class*="refresh"], button:has-text("刷新")');
-          if (await refreshBtn.count() > 0) {
-            await refreshBtn.first.click().catch(() => {});
-            await HumanActions.wait(page, 1000, 2000);
-          }
-        }
-        if (qrRefreshCount <= maxQrRefreshes && ksConfig) {
-          const ksQrBuf2 = await loginTabRegistry.captureQR(page, ksConfig);
-          if (ksQrBuf2) {
-            await botManager.sendLoginAlert(user.wechatUserid, 'kuaishou', userId, ksQrBuf2);
-          }
-        } else {
-          await this.captureAndSendQR(page, userId, 'kuaishou', user.wechatUserid, botManager);
-        }
-        onProgress?.({ phase: '登录', step: '二维码已刷新', percent: 8, detail: `二维码已过期，已重新发送（${qrRefreshCount}/${maxQrRefreshes}）` });
-      }
-    }
-
-    logger.error({ waitMs: Date.now() - start }, '[Login] Login timeout');
-    onProgress?.({ phase: '登录', step: '登录超时', percent: 0, detail: '等待扫码超时（5分钟）' });
+    logger.info({ userId }, '[Login] QR 已发送，标 login_required 暂停调度，等待扫码后下轮复检');
     return false;
   }
 
@@ -518,27 +552,32 @@ export class KuaishouCrawler {
   async navigateToHome(page: Page): Promise<void> {
     const currentUrl = page.url();
 
-    if (currentUrl.includes('cp.kuaishou.com')) {
-      logger.info({ currentUrl }, 'Already on kuaishou creator page, skipping navigation');
-    } else {
-      logger.info('Navigating to kuaishou creator home via click-based menu');
-      // 尝试点击"创作者中心"链接（防风控）, 失败时回退到 goto
+    if (currentUrl.includes('/article/publish/video')) {
+      logger.info({ currentUrl }, 'Already on kuaishou video publish page, skipping navigation');
+    } else if (currentUrl.includes('cp.kuaishou.com')) {
+      // 已在 cp 域但不在首页：点击式导航（防风控），失败回退 goto
+      logger.info({ currentUrl }, 'On cp domain but not home, click-based nav');
       const clicked = await resolveAndClick(page, 'nav.to-creator', 'kuaishou', { timeout: 10000 });
       if (clicked) {
         await HumanActions.wait(page, 2000, 4000);
         await HumanActions.pageLoadBehavior(page);
       } else {
-        logger.warn('Click-based nav to kuaishou creator failed, falling back to page.goto');
+        logger.warn('Click-based nav failed, falling back to page.goto');
         await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
         HumanActions.clearCDPContext(page);
         await HumanActions.wait(page, 2000, 4000);
         await HumanActions.pageLoadBehavior(page);
       }
+    } else {
+      // 非 cp 域（含 about:blank）：直接 goto，跳过在空白页上 resolveAndClick 的 10s 超时
+      logger.info({ currentUrl }, 'Non-cp URL, direct goto to creator home');
+      await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
+      HumanActions.clearCDPContext(page);
+      await HumanActions.wait(page, 2000, 4000);
+      await HumanActions.pageLoadBehavior(page);
     }
 
     this.currentMenuSection = 'unknown';
-    // TODO: logPageHtml for kuaishou
-    // await BrowserManager.logPageHtml(page, 'after_navigateToHome_kuaishou');
     logger.info({ currentUrl: page.url() }, 'Ready on kuaishou creator page');
   }
 

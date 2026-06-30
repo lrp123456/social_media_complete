@@ -405,80 +405,62 @@ export async function captureAndSendQR(page: any, userId: number, platform: stri
 }
 
 /**
- * 统一的登录二维码发送函数（所有平台共用）。
- * 1. 检查当前页面是否已在登录页（风控重定向）→ 直接用当前页截图
- * 2. 否则 find 已有登录标签页（避免重复创建）
- * 3. 未找到则 openLoginTab 打开新登录页
- * 4. captureQR 截取二维码 → sendLoginAlert 发送企微通知
- * 5. 若 openLoginTab 失败，fallback 到 captureAndSendQR（当前页面截图）
+ * 在当前监控 page 上完成登录流程（不新建标签页）。
+ * - 抖音：URL 不变，当前页即登录页 → activatePlatformQR + captureQR
+ * - 快手：当前 cp 页未登录 → clickLoginEntry 跳 passport → captureQR
+ * - 小红书/视频号：未登录 URL 已变登录页 → activatePlatformQR + captureQR
+ * 截图永远用当前 page；captureQR 返回 null（hostname 不符等）→ 抛错，不 fallback 串台截图。
+ */
+export async function performLoginOnCurrentTab(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
+  const user = await prisma.platformAccount.findUnique({
+    where: { id: userId },
+    select: { wechatUserid: true, windowId: true, window: { select: { externalId: true } } },
+  });
+  if (!user?.wechatUserid) {
+    logger.warn({ userId, platform }, `[${platform}] 用户无 wechatUserid，无法发送登录二维码`);
+    return;
+  }
+
+  const { loginTabRegistry, getLoginFlowConfig, activatePlatformQR } = await import('./loginFlowHelpers');
+  const config = getLoginFlowConfig(platform, flowId);
+  if (!config) {
+    throw new Error(`[${platform}] 无 loginFlow 配置，无法在当前页登录`);
+  }
+
+  if (platform === 'kuaishou') {
+    const ks = getKuaishouCrawler(String(user.windowId));
+    const currentUrl = page.url();
+    const onLoginDomain = currentUrl.includes('passport.kuaishou.com') || currentUrl.includes('id.kuaishou.com');
+    if (!onLoginDomain) {
+      const jumped = await ks.clickLoginEntry(page);
+      if (!jumped) {
+        await page.goto('https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api', { waitUntil: 'domcontentloaded' });
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      if (await HumanActions.exists(page, 'div.platform-switch', 3000).catch(() => false)) {
+        await HumanActions.click(page, 'div.platform-switch').catch(() => {});
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
+  } else {
+    await activatePlatformQR(page, platform, config);
+  }
+
+  const qrBuf = await loginTabRegistry.captureQR(page, config);
+  if (!qrBuf) {
+    throw new Error(`[${platform}] captureQR 截图失败（当前页 hostname 不符或 QR 未渲染）`);
+  }
+
+  const { botManager } = await import('./wechatBotService');
+  await botManager.sendLoginAlert(user.wechatUserid, platform, userId, qrBuf, flowId);
+  logger.info({ userId, platform, flowId }, `[${platform}] 登录二维码已发送（当前标签页）`);
+}
+
+/**
+ * @deprecated 请使用 performLoginOnCurrentTab。保留以防外部引用断裂。
  */
 export async function sendLoginQR(page: any, userId: number, platform: string, flowId: string = 'creator'): Promise<void> {
-  try {
-    const user = await prisma.platformAccount.findUnique({
-      where: { id: userId },
-      select: { wechatUserid: true, windowId: true, window: { select: { externalId: true } } },
-    });
-    if (!user?.wechatUserid) {
-      logger.warn({ userId }, `[${platform}] 用户无 wechatUserid，无法发送登录二维码`);
-      return;
-    }
-
-    const { loginTabRegistry, getLoginFlowConfig } = await import('./loginFlowHelpers');
-    const config = getLoginFlowConfig(platform, flowId);
-
-    if (!config || !user.windowId) {
-      // 无配置或无 windowId → 使用当前页面截图
-      logger.info({ userId, platform }, `[${platform}] 无 loginFlow 配置或 windowId，使用 fallback`);
-      await captureAndSendQR(page, userId, platform, user.wechatUserid);
-      return;
-    }
-
-    // 0. 检查当前页面是否已被重定向到登录页（风控场景常见）
-    const currentUrl = page.url();
-    const isOnLoginPage = currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl === config.loginUrl;
-    if (isOnLoginPage) {
-      logger.info({ userId, platform, url: currentUrl }, `[${platform}] 当前页面已在登录域，直接用当前页截图`);
-      const { activatePlatformQR } = await import('./loginFlowHelpers');
-      await activatePlatformQR(page, platform, config);
-      const qrBuf = await loginTabRegistry.captureQR(page, config);
-      if (qrBuf) {
-        const { botManager } = await import('./wechatBotService');
-        await botManager.sendLoginAlert(user.wechatUserid, platform, userId, qrBuf, flowId);
-        logger.info({ userId, platform, flowId }, `[${platform}] 登录二维码已发送（当前页面）`);
-        return;
-      }
-      logger.warn({ userId, platform }, `[${platform}] 当前页面 captureQR 失败，尝试 openLoginTab`);
-    }
-
-    const windowId = user.window?.externalId ? String(user.window.externalId) : String(user.windowId);
-    const { ensureLoginTab } = await import('./loginFlowHelpers');
-    const record = await ensureLoginTab(windowId, userId, platform, flowId);
-    if (!record) {
-      logger.warn({ userId, platform }, `[${platform}] ensureLoginTab 返回 null，使用 fallback`);
-      await captureAndSendQR(page, userId, platform, user.wechatUserid);
-      return;
-    }
-
-    // 3. 截取二维码
-    const qrBuf = await loginTabRegistry.captureQR(record.page, config);
-    if (!qrBuf) {
-      logger.warn({ userId, platform }, `[${platform}] captureQR 返回 null`);
-      await captureAndSendQR(page, userId, platform, user.wechatUserid);
-      return;
-    }
-
-    // 4. 发送企微通知
-    const { botManager } = await import('./wechatBotService');
-    await botManager.sendLoginAlert(user.wechatUserid, platform, userId, qrBuf, flowId);
-    logger.info({ userId, platform, flowId }, `[${platform}] 登录二维码已发送`);
-  } catch (err: any) {
-    logger.error({ userId, platform, err: err.message }, `[${platform}] sendLoginQR 异常`);
-    // 最终 fallback：当前页面截图
-    try {
-      const user = await prisma.platformAccount.findUnique({ where: { id: userId }, select: { wechatUserid: true } });
-      if (user?.wechatUserid) await captureAndSendQR(page, userId, platform, user.wechatUserid);
-    } catch { /* give up */ }
-  }
+  await performLoginOnCurrentTab(page, userId, platform, flowId);
 }
 
 /** 旧版 QR 截取逻辑作为 fallback */
@@ -891,28 +873,28 @@ const crawlerCache = {
   tencent: new Map<string, TencentCrawler>(),
 };
 
-function getDouyinCrawler(windowId: string): DouyinCrawler {
+export function getDouyinCrawler(windowId: string): DouyinCrawler {
   if (!crawlerCache.douyin.has(windowId)) {
     crawlerCache.douyin.set(windowId, new DouyinCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.douyin.get(windowId)!;
 }
 
-function getKuaishouCrawler(windowId: string): KuaishouCrawler {
+export function getKuaishouCrawler(windowId: string): KuaishouCrawler {
   if (!crawlerCache.kuaishou.has(windowId)) {
     crawlerCache.kuaishou.set(windowId, new KuaishouCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.kuaishou.get(windowId)!;
 }
 
-function getXiaohongshuCrawler(windowId: string): XiaohongshuCrawler {
+export function getXiaohongshuCrawler(windowId: string): XiaohongshuCrawler {
   if (!crawlerCache.xiaohongshu.has(windowId)) {
     crawlerCache.xiaohongshu.set(windowId, new XiaohongshuCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.xiaohongshu.get(windowId)!;
 }
 
-function getTencentCrawler(windowId: string): TencentCrawler {
+export function getTencentCrawler(windowId: string): TencentCrawler {
   if (!crawlerCache.tencent.has(windowId)) {
     crawlerCache.tencent.set(windowId, new TencentCrawler(MAX_MONITOR_VIDEOS));
   }
@@ -1077,8 +1059,8 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
   const dyUrl = page.url();
   const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
   if (!dyOk) {
-    logger.warn({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口 page 偏离作品管理页，fast-fail');
-    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+    logger.error({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口导航后仍偏离工作页，抛错触发 failed 重试');
+    throw new Error(`[抖音] 入口导航后仍偏离工作页: ${dyUrl}`);
   }
 
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
@@ -1121,7 +1103,7 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
     }
 
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'douyin');
+    await performLoginOnCurrentTab(page, task.userId, 'douyin');
     logger.info({ userId: task.userId, elapsed: Date.now() - riskCheckStartTime }, '[计时] 风控检测完成（登录QR）');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
@@ -1190,7 +1172,7 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
     logger.error({ userId: task.userId }, '抖音 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'douyin', riskType, (phase3Result as any).riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'douyin');
+    await performLoginOnCurrentTab(page, task.userId, 'douyin');
     dy.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
@@ -1255,11 +1237,11 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     await ks.navigateToHome(page);
   }
 
-  const isLoggedIn = await ks.detectKuaishouLogin(page);
+  const isLoggedIn = await ks.detectKuaishouLoginV2(page);
   if (!isLoggedIn) {
     logger.warn({ userId: task.userId }, '快手登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'kuaishou');
+    await performLoginOnCurrentTab(page, task.userId, 'kuaishou');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -1273,8 +1255,8 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
   // wrong-page fast-fail：偏离视频管理页 → fast-fail
   const ksUrl = page.url();
   if (!ksUrl.includes('/article/publish/video')) {
-    logger.warn({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口 page 偏离视频管理页，fast-fail');
-    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+    logger.error({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口导航后仍偏离视频管理页，抛错触发 failed 重试');
+    throw new Error(`[快手] 入口导航后仍偏离视频管理页: ${ksUrl}`);
   }
 
   // Phase 1 — 统一使用 work_list 数据源（photo_analysis 返回数量少且 ID 体系不同，
@@ -1290,7 +1272,7 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     logger.error({ userId: task.userId, platform: 'kuaishou', riskType }, '快手风控触发');
     await db.logRiskScene(task.userId, 'kuaishou', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'kuaishou');
+    await performLoginOnCurrentTab(page, task.userId, 'kuaishou');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
 
@@ -1354,7 +1336,7 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     logger.error({ userId: task.userId }, '快手 Phase 3 风控触发');
     await db.logRiskScene(task.userId, 'kuaishou', riskType, (phase3Result as any).riskInfo?.evidence || '');
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'kuaishou');
+    await performLoginOnCurrentTab(page, task.userId, 'kuaishou');
     ks.unregisterCommentListener();
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase3', riskDetected: true };
   }
@@ -1438,7 +1420,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
     // 登录失效时发送 QR 码到企微
     if (['login_redirect', 'session_expired', 'url_redirect'].includes(riskType)) {
       await db.updateUserStatus(task.userId, 'login_required');
-      await sendLoginQR(page, task.userId, 'xiaohongshu');
+      await performLoginOnCurrentTab(page, task.userId, 'xiaohongshu');
     }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }
@@ -1634,7 +1616,7 @@ export async function runTencentCheck(page: any, task: MonitorTask, onProgress?:
   if (!loggedIn) {
     logger.warn({ userId: task.userId }, '视频号登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
-    await sendLoginQR(page, task.userId, 'tencent');
+    await performLoginOnCurrentTab(page, task.userId, 'tencent');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -1663,7 +1645,7 @@ export async function runTencentCheck(page: any, task: MonitorTask, onProgress?:
     await db.logRiskScene(task.userId, 'tencent', riskType, phase1Result.riskControlInfo?.evidence || '');
     await db.updateUserStatus(task.userId, isLoginExpired ? 'login_required' : 'risk_control');
     if (isLoginExpired) {
-      await sendLoginQR(page, task.userId, 'tencent');
+      await performLoginOnCurrentTab(page, task.userId, 'tencent');
     }
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: true };
   }

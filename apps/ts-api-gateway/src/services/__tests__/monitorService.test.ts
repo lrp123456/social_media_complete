@@ -45,7 +45,7 @@ jest.mock('../../crawlers/douyinCrawler', () => {
   return { DouyinCrawler: jest.fn().mockImplementation(() => mockDyInstance), ReplyTarget: jest.fn() };
 });
 jest.mock('../../crawlers/kuaishouCrawler', () => {
-  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), detectKuaishouLogin: jest.fn().mockResolvedValue(true) };
+  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), detectKuaishouLogin: jest.fn().mockResolvedValue(true), detectKuaishouLoginV2: jest.fn<Promise<boolean>, []>().mockResolvedValue(true) };
   return { KuaishouCrawler: jest.fn().mockImplementation(() => mockKsInstance) };
 });
 jest.mock('../monitorDatabaseService', () => ({
@@ -119,17 +119,13 @@ describe('Phase1 wrong-page fast-fail', () => {
     const page = { url: () => 'https://www.douyin.com/foryou' };
     const task = { userId: 13, windowId: 'w4', platform: 'douyin' } as any;
     const { runDouyinCheck } = require('../monitorService');
-    const result = await runDouyinCheck(page, task, undefined);
-    expect(result.phase).toBe('Phase1');
-    expect(result.hasUpdate).toBe(false);
+    await expect(runDouyinCheck(page, task, undefined)).rejects.toThrow(/偏离工作页/);
   });
 
   it('should fast-fail kuaishou Phase1 when page is on non-video-manage page', async () => {
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/photo' };
     const task = { userId: 13, windowId: 'w4', platform: 'kuaishou' } as any;
     const { runKuaishouCheck } = require('../monitorService');
-    const result = await runKuaishouCheck(page, task, undefined);
-    expect(result.phase).toBe('Phase1');
-    expect(result.hasUpdate).toBe(false);
+    await expect(runKuaishouCheck(page, task, undefined)).rejects.toThrow(/偏离视频管理页/);
   });
 });

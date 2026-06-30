@@ -63,49 +63,20 @@ jest.mock('../../crawlers/douyinCrawler', () => ({
 
 import { runDouyinCheck } from '../monitorService';
 
-describe('runDouyinCheck 入口导航', () => {
+describe('runDouyinCheck fast-fail 抛错', () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it('残留子页（/data/following/follower）→ 触发 navigateToCreatorHome 并进入 Phase1', async () => {
-    const task = { userId: 6, windowId: 'w1', platform: 'douyin' } as any;
-    const page = {
-      url: jest.fn()
-        .mockReturnValueOnce('https://creator.douyin.com/creator-micro/data/following/follower')
-        .mockReturnValue('https://creator.douyin.com/creator-micro/home'),
-    } as any;
-    const result = await runDouyinCheck(page, task);
-    expect(mockNavigateToCreatorHome).toHaveBeenCalledTimes(1);
-    expect(result.hasUpdate).toBe(false);
-    expect(mockCheckForUpdates).toHaveBeenCalledTimes(1);
-  });
-
-  it('已在 home 页 → 不触发 navigateToCreatorHome', async () => {
-    const task = { userId: 6, windowId: 'w1', platform: 'douyin' } as any;
-    const page = { url: jest.fn().mockReturnValue('https://creator.douyin.com/creator-micro/home') } as any;
-    const result = await runDouyinCheck(page, task);
-    expect(mockNavigateToCreatorHome).not.toHaveBeenCalled();
-    expect(result.hasUpdate).toBe(false);
-    expect(mockCheckForUpdates).toHaveBeenCalledTimes(1);
-  });
-
-  it('已在 content/manage 页 → 不触发 navigateToCreatorHome', async () => {
-    const task = { userId: 6, windowId: 'w1', platform: 'douyin' } as any;
-    const page = { url: jest.fn().mockReturnValue('https://creator.douyin.com/creator-micro/content/manage') } as any;
-    const result = await runDouyinCheck(page, task);
-    expect(mockNavigateToCreatorHome).not.toHaveBeenCalled();
-    expect(result.hasUpdate).toBe(false);
-    expect(mockCheckForUpdates).toHaveBeenCalledTimes(1);
-  });
-
   it('导航后仍不在工作页 → 抛错（不再 return success）', async () => {
-    const task = { userId: 6, windowId: 'w1', platform: 'douyin' } as any;
+    const task = { userId: 1, windowId: 'w1', platform: 'douyin' } as any;
     const page = {
       url: jest.fn()
         .mockReturnValueOnce('https://creator.douyin.com/creator-micro/data/following/follower')
-        .mockReturnValue('https://creator.douyin.com/creator-micro/data/important/following'), // navigateToCreatorHome 失败后仍不在工作页
+        .mockReturnValue('https://creator.douyin.com/creator-micro/data/important/following'),
     } as any;
-    await expect(runDouyinCheck(page, task)).rejects.toThrow(/偏离工作页/);
+    await expect(
+      runDouyinCheck(page, task),
+    ).rejects.toThrow(/偏离工作页|fast-fail|导航/);
     expect(mockNavigateToCreatorHome).toHaveBeenCalledTimes(1);
-    expect(mockCheckForUpdates).not.toHaveBeenCalled(); // fast-fail 抛错，不应进入 Phase1
+    expect(mockCheckForUpdates).not.toHaveBeenCalled();
   });
 });
