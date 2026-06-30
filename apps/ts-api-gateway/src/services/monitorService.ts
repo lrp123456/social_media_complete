@@ -891,28 +891,28 @@ const crawlerCache = {
   tencent: new Map<string, TencentCrawler>(),
 };
 
-function getDouyinCrawler(windowId: string): DouyinCrawler {
+export function getDouyinCrawler(windowId: string): DouyinCrawler {
   if (!crawlerCache.douyin.has(windowId)) {
     crawlerCache.douyin.set(windowId, new DouyinCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.douyin.get(windowId)!;
 }
 
-function getKuaishouCrawler(windowId: string): KuaishouCrawler {
+export function getKuaishouCrawler(windowId: string): KuaishouCrawler {
   if (!crawlerCache.kuaishou.has(windowId)) {
     crawlerCache.kuaishou.set(windowId, new KuaishouCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.kuaishou.get(windowId)!;
 }
 
-function getXiaohongshuCrawler(windowId: string): XiaohongshuCrawler {
+export function getXiaohongshuCrawler(windowId: string): XiaohongshuCrawler {
   if (!crawlerCache.xiaohongshu.has(windowId)) {
     crawlerCache.xiaohongshu.set(windowId, new XiaohongshuCrawler(MAX_MONITOR_VIDEOS));
   }
   return crawlerCache.xiaohongshu.get(windowId)!;
 }
 
-function getTencentCrawler(windowId: string): TencentCrawler {
+export function getTencentCrawler(windowId: string): TencentCrawler {
   if (!crawlerCache.tencent.has(windowId)) {
     crawlerCache.tencent.set(windowId, new TencentCrawler(MAX_MONITOR_VIDEOS));
   }
