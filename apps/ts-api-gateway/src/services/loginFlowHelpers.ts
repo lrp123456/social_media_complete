@@ -1,6 +1,6 @@
 // @ts-api-gateway/services/loginFlowHelpers.ts
 // LoginTabRegistry 单例 + selectors.json 登录流配置读取
-import { LoginTabRegistry } from '@social-media/browser-core';
+import { LoginTabRegistry, getLoginHost, isOnLoginDomain } from '@social-media/browser-core';
 import type { LoginFlowConfig } from '@social-media/browser-core';
 import { HumanActions } from '@social-media/browser-core';
 import { getSelectorReader } from '../lib/selectorStore';
@@ -96,7 +96,8 @@ export async function ensureLoginTab(
   if (!browser) return null;
 
   // 1. 查找已有登录标签页
-  let record = await loginTabRegistry.find(windowId, platform, flowId, browser, config.domain);
+  const loginHost = getLoginHost(config.loginUrl, config.domain);
+  let record = await loginTabRegistry.find(windowId, platform, flowId, browser, loginHost);
   // 2. 未找到则优先复用监控已打开的同域名平台 tab（不新建连接/tab）
   if (!record) {
     try {
@@ -105,7 +106,7 @@ export async function ensureLoginTab(
         for (const page of ctx.pages()) {
           try {
             const url = page.url();
-            if (!url.includes(config.domain)) continue;
+            if (!isOnLoginDomain(url, loginHost)) continue;
             // 排除已带登录标记的页，避免误复用旧登录 tab
             const mark = await page.evaluate(({ markKey }: { markKey: string }) => {
               const raw = localStorage.getItem(markKey);

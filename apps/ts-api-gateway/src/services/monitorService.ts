@@ -6,7 +6,7 @@ import { getRedis } from '../lib/redis';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { WindowMutex } from '../lib/redlock';
-import { HumanActions, BrowserManager, ExitStrategy } from '@social-media/browser-core';
+import { HumanActions, BrowserManager, ExitStrategy, getLoginHost } from '@social-media/browser-core';
 import { getBrowserManager } from '../lib/browserManager';
 import {
   getWindowQueue,
@@ -798,7 +798,8 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const browser = await bm.getBrowser(windowId);
         if (!browser) return;
 
-        const record = await loginTabRegistry.find(windowId, platform, fid, browser, config.domain);
+        const loginHost = getLoginHost(config.loginUrl, config.domain);
+        const record = await loginTabRegistry.find(windowId, platform, fid, browser, loginHost);
         if (!record) {
           await delFlowState(userId, fid);
           return;

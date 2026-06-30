@@ -1,5 +1,6 @@
 // @ts-api-gateway/services/wechatBotService.ts - 企业微信智能机器人长连接服务
 
+import { getLoginHost } from '@social-media/browser-core';
 import { createLogger } from '../lib/logger';
 import { uploadBufferToOSS, OSS_DIRS } from '../lib/oss';
 
@@ -698,7 +699,8 @@ async function autoStartBot(): Promise<void> {
           const browser = await bm.getBrowser(windowId);
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
-          const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, config.domain);
+          const loginHost = getLoginHost(config.loginUrl, config.domain);
+          const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, loginHost);
           if (record) {
             // 检查登录标签页是否已从登录页跳转（URL 不再包含 login/passport）
             let tabUrl = record.page.url();

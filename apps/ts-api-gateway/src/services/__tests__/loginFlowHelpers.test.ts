@@ -47,6 +47,8 @@ jest.mock('@social-media/browser-core', () => ({
     openLoginTab: openLoginTabMock,
     register: registerMock,
   })),
+  getLoginHost: jest.fn((_loginUrl: string, fallbackDomain: string) => fallbackDomain),
+  isOnLoginDomain: jest.fn((url: string, loginHost: string) => url.includes(loginHost)),
   RequestInterceptor: jest.fn(),
   BrowserManager: jest.fn(),
   ExitStrategy: { getQuerySource: jest.fn(), getNextPageAction: jest.fn() },
