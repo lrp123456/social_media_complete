@@ -1185,7 +1185,10 @@ router.post('/monitor/accounts/:userId/probe-login', async (req: Request, res: R
     if (!windowId) return res.status(400).json({ error: '账号未关联浏览器窗口' });
 
     // force=true 立即探测，绕过 30min cooldown
-    await triggerLoginProbe(userId, account.platform, windowId, undefined, true);
+    const result = await triggerLoginProbe(userId, account.platform, windowId, undefined, true);
+    if (!result.probed && result.reason === 'monitor_active') {
+      return res.json({ message: '已有监控运行中，无需探测', userId, platform: account.platform, reason: result.reason });
+    }
     res.json({ message: '已触发登录探测', userId, platform: account.platform });
   } catch (err: any) {
     logger.error({ err: err.message }, '[probe-login] 探测失败');

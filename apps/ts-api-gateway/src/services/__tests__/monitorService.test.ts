@@ -30,12 +30,15 @@ jest.mock('../../lib/oss', () => ({ uploadBufferToOSS: jest.fn().mockResolvedVal
 const prismaMock = { platformAccount: { findUnique: jest.fn().mockResolvedValue({ wechatUserid: 'wx1', windowId: 4, window: { externalId: '68a259626bb2c5905ffed8116e9a2a04' } }) } };
 jest.mock('../../lib/prisma', () => ({ prisma: prismaMock }));
 jest.mock('../../lib/redis', () => ({ getRedis: () => redisMock }));
+jest.mock('../unifiedQueue', () => ({
+  getWindowQueue: jest.fn(),
+}));
 const mockPage = { url: jest.fn().mockReturnValue('https://example.com/some-page') };
 
 it('dummy', () => { expect(1).toBe(1); });
 
 describe('triggerLoginProbe force', () => {
-  let triggerLoginProbe: (userId: number, platform: string, windowId: string, flowId?: string, force?: boolean) => Promise<void>;
+  let triggerLoginProbe: (userId: number, platform: string, windowId: string, flowId?: string, force?: boolean) => Promise<{ probed: true } | { probed: false; reason: 'monitor_active' }>;
 
   beforeAll(() => {
     triggerLoginProbe = require('../monitorService').triggerLoginProbe;
@@ -64,5 +67,17 @@ describe('triggerLoginProbe force', () => {
     await triggerLoginProbe(14, 'tencent', '68a259626bb2c5905ffed8116e9a2a04', 'creator', false);
     // cooldown 跳过，不进入 setTimeout，因此 getBrowser 不会被调用
     expect(getBrowserMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('triggerLoginProbe monitor_active guard', () => {
+  it('should return monitor_active without probing when same window+platform monitor is active', async () => {
+    const activeJob = { data: { userId: 13, platform: 'tencent', windowId: 'w4' }, isActive: () => Promise.resolve(true), isWaiting: () => Promise.resolve(false) };
+    const { getWindowQueue } = require('../unifiedQueue');
+    getWindowQueue.mockResolvedValue({ getJobs: () => Promise.resolve([activeJob]) });
+
+    const { triggerLoginProbe } = require('../monitorService');
+    const result = await triggerLoginProbe(13, 'tencent', 'w4', undefined, true);
+    expect(result).toEqual({ probed: false, reason: 'monitor_active' });
   });
 });

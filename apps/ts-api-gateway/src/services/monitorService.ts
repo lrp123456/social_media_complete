@@ -762,7 +762,27 @@ export async function delFlowState(userId: number, flowId: string): Promise<void
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
 
-export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string, force: boolean = false): Promise<void> {
+export type LoginProbeResult = { probed: true } | { probed: false; reason: 'monitor_active' };
+
+export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string, force: boolean = false): Promise<LoginProbeResult> {
+  // 入口守卫：同 (windowId, platform) 有活跃监控 → 直接返回，不探测
+  try {
+    const { getWindowQueue } = await import('./unifiedQueue');
+    const q = await getWindowQueue(windowId);
+    const [activeJobs, waitingJobs] = await Promise.all([q.getJobs(['active']), q.getJobs(['waiting'])]);
+    for (const j of [...activeJobs, ...waitingJobs]) {
+      const data = j.data as any;
+      if (data?.windowId === windowId && data?.platform === platform) {
+        if (await j.isActive() || await j.isWaiting()) {
+          logger.info({ userId, platform }, '[triggerLoginProbe] 同窗口同平台监控活跃，跳过探测');
+          return { probed: false, reason: 'monitor_active' };
+        }
+      }
+    }
+  } catch (err: any) {
+    logger.warn({ userId, err: err.message }, '[triggerLoginProbe] 活跃监控检查失败，继续探测');
+  }
+
   const { loginTabRegistry, getLoginFlowConfig, getFlowIdsForPlatform } = await import('./loginFlowHelpers');
   const bm = getBrowserManager();
 
@@ -820,6 +840,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
       } catch { /* probe 失败不阻塞 */ }
     }, 100);
   }
+  return { probed: true };
 }
 
 async function getAllFlowStates(userId: number, platform: string): Promise<Map<string, LoginFlowState>> {
