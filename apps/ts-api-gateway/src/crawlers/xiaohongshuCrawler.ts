@@ -1253,17 +1253,18 @@ export class XiaohongshuCrawler {
           const mainsiteConfig = getLoginFlowConfig('xiaohongshu', 'mainsite');
           if (mainsiteConfig && xhsUser?.windowId) {
             // 标记标签页 + 注册（不关闭！）
-            const markData = JSON.stringify({ flowId: 'mainsite', userId, openedAt: Date.now() });
+            const markData = JSON.stringify({ flowId: 'mainsite', platform: 'xiaohongshu', userId, openedAt: Date.now() });
             await newPage.evaluate((data: string) => {
               localStorage.setItem('__login_tab_mark__', data);
             }, markData);
 
             const record = {
               page: newPage, targetId: (newPage as any)._targetId || 'unknown',
-              domain: mainsiteConfig.domain, flowId: 'mainsite',
+              domain: mainsiteConfig.domain, flowId: 'mainsite', platform: 'xiaohongshu',
               openedAt: Date.now(), userId,
+              loginUrl: mainsiteConfig.loginUrl,
             };
-            loginTabRegistry.register(xhsWindowId, 'mainsite', record);
+            loginTabRegistry.register(xhsWindowId, 'xiaohongshu', 'mainsite', record);
 
             // 截取 QR（带 padding）
             const qrBuffer = await loginTabRegistry.captureQR(newPage, mainsiteConfig);

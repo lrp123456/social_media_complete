@@ -38,12 +38,13 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-1',
       domain: 'www.xiaohongshu.com',
       flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(),
       userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
-    registry.register('window123', 'mainsite', record);
-    const memKey = 'window123:mainsite';
+    registry.register('window123', 'xiaohongshu', 'mainsite', record);
+    const memKey = 'window123:xiaohongshu:mainsite';
     expect(registry.tabs.has(memKey)).toBe(true);
     expect(registry.tabs.get(memKey).userId).toBe(42);
   });
@@ -52,34 +53,37 @@ describe('LoginTabRegistry', () => {
     const record = {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
-    registry.register('window123', 'mainsite', record);
-    registry.unregister('window123', 'mainsite');
-    expect(registry.tabs.has('window123:mainsite')).toBe(false);
+    registry.register('window123', 'xiaohongshu', 'mainsite', record);
+    registry.unregister('window123', 'xiaohongshu', 'mainsite');
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(false);
   });
 
   it('should handle multiple flowIds for same window independently', () => {
     const mainsite = {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
     const creator = {
       page: mockPage('https://creator.xiaohongshu.com/home', 'target-2'),
       targetId: 'target-2', domain: 'creator.xiaohongshu.com', flowId: 'creator',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://creator.xiaohongshu.com/home',
     };
-    registry.register('window123', 'mainsite', mainsite);
-    registry.register('window123', 'creator', creator);
-    expect(registry.tabs.has('window123:mainsite')).toBe(true);
-    expect(registry.tabs.has('window123:creator')).toBe(true);
-    registry.unregister('window123', 'mainsite');
-    expect(registry.tabs.has('window123:mainsite')).toBe(false);
-    expect(registry.tabs.has('window123:creator')).toBe(true);
+    registry.register('window123', 'xiaohongshu', 'mainsite', mainsite);
+    registry.register('window123', 'xiaohongshu', 'creator', creator);
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(true);
+    expect(registry.tabs.has('window123:xiaohongshu:creator')).toBe(true);
+    registry.unregister('window123', 'xiaohongshu', 'mainsite');
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(false);
+    expect(registry.tabs.has('window123:xiaohongshu:creator')).toBe(true);
   });
 
   it('should detect logged_out via indicator', async () => {
@@ -155,14 +159,15 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-ks',
       domain: 'cp.kuaishou.com',
       flowId: 'creator',
+      platform: 'kuaishou',
       openedAt: Date.now(),
       userId: 11,
       loginUrl: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api',
     };
-    registry.register('windowKS', 'creator', record);
-    await registry.unregister('windowKS', 'creator');
+    registry.register('windowKS', 'kuaishou', 'creator', record);
+    await registry.unregister('windowKS', 'kuaishou', 'creator');
     expect(closed).toBe(true);
-    expect(registry.tabs.has('windowKS:creator')).toBe(false);
+    expect(registry.tabs.has('windowKS:kuaishou:creator')).toBe(false);
   });
 
   it('should NOT close page on unregister when URL is same domain (douyin)', async () => {
@@ -174,13 +179,77 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-dy',
       domain: 'creator.douyin.com',
       flowId: 'creator',
+      platform: 'douyin',
       openedAt: Date.now(),
       userId: 7,
       loginUrl: 'https://creator.douyin.com/creator-micro/home',
     };
-    registry.register('windowDY', 'creator', record);
-    await registry.unregister('windowDY', 'creator');
+    registry.register('windowDY', 'douyin', 'creator', record);
+    await registry.unregister('windowDY', 'douyin', 'creator');
     expect(closed).toBe(false);
-    expect(registry.tabs.has('windowDY:creator')).toBe(false);
+    expect(registry.tabs.has('windowDY:douyin:creator')).toBe(false);
+  });
+
+  it('should isolate same flowId across platforms under shared window', () => {
+    const douyin = {
+      page: mockPage('https://creator.douyin.com/creator-micro/home', 't-dy'),
+      targetId: 't-dy', domain: 'creator.douyin.com', flowId: 'creator',
+      platform: 'douyin',
+      openedAt: Date.now(), userId: 6,
+      loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    };
+    const tencent = {
+      page: mockPage('https://channels.weixin.qq.com/login.html', 't-tx'),
+      targetId: 't-tx', domain: 'channels.weixin.qq.com', flowId: 'creator',
+      platform: 'tencent',
+      openedAt: Date.now(), userId: 13,
+      loginUrl: 'https://channels.weixin.qq.com/login.html',
+    };
+    // 同 windowId、同 flowId='creator'、不同 platform
+    registry.register('w4', 'douyin', 'creator', douyin);
+    registry.register('w4', 'tencent', 'creator', tencent);
+    expect(registry.tabs.has('w4:douyin:creator')).toBe(true);
+    expect(registry.tabs.has('w4:tencent:creator')).toBe(true);
+    // 互不覆盖
+    expect(registry.tabs.get('w4:douyin:creator').userId).toBe(6);
+    expect(registry.tabs.get('w4:tencent:creator').userId).toBe(13);
+  });
+
+  it('should reject stale memory hit whose domain mismatches config', async () => {
+    // 模拟旧串号残留：key 命中但 record 是抖音 page，config.domain 是视频号
+    const dyPage = mockPage('https://creator.douyin.com/creator-micro/home', 't-dy');
+    const staleRecord = {
+      page: dyPage, targetId: 't-dy',
+      domain: 'creator.douyin.com', flowId: 'creator', platform: 'douyin',
+      openedAt: Date.now(), userId: 6,
+      loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    };
+    // 直接污染内存（模拟跨平台 key 冲突后的残留）
+    registry.tabs.set('w4:tencent:creator', staleRecord);
+
+    const browser = { contexts: () => [{ pages: () => [] }] };
+    const found = await registry.find('w4', 'tencent', 'creator', browser, 'channels.weixin.qq.com');
+    // domain 不符 → 拒绝内存命中，返回 null（无枚举兜底可用）
+    expect(found).toBe(null);
+    // 残留被清理
+    expect(registry.tabs.has('w4:tencent:creator')).toBe(false);
+  });
+
+  it('should match platform in localStorage mark during enumeration fallback', async () => {
+    const txPage = mockPage('https://channels.weixin.qq.com/login.html', 't-tx');
+    txPage.evaluate = ({ markKey }) => Promise.resolve({
+      flowId: 'creator', platform: 'tencent', userId: 13,
+      openedAt: 123, loginUrl: 'https://channels.weixin.qq.com/login.html',
+    });
+    const dyPage = mockPage('https://creator.douyin.com/creator-micro/home', 't-dy');
+    dyPage.evaluate = ({ markKey }) => Promise.resolve({
+      flowId: 'creator', platform: 'douyin', userId: 6,
+      openedAt: 123, loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    });
+    const browser = { contexts: () => [{ pages: () => [dyPage, txPage] }] };
+    // 查视频号：URL 含 channels.weixin.qq.com 的页才进入枚举；dyPage URL 不含视频号 domain 被跳过
+    const found = await registry.find('w4', 'tencent', 'creator', browser, 'channels.weixin.qq.com');
+    expect(found).not.toBe(null);
+    expect(found.userId).toBe(13);
   });
 });

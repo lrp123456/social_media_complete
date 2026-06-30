@@ -533,7 +533,10 @@ export function useProbeLogin() {
   return useMutation({
     mutationFn: (userId: number) =>
       api.post(`/matrix/monitor/accounts/${userId}/probe-login`).then((r) => r.data),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      if ((data as any)?.reason === 'monitor_active') {
+        // 已有监控运行中，前端调用方可读取 data.reason 自行触发 toast
+      }
       qc.invalidateQueries({ queryKey: ['monitor'] });
     },
   });

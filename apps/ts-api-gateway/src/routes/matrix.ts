@@ -1185,7 +1185,10 @@ router.post('/monitor/accounts/:userId/probe-login', async (req: Request, res: R
     if (!windowId) return res.status(400).json({ error: '账号未关联浏览器窗口' });
 
     // force=true 立即探测，绕过 30min cooldown
-    await triggerLoginProbe(userId, account.platform, windowId, undefined, true);
+    const result = await triggerLoginProbe(userId, account.platform, windowId, undefined, true);
+    if (!result.probed && result.reason === 'monitor_active') {
+      return res.json({ message: '已有监控运行中，无需探测', userId, platform: account.platform, reason: result.reason });
+    }
     res.json({ message: '已触发登录探测', userId, platform: account.platform });
   } catch (err: any) {
     logger.error({ err: err.message }, '[probe-login] 探测失败');
@@ -1224,13 +1227,17 @@ router.post('/monitor/accounts/:userId/trigger', async (req: Request, res: Respo
     }
 
     // Add to BullMQ queue
-    const job = await enqueueMonitor({
+    const result = await enqueueMonitor({
       taskId: `manual_${Date.now()}_${user.id}`,
       userId: user.id,
       platform: user.platform as PlatformName,
       windowId: user.windowExternalId,
       windowExternalId: user.windowExternalId,
     });
+    if (!result.enqueued) {
+      return res.status(409).json({ error: '同窗口同平台已有监控任务运行中', reason: result.reason });
+    }
+    const job = result.job;
 
     // 重置该 (窗口, 平台) 的调度器倒计时
     resetSchedulerTimer(user.windowExternalId, user.platform);
@@ -1288,14 +1295,16 @@ router.post('/monitor/trigger-all', async (_req: Request, res: Response) => {
     const jobIds: string[] = [];
     for (const [, userGroup] of byWindow) {
       for (const user of userGroup) {
-        const job = await enqueueMonitor({
+        const result = await enqueueMonitor({
           taskId: `manual_all_${Date.now()}_${user.id}`,
           userId: user.id,
           platform: user.platform as PlatformName,
           windowId: user.windowExternalId,
           windowExternalId: user.windowExternalId,
         });
-        jobIds.push(job.id);
+        if (result.enqueued) {
+          jobIds.push(result.job.id);
+        }
       }
     }
 

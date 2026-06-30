@@ -762,7 +762,27 @@ export async function delFlowState(userId: number, flowId: string): Promise<void
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
 
-export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string, force: boolean = false): Promise<void> {
+export type LoginProbeResult = { probed: true } | { probed: false; reason: 'monitor_active' };
+
+export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string, force: boolean = false): Promise<LoginProbeResult> {
+  // 入口守卫：同 (windowId, platform) 有活跃监控 → 直接返回，不探测
+  try {
+    const { getWindowQueue } = await import('./unifiedQueue');
+    const q = await getWindowQueue(windowId);
+    const [activeJobs, waitingJobs] = await Promise.all([q.getJobs(['active']), q.getJobs(['waiting'])]);
+    for (const j of [...activeJobs, ...waitingJobs]) {
+      const data = j.data as any;
+      if (data?.windowId === windowId && data?.platform === platform) {
+        if (await j.isActive() || await j.isWaiting()) {
+          logger.info({ userId, platform }, '[triggerLoginProbe] 同窗口同平台监控活跃，跳过探测');
+          return { probed: false, reason: 'monitor_active' };
+        }
+      }
+    }
+  } catch (err: any) {
+    logger.warn({ userId, err: err.message }, '[triggerLoginProbe] 活跃监控检查失败，继续探测');
+  }
+
   const { loginTabRegistry, getLoginFlowConfig, getFlowIdsForPlatform } = await import('./loginFlowHelpers');
   const bm = getBrowserManager();
 
@@ -778,7 +798,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const browser = await bm.getBrowser(windowId);
         if (!browser) return;
 
-        const record = await loginTabRegistry.find(windowId, fid, browser, config.domain);
+        const record = await loginTabRegistry.find(windowId, platform, fid, browser, config.domain);
         if (!record) {
           await delFlowState(userId, fid);
           return;
@@ -787,9 +807,9 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const result = await loginTabRegistry.checkLoginState(record.page, config);
         if (result === 'logged_in') {
           if (config.closeOnLoginSuccess) {
-            await loginTabRegistry.closeLoginTab(windowId, fid);
+            await loginTabRegistry.closeLoginTab(windowId, platform, fid);
           } else {
-            await loginTabRegistry.unregister(windowId, fid);
+            await loginTabRegistry.unregister(windowId, platform, fid);
           }
           await delFlowState(userId, fid);
 
@@ -820,6 +840,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
       } catch { /* probe 失败不阻塞 */ }
     }, 100);
   }
+  return { probed: true };
 }
 
 async function getAllFlowStates(userId: number, platform: string): Promise<Map<string, LoginFlowState>> {
@@ -993,7 +1014,7 @@ export async function executeMonitorCheck(
 // 抖音监控 — 3阶段流程
 // ============================================================
 
-async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const dy = getDouyinCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('douyin');
   const crawlConfig = await getCrawlConfig('douyin');
@@ -1006,6 +1027,14 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   const currentUrl = page.url();
   if (!currentUrl.includes('creator.douyin.com')) {
     await dy.navigateToCreatorHome(page);
+  }
+
+  // wrong-page fast-fail：偏离 creator-micro 主页/内容管理 → fast-fail
+  const dyUrl = page.url();
+  const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
+  if (!dyOk) {
+    logger.warn({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口 page 偏离作品管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
@@ -1166,7 +1195,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 // 快手监控 — 3阶段流程
 // ============================================================
 
-async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const ks = getKuaishouCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('kuaishou');
   const crawlConfig = await getCrawlConfig('kuaishou');
@@ -1196,6 +1225,13 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     '/rest/cp/creator/analysis/pc/photo/list',
     '/rest/cp/comment/pc/list',
   ]);
+
+  // wrong-page fast-fail：偏离视频管理页 → fast-fail
+  const ksUrl = page.url();
+  if (!ksUrl.includes('/article/publish/video')) {
+    logger.warn({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口 page 偏离视频管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+  }
 
   // Phase 1 — 统一使用 work_list 数据源（photo_analysis 返回数量少且 ID 体系不同，
   // 交替使用会导致 reconcile 误删视频，见 issue: 两源交替循环删除）
@@ -1543,7 +1579,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 // 视频号监控 — 3阶段流程
 // ============================================================
 
-async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const tc = getTencentCrawler(task.windowId);
   const crawlConfig = await getCrawlConfig('tencent');
   const isSimpleMode = crawlConfig.mode === 'simple';
@@ -1558,6 +1594,13 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   }
 
   let crawlMode = await db.getCrawlMode('tencent');
+
+  // wrong-page fast-fail：若被其他进程导航到评论页（/platform/comment），Phase1 等不到作品管理页 → 直接返回
+  const tencentUrl = page.url();
+  if (tencentUrl.includes('/platform/comment') || tencentUrl.includes('/platform/home')) {
+    logger.warn({ userId: task.userId, url: tencentUrl }, '[视频号] Phase1 入口 page 偏离作品管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+  }
 
   // Phase 1: 检测更新（视频列表扫描 + 对比数据库）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
@@ -1843,34 +1886,35 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       q.getJobs(['active']),
       q.getJobs(['waiting']),
     ]);
-    const activeUserIds = new Set<number>();
+    const activeKeys = new Set<string>();
     for (const j of [...activeJobs, ...waitingJobs]) {
       const data = j.data as any;
-      if (!data?.userId) continue;
+      if (!data?.windowId || !data?.platform) continue;
       // BullMQ API 判断状态，不需要手动查 Redis lock key
       if (await j.isActive() || await j.isWaiting()) {
-        activeUserIds.add(data.userId);
+        activeKeys.add(`${data.windowId}:${data.platform}`);
       }
     }
 
     // 入队（跳过已有任务的用户）
     let queued = 0;
     for (const u of matched) {
-      if (activeUserIds.has(u.id)) {
-        logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：已有运行中的任务');
+      const key = `${u.windowExternalId}:${u.platform}`;
+      if (activeKeys.has(key)) {
+        logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：同窗口同平台已有任务');
         continue;
       }
-      await enqueueMonitor({
+      const result = await enqueueMonitor({
         taskId: `mon_${Date.now()}_${u.id}`,
         userId: u.id,
         platform: u.platform as PlatformName,
         windowId: u.windowExternalId,
         windowExternalId: u.windowExternalId,
       });
-      queued++;
+      if (result.enqueued) queued++;
     }
 
-    if (queued === 0 && activeUserIds.size > 0) {
+    if (queued === 0 && activeKeys.size > 0) {
       // 全部用户已有任务运行中（外部手动触发入队的任务）
       // 设 scheduleAfterCompletion，等任务完成后 reportMonitorComplete 触发下一轮
       st.scheduleAfterCompletion = true;
@@ -1878,7 +1922,7 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       return;
     }
 
-    logger.info({ windowId, platform, queued, skipped: activeUserIds.size }, '[调度] 完成任务入队');
+    logger.info({ windowId, platform, queued, skipped: activeKeys.size }, '[调度] 完成任务入队');
     st.pendingTaskCount = queued;
     st.scheduleAfterCompletion = true;
     // 不立即 scheduleNext，等待所有任务完成后 reportMonitorComplete 触发

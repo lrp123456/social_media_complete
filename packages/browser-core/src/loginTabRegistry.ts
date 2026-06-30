@@ -10,14 +10,14 @@ export class LoginTabRegistry {
   tabs = new Map<string, LoginTabRecord>();
 
   /** 注册登录标签页到内存注册表 */
-  register(windowId: string, flowId: string, record: LoginTabRecord): void {
-    const key = `${windowId}:${flowId}`;
+  register(windowId: string, platform: string, flowId: string, record: LoginTabRecord): void {
+    const key = `${windowId}:${platform}:${flowId}`;
     this.tabs.set(key, record);
   }
 
   /** 从内存注册表移除并清除 localStorage 标记。跨域跳转的标签页会被关闭。 */
-  async unregister(windowId: string, flowId: string): Promise<void> {
-    const key = `${windowId}:${flowId}`;
+  async unregister(windowId: string, platform: string, flowId: string): Promise<void> {
+    const key = `${windowId}:${platform}:${flowId}`;
     const record = this.tabs.get(key);
     if (record) {
       this.tabs.delete(key);
@@ -64,14 +64,18 @@ export class LoginTabRegistry {
    * @param browser - patchright Browser 实例（any 类型避免依赖 patchright）
    * @param domain - loginFlow 配置中的 domain 字段，用于 URL 筛选
    */
-  async find(windowId: string, flowId: string, browser: any, domain: string): Promise<LoginTabRecord | null> {
-    const key = `${windowId}:${flowId}`;
+  async find(windowId: string, platform: string, flowId: string, browser: any, domain: string): Promise<LoginTabRecord | null> {
+    const key = `${windowId}:${platform}:${flowId}`;
 
     // 1. 查内存
     const cached = this.tabs.get(key);
     if (cached) {
       try {
-        if (!cached.page.isClosed()) return cached;
+        if (!cached.page.isClosed()) {
+          // domain 校验：防止跨平台 key 冲突后的残留串号
+          if (cached.domain === domain) return cached;
+          console.warn(`[LoginTabRegistry] find: memory hit domain mismatch (record.domain=${cached.domain}, expected=${domain}), clearing stale entry`);
+        }
       } catch { /* page 引用过期 */ }
       this.tabs.delete(key);
     }
@@ -89,12 +93,13 @@ export class LoginTabRegistry {
            const raw = localStorage.getItem(markKey);
            return raw ? JSON.parse(raw) : null;
          }, { markKey: LOGIN_TAB_MARK_KEY });
-          if (markData && markData.flowId === flowId) {
+          if (markData && markData.platform === platform && markData.flowId === flowId) {
             const record: LoginTabRecord = {
               page,
               targetId: markData.targetId || '',
               domain,
               flowId,
+              platform,
               openedAt: markData.openedAt || Date.now(),
               userId: markData.userId || 0,
               loginUrl: markData.loginUrl || '',
@@ -102,7 +107,7 @@ export class LoginTabRegistry {
            this.tabs.set(key, record);
            return record;
          }
-         // 同域名但没有标记 → 跳过（可能是主监控页面，不能关闭）
+         // 同域名但 platform/flowId 不匹配 → 跳过（可能是其他平台登录 tab 或主监控页）
        } catch { continue; }
      }
     } catch { /* browser 不可用 */ }
@@ -137,6 +142,19 @@ export class LoginTabRegistry {
 
   /** 截取 QR 码，带 padding 正方形裁剪，全页兜底。支持 iframe 内查找。 */
   async captureQR(page: any, config: LoginFlowConfig): Promise<Buffer | null> {
+    // 前置 hostname 校验：page 当前域名与 config.loginUrl 域名不符 → 快速返回 null
+    // 防止跨平台串号时在错误 page 上累积数十秒 waitForSelector 后发出错误全页截图
+    try {
+      const pageHost = new URL(page.url()).hostname;
+      const loginHost = new URL(config.loginUrl).hostname;
+      if (pageHost !== loginHost) {
+        console.warn(`[LoginTabRegistry] captureQR: page hostname "${pageHost}" !== loginUrl hostname "${loginHost}", skip capture`);
+        return null;
+      }
+    } catch {
+      // URL 解析失败（about:blank 等）→ 不阻塞，继续尝试
+    }
+
     const selectors = config.qrSelectors || [];
 
     // 0. 如配置了激活选择器，先检查 QR 是否已可见，不可见才点击激活
@@ -201,7 +219,7 @@ export class LoginTabRegistry {
     for (const sel of selectors) {
       for (const frame of frames) {
         try {
-          const el = await frame.waitForSelector(sel, { timeout: 8000, state: 'visible' });
+          const el = await frame.waitForSelector(sel, { timeout: 3000, state: 'visible' });
           if (!el) continue;
           await page.waitForTimeout(500);
           const box = await el.boundingBox();
@@ -238,7 +256,7 @@ export class LoginTabRegistry {
   }
 
   /** 打开登录标签页并注册 */
-  async openLoginTab(windowId: string, userId: number, flowId: string, browser: any, config: LoginFlowConfig): Promise<LoginTabRecord | null> {
+  async openLoginTab(windowId: string, platform: string, userId: number, flowId: string, browser: any, config: LoginFlowConfig): Promise<LoginTabRecord | null> {
     let page: any = null;
     try {
       const contexts = browser.contexts();
@@ -249,19 +267,19 @@ export class LoginTabRegistry {
       }
       page = await ctx.newPage();
       console.info(`[LoginTabRegistry] openLoginTab: navigating to ${config.loginUrl}`);
-      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
       await page.waitForTimeout(3000);
-      const markData = JSON.stringify({ flowId, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
+      const markData = JSON.stringify({ flowId, platform, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
       await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
         localStorage.setItem(markKey, data);
       }, { data: markData, markKey: LOGIN_TAB_MARK_KEY });
       const targetId = (page as any)._targetId || 'unknown';
       const record: LoginTabRecord = {
-        page, targetId, domain: config.domain, flowId,
+        page, targetId, domain: config.domain, flowId, platform,
         openedAt: Date.now(), userId,
         loginUrl: config.loginUrl,
       };
-      this.register(windowId, flowId, record);
+      this.register(windowId, platform, flowId, record);
       console.info(`[LoginTabRegistry] openLoginTab: success, tab registered (${windowId}:${flowId})`);
       return record;
     } catch (err: any) {
@@ -275,11 +293,11 @@ export class LoginTabRegistry {
   }
 
   /** 关闭登录标签页：unregister + page.close() */
-  async closeLoginTab(windowId: string, flowId: string): Promise<void> {
-    const key = `${windowId}:${flowId}`;
+  async closeLoginTab(windowId: string, platform: string, flowId: string): Promise<void> {
+    const key = `${windowId}:${platform}:${flowId}`;
     const record = this.tabs.get(key);
     if (record) { try { await record.page.close(); } catch { /* 已关闭 */ } }
-    await this.unregister(windowId, flowId);
+    await this.unregister(windowId, platform, flowId);
     this.tabs.delete(key);
   }
 }
