@@ -1262,6 +1262,7 @@ export class XiaohongshuCrawler {
               page: newPage, targetId: (newPage as any)._targetId || 'unknown',
               domain: mainsiteConfig.domain, flowId: 'mainsite', platform: 'xiaohongshu',
               openedAt: Date.now(), userId,
+              loginUrl: mainsiteConfig.loginUrl,
             };
             loginTabRegistry.register(xhsWindowId, 'xiaohongshu', 'mainsite', record);
 
