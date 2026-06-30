@@ -47,7 +47,7 @@ jest.mock('../../routes/config-automation', () => ({
   getCrawlConfig: mockGetCrawlConfig,
 }));
 
-const mockDetectKuaishouLogin = jest.fn<() => Promise<boolean>>();
+const mockDetectKuaishouLoginV2 = jest.fn<() => Promise<boolean>>();
 const mockNavigateToHome = jest.fn<() => Promise<unknown>>();
 const mockRegisterListener = jest.fn<() => Promise<unknown>>();
 const mockUnregisterListener = jest.fn<() => Promise<unknown>>();
@@ -56,7 +56,7 @@ const mockExecuteExitStrategy = jest.fn<() => Promise<unknown>>();
 
 jest.mock('../../crawlers/kuaishouCrawler', () => ({
   KuaishouCrawler: jest.fn().mockImplementation(() => ({
-    detectKuaishouLogin: mockDetectKuaishouLogin,
+    detectKuaishouLoginV2: mockDetectKuaishouLoginV2,
     navigateToHome: mockNavigateToHome,
     registerListener: mockRegisterListener,
     unregisterListener: mockUnregisterListener,
@@ -76,7 +76,7 @@ describe('runKuaishouCheck Phase0', () => {
   });
 
   it('未登录 → 标 login_required + return，不阻塞', async () => {
-    mockDetectKuaishouLogin.mockResolvedValue(false);
+    mockDetectKuaishouLoginV2.mockResolvedValue(false);
     mockPrismaFindUnique.mockResolvedValue({ wechatUserid: 'test-user', windowId: 'w1' });
     const task = { userId: 11, windowId: 'w1', platform: 'kuaishou' } as any;
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/video' } as any;
@@ -87,7 +87,7 @@ describe('runKuaishouCheck Phase0', () => {
   });
 
   it('已登录 → 继续（不调 updateUserStatus）', async () => {
-    mockDetectKuaishouLogin.mockResolvedValue(true);
+    mockDetectKuaishouLoginV2.mockResolvedValue(true);
     const task = { userId: 11, windowId: 'w1', platform: 'kuaishou' } as any;
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/video' } as any;
     await runKuaishouCheck(page, task);

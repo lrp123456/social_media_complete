@@ -1255,7 +1255,7 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     await ks.navigateToHome(page);
   }
 
-  const isLoggedIn = await ks.detectKuaishouLogin(page);
+  const isLoggedIn = await ks.detectKuaishouLoginV2(page);
   if (!isLoggedIn) {
     logger.warn({ userId: task.userId }, '快手登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
