@@ -1,5 +1,6 @@
 // @ts-api-gateway/services/wechatBotService.ts - 企业微信智能机器人长连接服务
 
+import { getLoginHost } from '@social-media/browser-core';
 import { createLogger } from '../lib/logger';
 import { uploadBufferToOSS, OSS_DIRS } from '../lib/oss';
 
@@ -698,7 +699,8 @@ async function autoStartBot(): Promise<void> {
           const browser = await bm.getBrowser(windowId);
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
-          const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, config.domain);
+          const loginHost = getLoginHost(config.loginUrl, config.domain);
+          const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, loginHost);
           if (record) {
             // 检查登录标签页是否已从登录页跳转（URL 不再包含 login/passport）
             let tabUrl = record.page.url();
@@ -783,11 +785,17 @@ async function autoStartBot(): Promise<void> {
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           try {
-            const { ensureLoginTab } = await import('./loginFlowHelpers');
+            const { ensureLoginTab, activatePlatformQR } = await import('./loginFlowHelpers');
             const record = await ensureLoginTab(windowId, targetUserId, targetPlatform, targetFlowId);
             if (record) {
-              await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+              // 二次导航冲掉了 ensureLoginTab 的 QR 激活，导航后必须重新激活
+              try {
+                await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
+              } catch (err: any) {
+                logger.warn({ targetPlatform, err: err.message }, '强制刷新 goto 超时，继续尝试激活 QR');
+              }
               await record.page.waitForTimeout(3000);
+              await activatePlatformQR(record.page, targetPlatform, config);
               const qrBuf = await loginTabRegistry.captureQR(record.page, config);
               await botManager.sendLoginAlert(user.wechatUserid || userid, targetPlatform, targetUserId, qrBuf || undefined, targetFlowId);
               await botManager.sendTextMessage([userid], `🔄 已刷新 ${targetPlatform} 登录页，新二维码已发送`);
@@ -828,12 +836,17 @@ async function autoStartBot(): Promise<void> {
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
           try {
-            const { ensureLoginTab } = await import('./loginFlowHelpers');
+            const { ensureLoginTab, activatePlatformQR } = await import('./loginFlowHelpers');
             const record = await ensureLoginTab(windowId, targetUserId, targetPlatform, targetFlowId);
             if (record) {
               // F5 刷新：不重新导航，只刷新当前页面
-              await record.page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 });
+              try {
+                await record.page.reload({ waitUntil: 'domcontentloaded', timeout: 12000 });
+              } catch (err: any) {
+                logger.warn({ targetPlatform, err: err.message }, 'F5 reload 超时，继续尝试激活 QR');
+              }
               await record.page.waitForTimeout(3000);
+              await activatePlatformQR(record.page, targetPlatform, config);
               const qrBuf = await loginTabRegistry.captureQR(record.page, config);
               await botManager.sendLoginAlert(user.wechatUserid || userid, targetPlatform, targetUserId, qrBuf || undefined, targetFlowId);
               await botManager.sendTextMessage([userid], `♻️ 已F5刷新 ${targetPlatform} 页面，新二维码已发送`);

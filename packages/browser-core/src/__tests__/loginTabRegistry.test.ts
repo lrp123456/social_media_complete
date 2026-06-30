@@ -253,3 +253,39 @@ describe('LoginTabRegistry', () => {
     expect(found.userId).toBe(13);
   });
 });
+
+describe('find loginHost (A0)', () => {
+  it('快手登录页 hostname=passport.kuaishou.com 能被 loginHost 命中（domain 异域不再跳过）', async () => {
+    const registry = new LoginTabRegistry();
+    const loginUrl = 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api';
+    const loginHost = new URL(loginUrl).hostname; // passport.kuaishou.com
+    // 模拟一个已在 passport.kuaishou.com 的页面，带 localStorage 标记
+    const page = mockPage(loginUrl, 't1');
+    (page.evaluate as any) = async () => ({
+      platform: 'kuaishou', flowId: 'creator', openedAt: Date.now(), userId: 11, loginUrl,
+    });
+    const browser = { contexts: () => [{ pages: () => [page] }] } as any;
+    const found = await registry.find('w4', 'kuaishou', 'creator', browser, loginHost);
+    if (!found) throw new Error('expected find to hit kuaishou login page via loginHost');
+    if (found.page !== page) throw new Error('expected found.page === mock page');
+  });
+
+  it('内存命中校验用 page 实际 hostname，离开登录域则 miss', async () => {
+    const registry = new LoginTabRegistry();
+    const loginUrl = 'https://passport.kuaishou.com/pc/account/login/';
+    const loginHost = new URL(loginUrl).hostname;
+    const page = mockPage(loginUrl, 't2');
+    (page.isClosed as any) = () => false;
+    registry.register('w4', 'kuaishou', 'creator', {
+      page, targetId: 't2', domain: 'cp.kuaishou.com', flowId: 'creator', platform: 'kuaishou',
+      openedAt: Date.now(), userId: 11, loginUrl,
+    });
+    // page 仍在登录域 → 命中
+    const hit = await registry.find('w4', 'kuaishou', 'creator', { contexts: () => [{ pages: () => [] }] } as any, loginHost);
+    if (!hit) throw new Error('expected memory hit while on login domain');
+    // page 已导航离开登录域 → 不命中（url 改为 cp.kuaishou.com）
+    (page.url as any) = () => 'https://cp.kuaishou.com/home';
+    const miss = await registry.find('w4', 'kuaishou', 'creator', { contexts: () => [{ pages: () => [] }] } as any, loginHost);
+    if (miss) throw new Error('expected miss after page navigated off login domain');
+  });
+});

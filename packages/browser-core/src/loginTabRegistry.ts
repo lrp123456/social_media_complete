@@ -3,6 +3,18 @@ import type { LoginTabRecord, LoginFlowConfig, LoginState } from './types';
 
 const QR_PADDING = 40;
 
+/** 从 loginUrl 取登录域 hostname（与 config.domain 监控域可能不同，如快手 passport.kuaishou.com vs cp.kuaishou.com）。 */
+export function getLoginHost(loginUrl: string, fallbackDomain: string): string {
+  try { return new URL(loginUrl).hostname; } catch { return fallbackDomain; }
+}
+/** 判断 page URL 是否在登录域（hostname 相等或为 .{loginHost} 子域）。 */
+export function isOnLoginDomain(url: string, loginHost: string): boolean {
+  try {
+    const h = new URL(url).hostname;
+    return h === loginHost || h.endsWith('.' + loginHost);
+  } catch { return false; }
+}
+
 const LOGIN_TAB_MARK_KEY = '__login_tab_mark__';
 
 export class LoginTabRegistry {
@@ -64,7 +76,7 @@ export class LoginTabRegistry {
    * @param browser - patchright Browser 实例（any 类型避免依赖 patchright）
    * @param domain - loginFlow 配置中的 domain 字段，用于 URL 筛选
    */
-  async find(windowId: string, platform: string, flowId: string, browser: any, domain: string): Promise<LoginTabRecord | null> {
+  async find(windowId: string, platform: string, flowId: string, browser: any, loginHost: string): Promise<LoginTabRecord | null> {
     const key = `${windowId}:${platform}:${flowId}`;
 
     // 1. 查内存
@@ -72,9 +84,11 @@ export class LoginTabRegistry {
     if (cached) {
       try {
         if (!cached.page.isClosed()) {
-          // domain 校验：防止跨平台 key 冲突后的残留串号
-          if (cached.domain === domain) return cached;
-          console.warn(`[LoginTabRegistry] find: memory hit domain mismatch (record.domain=${cached.domain}, expected=${domain}), clearing stale entry`);
+          // 校验 page 当前 hostname 仍在登录域（不读 cached.domain 字段，因其存的是监控域）
+          try {
+            if (isOnLoginDomain(cached.page.url(), loginHost)) return cached;
+            console.warn(`[LoginTabRegistry] find: memory hit but page left login domain (loginHost=${loginHost}), clearing`);
+          } catch { /* page.url() 失败，保守返回 cached */ return cached; }
         }
       } catch { /* page 引用过期 */ }
       this.tabs.delete(key);
@@ -88,7 +102,7 @@ export class LoginTabRegistry {
      for (const page of pages) {
        try {
          const url = page.url();
-         if (!url.includes(domain)) continue;
+         if (!isOnLoginDomain(url, loginHost)) continue;
          const markData = await page.evaluate(({ markKey }: { markKey: string }) => {
            const raw = localStorage.getItem(markKey);
            return raw ? JSON.parse(raw) : null;
@@ -97,7 +111,7 @@ export class LoginTabRegistry {
             const record: LoginTabRecord = {
               page,
               targetId: markData.targetId || '',
-              domain,
+              domain: new URL(url).hostname,
               flowId,
               platform,
               openedAt: markData.openedAt || Date.now(),
@@ -156,44 +170,6 @@ export class LoginTabRegistry {
     }
 
     const selectors = config.qrSelectors || [];
-
-    // 0. 如配置了激活选择器，先检查 QR 是否已可见，不可见才点击激活
-    if (config.qrActivationSelector) {
-      try {
-        // 先检查 QR 是否已经可见（避免对切换按钮多次点击导致 QR 消失）
-        let qrAlreadyVisible = false;
-        for (const sel of selectors) {
-          try {
-            const el = await page.$(sel);
-            if (el && await el.isVisible().catch(() => false)) {
-              qrAlreadyVisible = true;
-              break;
-            }
-          } catch { continue; }
-        }
-
-        if (!qrAlreadyVisible) {
-          const activator = await page.$(config.qrActivationSelector);
-          if (activator) {
-            const box = await activator.boundingBox();
-            if (box) {
-              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-            } else {
-              await activator.click();
-            }
-            await page.waitForTimeout(2000);
-            for (const sel of selectors) {
-              try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); break; } catch { continue; }
-            }
-            console.info(`[LoginTabRegistry] captureQR: activated QR via "${config.qrActivationSelector}"`);
-          }
-        } else {
-          console.info('[LoginTabRegistry] captureQR: QR already visible, skipping activation click');
-        }
-      } catch (err: any) {
-        console.warn(`[LoginTabRegistry] captureQR: activation selector "${config.qrActivationSelector}" failed: ${err.message}`);
-      }
-    }
 
     // 收集所有 frame（主页面 + 子 iframe），视频号 QR 在 login-for-iframe 内
     const frames: any[] = [page, ...page.frames().filter((f: any) => f !== page.mainFrame())];

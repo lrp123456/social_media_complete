@@ -6,7 +6,7 @@ import { getRedis } from '../lib/redis';
 import { prisma } from '../lib/prisma';
 import { createLogger } from '../lib/logger';
 import { WindowMutex } from '../lib/redlock';
-import { HumanActions, BrowserManager, ExitStrategy } from '@social-media/browser-core';
+import { HumanActions, BrowserManager, ExitStrategy, getLoginHost } from '@social-media/browser-core';
 import { getBrowserManager } from '../lib/browserManager';
 import {
   getWindowQueue,
@@ -438,6 +438,8 @@ export async function sendLoginQR(page: any, userId: number, platform: string, f
     const isOnLoginPage = currentUrl.includes('login') || currentUrl.includes('passport') || currentUrl === config.loginUrl;
     if (isOnLoginPage) {
       logger.info({ userId, platform, url: currentUrl }, `[${platform}] 当前页面已在登录域，直接用当前页截图`);
+      const { activatePlatformQR } = await import('./loginFlowHelpers');
+      await activatePlatformQR(page, platform, config);
       const qrBuf = await loginTabRegistry.captureQR(page, config);
       if (qrBuf) {
         const { botManager } = await import('./wechatBotService');
@@ -758,6 +760,19 @@ export async function delFlowState(userId: number, flowId: string): Promise<void
   await redis.del(getFlowStateKey(userId, flowId));
 }
 
+/** 监控登录成功后重置账号为 active + 清该平台所有 flowState。供 dispatch 入口与 triggerLoginProbe 复用。 */
+export async function markLoginRecovered(userId: number, platform: string): Promise<void> {
+  const { prisma } = await import('../lib/prisma');
+  await prisma.platformAccount.update({
+    where: { id: userId },
+    data: { status: 'active', cooldownUntil: BigInt(0) },
+  });
+  const { getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  for (const fid of getFlowIdsForPlatform(platform)) {
+    await delFlowState(userId, fid);
+  }
+}
+
 // ============================================================
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
@@ -798,10 +813,13 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const browser = await bm.getBrowser(windowId);
         if (!browser) return;
 
-        const record = await loginTabRegistry.find(windowId, platform, fid, browser, config.domain);
+        const loginHost = getLoginHost(config.loginUrl, config.domain);
+        let record = await loginTabRegistry.find(windowId, platform, fid, browser, loginHost);
         if (!record) {
-          await delFlowState(userId, fid);
-          return;
+          // find null（无残留登录 tab）→ 回退 ensureLoginTab 打开/复用登录页再检测
+          const { ensureLoginTab } = await import('./loginFlowHelpers');
+          record = await ensureLoginTab(windowId, userId, platform, fid);
+          if (!record) { await delFlowState(userId, fid); return; }
         }
 
         const result = await loginTabRegistry.checkLoginState(record.page, config);
@@ -811,18 +829,9 @@ export async function triggerLoginProbe(userId: number, platform: string, window
           } else {
             await loginTabRegistry.unregister(windowId, platform, fid);
           }
-          await delFlowState(userId, fid);
-
-          const allStates = await getAllFlowStates(userId, platform);
-          if (allStates.size === 0) {
-            const { prisma } = await import('../lib/prisma');
-            await prisma.platformAccount.update({
-              where: { id: userId },
-              data: { status: 'active', cooldownUntil: BigInt(0) },
-            });
-          }
+          await markLoginRecovered(userId, platform);   // 复用 B1 helper
         } else {
-          const newLevel = Math.min((state.cooldownLevel || 0) + 1, 4);
+          const newLevel = Math.min((state?.cooldownLevel || 0) + 1, 4);
           const cooldownsMs = [30, 60, 120, 240, 240];
           const cooldownMs = cooldownsMs[newLevel] * 60 * 1000;
           await setFlowState(userId, fid, {
@@ -974,14 +983,26 @@ export async function executeMonitorCheck(
 
   try {
     switch (task.platform) {
-      case 'douyin':
-        return await runDouyinCheck(page, task, onProgress);
-      case 'kuaishou':
-        return await runKuaishouCheck(page, task, onProgress);
-      case 'xiaohongshu':
-        return await runXiaohongshuCheck(page, task, onProgress);
-      case 'tencent':
-        return await runTencentCheck(page, task, onProgress);
+      case 'douyin': {
+        const r = await runDouyinCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'douyin');
+        return r;
+      }
+      case 'kuaishou': {
+        const r = await runKuaishouCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'kuaishou');
+        return r;
+      }
+      case 'xiaohongshu': {
+        const r = await runXiaohongshuCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'xiaohongshu');
+        return r;
+      }
+      case 'tencent': {
+        const r = await runTencentCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'tencent');
+        return r;
+      }
       default:
         throw new Error(`不支持的监控平台: ${task.platform}`);
     }

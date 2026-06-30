@@ -36,7 +36,7 @@ export { PageStateManager } from './pageStateManager';
 export { RequestInterceptor } from './interceptor';
 export { ExitStrategy, PageType } from './exitStrategy';
 
-export { LoginTabRegistry } from './loginTabRegistry';
+export { LoginTabRegistry, getLoginHost, isOnLoginDomain } from './loginTabRegistry';
 
 // Types
 export * from './types';

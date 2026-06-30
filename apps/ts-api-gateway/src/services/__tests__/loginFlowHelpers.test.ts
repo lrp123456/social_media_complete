@@ -11,6 +11,9 @@ jest.mock('../../lib/antiDetectionMode', () => ({
   isEnabled: jest.fn().mockReturnValue(false),
 }));
 
+// 注入 version 给 doMock 用
+const mockAntiDetection = { isAntiDetectionV2: () => false };
+
 jest.mock('../../lib/selectorStore', () => ({
   getSelectorReader: () => ({
     getConfig: () => ({
@@ -47,6 +50,8 @@ jest.mock('@social-media/browser-core', () => ({
     openLoginTab: openLoginTabMock,
     register: registerMock,
   })),
+  getLoginHost: jest.fn((_loginUrl: string, fallbackDomain: string) => fallbackDomain),
+  isOnLoginDomain: jest.fn((url: string, loginHost: string) => url.includes(loginHost)),
   RequestInterceptor: jest.fn(),
   BrowserManager: jest.fn(),
   ExitStrategy: { getQuerySource: jest.fn(), getNextPageAction: jest.fn() },
@@ -99,5 +104,31 @@ describe('ensureLoginTab reuse platform tab', () => {
     const record = await ensureLoginTab('68a259626bb2c5905ffed8116e9a2a04', 6, 'douyin', 'creator');
     expect(record).not.toBeNull();
     expect(openLoginTabMock).toHaveBeenCalled(); // ★ 无可复用页 → 新建
+  });
+});
+
+describe('activatePlatformQR (A1)', () => {
+  it('快手：点 div.platform-switch 后等待 qrSelectors 可见返回 true', async () => {
+    const clicked: string[] = [];
+    const page: any = {
+      url: () => 'https://passport.kuaishou.com/pc/account/login/',
+      $: async (sel: string) => (sel === 'div.platform-switch' ? { click: async () => { clicked.push(sel); } } : null),
+      waitForSelector: async (sel: string) => {
+        if (sel === 'img[alt="qrcode"]') return { /* visible */ };
+        throw new Error('not found');
+      },
+      waitForTimeout: async () => {},
+    };
+    // 强制非 v2 路径
+    jest.resetModules();
+    jest.doMock('../../lib/antiDetectionMode', () => mockAntiDetection);
+    const { activatePlatformQR } = await import('../loginFlowHelpers');
+    const config = {
+      domain: 'cp.kuaishou.com', loginUrl: 'https://passport.kuaishou.com/x',
+      qrSelectors: ['img[alt="qrcode"]', 'canvas'], qrActivationSelector: undefined,
+    } as any;
+    const ok = await activatePlatformQR(page, 'kuaishou', config);
+    if (!ok) throw new Error('expected activatePlatformQR true');
+    if (clicked.length !== 1 || clicked[0] !== 'div.platform-switch') throw new Error('expected switch clicked once');
   });
 });
