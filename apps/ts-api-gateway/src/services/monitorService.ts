@@ -762,7 +762,7 @@ export async function delFlowState(userId: number, flowId: string): Promise<void
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
 
-export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string): Promise<void> {
+export async function triggerLoginProbe(userId: number, platform: string, windowId: string, flowId?: string, force: boolean = false): Promise<void> {
   const { loginTabRegistry, getLoginFlowConfig, getFlowIdsForPlatform } = await import('./loginFlowHelpers');
   const bm = getBrowserManager();
 
@@ -771,7 +771,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
     const config = getLoginFlowConfig(platform, fid);
     if (!config) continue;
     const state = await getFlowState(userId, fid);
-    if (!state || state.cooldownUntil > Date.now()) continue;
+    if (!force && (!state || state.cooldownUntil > Date.now())) continue;
 
     setTimeout(async () => {
       try {

@@ -7191,10 +7191,11 @@
             "nav[class*=\"nav\"]"
           ],
           "qrSelectors": [
-            ".qrcode-img",
-            "img[src*=\"qr\"]",
+            "img.qrcode",
+            ".qrcode-wrap img.qrcode",
             "canvas"
-          ]
+          ],
+          "qrRefreshSelector": ".refresh-wrap"
         }
       }
     }

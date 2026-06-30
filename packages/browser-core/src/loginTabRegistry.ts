@@ -184,7 +184,11 @@ export class LoginTabRegistry {
     try {
       const timeoutOverlay = await page.$('.qrcode-status-timeout, [class*="qrcode-status-timeout"]');
       if (timeoutOverlay) {
-        const refreshBtn = await page.$('.qrcode-refresh, [class*="qrcode-refresh"]');
+        // 优先用配置的 qrRefreshSelector，回退到通用 .qrcode-refresh
+        const refreshSel = config.qrRefreshSelector
+          ? `${config.qrRefreshSelector}, .qrcode-refresh, [class*="qrcode-refresh"]`
+          : '.qrcode-refresh, [class*="qrcode-refresh"]';
+        const refreshBtn = await page.$(refreshSel);
         if (refreshBtn) {
           await refreshBtn.click();
           await page.waitForTimeout(3000);

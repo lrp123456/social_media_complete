@@ -29,6 +29,7 @@ export function loadLoginFlowConfig(platform: string): LoginFlowConfig[] {
       loggedInIndicators: entry.loggedInIndicators || [],
       qrSelectors: entry.qrSelectors || [],
       qrActivationSelector: entry.qrActivationSelector || undefined,
+      qrRefreshSelector: entry.qrRefreshSelector || undefined,
     });
   }
   return result;
@@ -53,6 +54,7 @@ export function getLoginFlowConfig(platform: string, flowId: string): LoginFlowC
     loggedInIndicators: entry.loggedInIndicators || [],
     qrSelectors: entry.qrSelectors || [],
     qrActivationSelector: entry.qrActivationSelector || undefined,
+    qrRefreshSelector: entry.qrRefreshSelector || undefined,
   };
 }
 
@@ -95,7 +97,44 @@ export async function ensureLoginTab(
 
   // 1. 查找已有登录标签页
   let record = await loginTabRegistry.find(windowId, flowId, browser, config.domain);
-  // 2. 未找到则打开新标签页
+  // 2. 未找到则优先复用监控已打开的同域名平台 tab（不新建连接/tab）
+  if (!record) {
+    try {
+      const ctx = browser.contexts()[0];
+      if (ctx) {
+        for (const page of ctx.pages()) {
+          try {
+            const url = page.url();
+            if (!url.includes(config.domain)) continue;
+            // 排除已带登录标记的页，避免误复用旧登录 tab
+            const mark = await page.evaluate(({ markKey }: { markKey: string }) => {
+              const raw = localStorage.getItem(markKey);
+              return raw ? JSON.parse(raw) : null;
+            }, { markKey: '__login_tab_mark__' }).catch(() => null);
+            if (mark && mark.flowId === flowId) continue;
+            // 复用：导航到登录页并写入标记
+            await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForTimeout(3000);
+            const markData = JSON.stringify({ flowId, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
+            await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
+              localStorage.setItem(markKey, data);
+            }, { data: markData, markKey: '__login_tab_mark__' }).catch(() => {});
+            record = {
+              page, targetId: (page as any)._targetId || 'reused',
+              domain: config.domain, flowId,
+              openedAt: Date.now(), userId, loginUrl: config.loginUrl,
+            };
+            loginTabRegistry.register(windowId, flowId, record);
+            console.info(`[ensureLoginTab] reused existing platform tab for ${platform} (${windowId}:${flowId})`);
+            break;
+          } catch { continue; }
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[ensureLoginTab] reuse-platform-tab failed: ${err.message}`);
+    }
+  }
+  // 3. 仍无可用页则打开新标签页
   if (!record) {
     record = await loginTabRegistry.openLoginTab(windowId, userId, flowId, browser, config);
   }
