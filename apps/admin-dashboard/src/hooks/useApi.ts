@@ -528,6 +528,17 @@ export function useToggleMonitor() {
   });
 }
 
+export function useProbeLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: number) =>
+      api.post(`/matrix/monitor/accounts/${userId}/probe-login`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['monitor'] });
+    },
+  });
+}
+
 export function useClearUserData() {
   const qc = useQueryClient();
   return useMutation({

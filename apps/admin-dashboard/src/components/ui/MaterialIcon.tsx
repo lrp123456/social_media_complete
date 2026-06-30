@@ -19,7 +19,7 @@ export type MaterialIconName =
   | 'sync' | 'auto_awesome' | 'movie' | 'tune' | 'monitoring' | 'terminal' | 'psychology' | 'admin_panel_settings'
   | 'campaign' | 'database' | 'memory' | 'router' | 'bolt' | 'cloud_upload' | 'videocam' | 'book' | 'check_circle'
   | 'error' | 'reply' | 'play_circle' | 'done_all' | 'thumb_up' | 'campaign' | 'language' | 'light_mode'
-  | 'logout' | 'person' | 'dashboard' | 'analytics' | 'message' | 'image' | 'visibility' | 'shield' | 'lock'
+  | 'logout' | 'login' | 'person' | 'dashboard' | 'analytics' | 'message' | 'image' | 'visibility' | 'shield' | 'lock'
   | 'history' | 'public' | 'people' | 'tag' | 'attach_file' | 'schedule' | 'event' | 'calendar_today' | 'star'
   | 'verified' | 'trending_up' | 'warning' | 'info' | 'play_arrow' | 'volume_up' | 'mic' | 'construction'
   | 'pause' | 'stop' | 'fast_forward' | 'replay' | 'shuffle' | 'repeat' | 'queue_music' | 'movie_filter' | 'movie_creation'
