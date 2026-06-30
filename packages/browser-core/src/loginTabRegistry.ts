@@ -64,14 +64,18 @@ export class LoginTabRegistry {
    * @param browser - patchright Browser 实例（any 类型避免依赖 patchright）
    * @param domain - loginFlow 配置中的 domain 字段，用于 URL 筛选
    */
-  async find(windowId: string, flowId: string, browser: any, domain: string): Promise<LoginTabRecord | null> {
-    const key = `${windowId}:${flowId}`;
+  async find(windowId: string, platform: string, flowId: string, browser: any, domain: string): Promise<LoginTabRecord | null> {
+    const key = `${windowId}:${platform}:${flowId}`;
 
     // 1. 查内存
     const cached = this.tabs.get(key);
     if (cached) {
       try {
-        if (!cached.page.isClosed()) return cached;
+        if (!cached.page.isClosed()) {
+          // domain 校验：防止跨平台 key 冲突后的残留串号
+          if (cached.domain === domain) return cached;
+          console.warn(`[LoginTabRegistry] find: memory hit domain mismatch (record.domain=${cached.domain}, expected=${domain}), clearing stale entry`);
+        }
       } catch { /* page 引用过期 */ }
       this.tabs.delete(key);
     }
@@ -89,12 +93,13 @@ export class LoginTabRegistry {
            const raw = localStorage.getItem(markKey);
            return raw ? JSON.parse(raw) : null;
          }, { markKey: LOGIN_TAB_MARK_KEY });
-          if (markData && markData.flowId === flowId) {
+          if (markData && markData.platform === platform && markData.flowId === flowId) {
             const record: LoginTabRecord = {
               page,
               targetId: markData.targetId || '',
               domain,
               flowId,
+              platform,
               openedAt: markData.openedAt || Date.now(),
               userId: markData.userId || 0,
               loginUrl: markData.loginUrl || '',
@@ -102,7 +107,7 @@ export class LoginTabRegistry {
            this.tabs.set(key, record);
            return record;
          }
-         // 同域名但没有标记 → 跳过（可能是主监控页面，不能关闭）
+         // 同域名但 platform/flowId 不匹配 → 跳过（可能是其他平台登录 tab 或主监控页）
        } catch { continue; }
      }
     } catch { /* browser 不可用 */ }
@@ -238,7 +243,7 @@ export class LoginTabRegistry {
   }
 
   /** 打开登录标签页并注册 */
-  async openLoginTab(windowId: string, userId: number, flowId: string, browser: any, config: LoginFlowConfig): Promise<LoginTabRecord | null> {
+  async openLoginTab(windowId: string, platform: string, userId: number, flowId: string, browser: any, config: LoginFlowConfig): Promise<LoginTabRecord | null> {
     let page: any = null;
     try {
       const contexts = browser.contexts();
@@ -251,17 +256,17 @@ export class LoginTabRegistry {
       console.info(`[LoginTabRegistry] openLoginTab: navigating to ${config.loginUrl}`);
       await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
       await page.waitForTimeout(3000);
-      const markData = JSON.stringify({ flowId, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
+      const markData = JSON.stringify({ flowId, platform, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
       await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
         localStorage.setItem(markKey, data);
       }, { data: markData, markKey: LOGIN_TAB_MARK_KEY });
       const targetId = (page as any)._targetId || 'unknown';
       const record: LoginTabRecord = {
-        page, targetId, domain: config.domain, flowId,
+        page, targetId, domain: config.domain, flowId, platform,
         openedAt: Date.now(), userId,
         loginUrl: config.loginUrl,
       };
-      this.register(windowId, flowId, record);
+      this.register(windowId, platform, flowId, record);
       console.info(`[LoginTabRegistry] openLoginTab: success, tab registered (${windowId}:${flowId})`);
       return record;
     } catch (err: any) {

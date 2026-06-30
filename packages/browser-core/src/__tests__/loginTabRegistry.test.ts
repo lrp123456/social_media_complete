@@ -208,4 +208,42 @@ describe('LoginTabRegistry', () => {
     expect(registry.tabs.get('w4:douyin:creator').userId).toBe(6);
     expect(registry.tabs.get('w4:tencent:creator').userId).toBe(13);
   });
+
+  it('should reject stale memory hit whose domain mismatches config', async () => {
+    // 模拟旧串号残留：key 命中但 record 是抖音 page，config.domain 是视频号
+    const dyPage = mockPage('https://creator.douyin.com/creator-micro/home', 't-dy');
+    const staleRecord = {
+      page: dyPage, targetId: 't-dy',
+      domain: 'creator.douyin.com', flowId: 'creator', platform: 'douyin',
+      openedAt: Date.now(), userId: 6,
+      loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    };
+    // 直接污染内存（模拟跨平台 key 冲突后的残留）
+    registry.tabs.set('w4:tencent:creator', staleRecord);
+
+    const browser = { contexts: () => [{ pages: () => [] }] };
+    const found = await registry.find('w4', 'tencent', 'creator', browser, 'channels.weixin.qq.com');
+    // domain 不符 → 拒绝内存命中，返回 null（无枚举兜底可用）
+    expect(found).toBe(null);
+    // 残留被清理
+    expect(registry.tabs.has('w4:tencent:creator')).toBe(false);
+  });
+
+  it('should match platform in localStorage mark during enumeration fallback', async () => {
+    const txPage = mockPage('https://channels.weixin.qq.com/login.html', 't-tx');
+    txPage.evaluate = ({ markKey }) => Promise.resolve({
+      flowId: 'creator', platform: 'tencent', userId: 13,
+      openedAt: 123, loginUrl: 'https://channels.weixin.qq.com/login.html',
+    });
+    const dyPage = mockPage('https://creator.douyin.com/creator-micro/home', 't-dy');
+    dyPage.evaluate = ({ markKey }) => Promise.resolve({
+      flowId: 'creator', platform: 'douyin', userId: 6,
+      openedAt: 123, loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    });
+    const browser = { contexts: () => [{ pages: () => [dyPage, txPage] }] };
+    // 查视频号：URL 含 channels.weixin.qq.com 的页才进入枚举；dyPage URL 不含视频号 domain 被跳过
+    const found = await registry.find('w4', 'tencent', 'creator', browser, 'channels.weixin.qq.com');
+    expect(found).not.toBe(null);
+    expect(found.userId).toBe(13);
+  });
 });
