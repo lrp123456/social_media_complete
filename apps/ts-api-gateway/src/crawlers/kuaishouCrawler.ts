@@ -572,27 +572,32 @@ export class KuaishouCrawler {
   async navigateToHome(page: Page): Promise<void> {
     const currentUrl = page.url();
 
-    if (currentUrl.includes('cp.kuaishou.com')) {
-      logger.info({ currentUrl }, 'Already on kuaishou creator page, skipping navigation');
-    } else {
-      logger.info('Navigating to kuaishou creator home via click-based menu');
-      // 尝试点击"创作者中心"链接（防风控）, 失败时回退到 goto
+    if (currentUrl.includes('/article/publish/video')) {
+      logger.info({ currentUrl }, 'Already on kuaishou video publish page, skipping navigation');
+    } else if (currentUrl.includes('cp.kuaishou.com')) {
+      // 已在 cp 域但不在首页：点击式导航（防风控），失败回退 goto
+      logger.info({ currentUrl }, 'On cp domain but not home, click-based nav');
       const clicked = await resolveAndClick(page, 'nav.to-creator', 'kuaishou', { timeout: 10000 });
       if (clicked) {
         await HumanActions.wait(page, 2000, 4000);
         await HumanActions.pageLoadBehavior(page);
       } else {
-        logger.warn('Click-based nav to kuaishou creator failed, falling back to page.goto');
+        logger.warn('Click-based nav failed, falling back to page.goto');
         await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
         HumanActions.clearCDPContext(page);
         await HumanActions.wait(page, 2000, 4000);
         await HumanActions.pageLoadBehavior(page);
       }
+    } else {
+      // 非 cp 域（含 about:blank）：直接 goto，跳过在空白页上 resolveAndClick 的 10s 超时
+      logger.info({ currentUrl }, 'Non-cp URL, direct goto to creator home');
+      await page.goto(CREATOR_HOME, { waitUntil: 'domcontentloaded' });
+      HumanActions.clearCDPContext(page);
+      await HumanActions.wait(page, 2000, 4000);
+      await HumanActions.pageLoadBehavior(page);
     }
 
     this.currentMenuSection = 'unknown';
-    // TODO: logPageHtml for kuaishou
-    // await BrowserManager.logPageHtml(page, 'after_navigateToHome_kuaishou');
     logger.info({ currentUrl: page.url() }, 'Ready on kuaishou creator page');
   }
 
