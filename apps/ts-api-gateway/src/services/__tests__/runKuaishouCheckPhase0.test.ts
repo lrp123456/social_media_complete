@@ -11,6 +11,13 @@ const mockGetCrawlConfig = jest.fn<() => Promise<unknown>>().mockResolvedValue({
 const mockSendLoginAlert = jest.fn<() => Promise<unknown>>().mockResolvedValue(undefined);
 const mockGetFlowIdsForPlatform = jest.fn<() => string[]>().mockReturnValue(['creator']);
 const mockGetCrawlMode = jest.fn<() => Promise<unknown>>().mockResolvedValue('simple');
+const mockGetLoginFlowConfig = jest.fn<() => unknown>().mockReturnValue({
+  loginUrl: 'https://passport.kuaishou.com/pc/account/login/',
+  domain: 'kuaishou.com',
+  loginDomain: 'kuaishou.com',
+});
+const mockCaptureQR = jest.fn<() => Promise<Buffer | null>>().mockResolvedValue(Buffer.from([1]));
+const mockClickLoginEntry = jest.fn<() => Promise<boolean>>().mockResolvedValue(true);
 
 jest.mock('@social-media/shared-config', () => ({
   isProduction: mockIsProduction,
@@ -34,8 +41,8 @@ jest.mock('../../lib/redis', () => ({ getRedis: () => ({ del: jest.fn(), get: je
 jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: mockSendLoginAlert } }));
 jest.mock('../loginFlowHelpers', () => ({
   getFlowIdsForPlatform: mockGetFlowIdsForPlatform,
-  getLoginFlowConfig: jest.fn(),
-  loginTabRegistry: { find: jest.fn(), captureQR: jest.fn(), sendLoginQR: jest.fn() },
+  getLoginFlowConfig: mockGetLoginFlowConfig,
+  loginTabRegistry: { find: jest.fn(), captureQR: mockCaptureQR },
 }));
 
 const mockUpdateUserStatus = jest.fn<() => Promise<unknown>>();
@@ -62,6 +69,7 @@ jest.mock('../../crawlers/kuaishouCrawler', () => ({
     unregisterListener: mockUnregisterListener,
     checkForUpdates: mockCheckForUpdates,
     executeExitStrategy: mockExecuteExitStrategy,
+    clickLoginEntry: mockClickLoginEntry,
   })),
 }));
 
