@@ -112,6 +112,8 @@ export interface LoginTabRecord {
   targetId: string;
   domain: string;
   flowId: string;
+  /** 平台标识，用于 key 隔离（同 windowId 下三平台 flowId 都是 creator 不撞 key） */
+  platform: string;
   openedAt: number;
   userId: number;
   /** 登录页 URL（用于 unregister 时判定是否发生跨域跳转） */

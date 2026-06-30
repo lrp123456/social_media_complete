@@ -10,14 +10,14 @@ export class LoginTabRegistry {
   tabs = new Map<string, LoginTabRecord>();
 
   /** 注册登录标签页到内存注册表 */
-  register(windowId: string, flowId: string, record: LoginTabRecord): void {
-    const key = `${windowId}:${flowId}`;
+  register(windowId: string, platform: string, flowId: string, record: LoginTabRecord): void {
+    const key = `${windowId}:${platform}:${flowId}`;
     this.tabs.set(key, record);
   }
 
   /** 从内存注册表移除并清除 localStorage 标记。跨域跳转的标签页会被关闭。 */
-  async unregister(windowId: string, flowId: string): Promise<void> {
-    const key = `${windowId}:${flowId}`;
+  async unregister(windowId: string, platform: string, flowId: string): Promise<void> {
+    const key = `${windowId}:${platform}:${flowId}`;
     const record = this.tabs.get(key);
     if (record) {
       this.tabs.delete(key);
@@ -275,11 +275,11 @@ export class LoginTabRegistry {
   }
 
   /** 关闭登录标签页：unregister + page.close() */
-  async closeLoginTab(windowId: string, flowId: string): Promise<void> {
-    const key = `${windowId}:${flowId}`;
+  async closeLoginTab(windowId: string, platform: string, flowId: string): Promise<void> {
+    const key = `${windowId}:${platform}:${flowId}`;
     const record = this.tabs.get(key);
     if (record) { try { await record.page.close(); } catch { /* 已关闭 */ } }
-    await this.unregister(windowId, flowId);
+    await this.unregister(windowId, platform, flowId);
     this.tabs.delete(key);
   }
 }

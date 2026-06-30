@@ -183,4 +183,29 @@ describe('LoginTabRegistry', () => {
     expect(closed).toBe(false);
     expect(registry.tabs.has('windowDY:creator')).toBe(false);
   });
+
+  it('should isolate same flowId across platforms under shared window', () => {
+    const douyin = {
+      page: mockPage('https://creator.douyin.com/creator-micro/home', 't-dy'),
+      targetId: 't-dy', domain: 'creator.douyin.com', flowId: 'creator',
+      platform: 'douyin',
+      openedAt: Date.now(), userId: 6,
+      loginUrl: 'https://creator.douyin.com/creator-micro/home',
+    };
+    const tencent = {
+      page: mockPage('https://channels.weixin.qq.com/login.html', 't-tx'),
+      targetId: 't-tx', domain: 'channels.weixin.qq.com', flowId: 'creator',
+      platform: 'tencent',
+      openedAt: Date.now(), userId: 13,
+      loginUrl: 'https://channels.weixin.qq.com/login.html',
+    };
+    // 同 windowId、同 flowId='creator'、不同 platform
+    registry.register('w4', 'douyin', 'creator', douyin);
+    registry.register('w4', 'tencent', 'creator', tencent);
+    expect(registry.tabs.has('w4:douyin:creator')).toBe(true);
+    expect(registry.tabs.has('w4:tencent:creator')).toBe(true);
+    // 互不覆盖
+    expect(registry.tabs.get('w4:douyin:creator').userId).toBe(6);
+    expect(registry.tabs.get('w4:tencent:creator').userId).toBe(13);
+  });
 });
