@@ -702,25 +702,29 @@ async function autoStartBot(): Promise<void> {
           const loginHost = getLoginHost(config.loginUrl, config.domain);
           const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, loginHost);
           if (record) {
-            // 导航到快手 profile 页验证登录态（登录成功后右上角 .user-info-dpd 存在；失效会回退到登录页）
-            // 其他平台仍用原 loginUrl 跳转后看是否仍在登录页
+            // 快手：用 detectKuaishouLoginV2 检测登录态；其他平台保留原 config.loginUrl + URL 判定
             let isStillOnLoginPage = false;
-            try {
-              const checkUrl = targetPlatform === 'kuaishou'
-                ? 'https://cp.kuaishou.com/profile'
-                : config.loginUrl;
-              await record.page.goto(checkUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-              await record.page.waitForTimeout(3000);
-              if (targetPlatform === 'kuaishou') {
-                // 快手：看右上角用户状态栏是否存在
-                const { HumanActions } = await import('@social-media/browser-core');
-                const isLoggedIn = await HumanActions.cdpIsElementVisible(record.page, '.user-info-dpd');
+            if (targetPlatform === 'kuaishou') {
+              try {
+                await record.page.goto('https://cp.kuaishou.com/profile', { waitUntil: 'domcontentloaded', timeout: 15000 });
+                await record.page.waitForTimeout(3000);
+                const { getKuaishouCrawler } = await import('./monitorService');
+                const ks = getKuaishouCrawler(windowId);
+                const isLoggedIn = await ks.detectKuaishouLoginV2(record.page);
                 isStillOnLoginPage = !isLoggedIn;
-              } else {
+              } catch (navErr: any) {
+                logger.warn({ error: navErr.message }, '继续监控 快手导航/检测失败');
+                isStillOnLoginPage = true;
+              }
+            } else {
+              // 其他平台保留原 config.loginUrl + URL 判定
+              try {
+                await record.page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+                await record.page.waitForTimeout(3000);
                 const tabUrl = record.page.url();
                 isStillOnLoginPage = tabUrl.includes('login') || tabUrl.includes('passport');
-              }
-            } catch { /* navigation failed, assume still on login */ isStillOnLoginPage = true; }
+              } catch { isStillOnLoginPage = true; }
+            }
             if (isStillOnLoginPage) {
               // 仍在登录页 → 设置 15min 自动重试
               const { enqueueMonitor } = await import('./unifiedQueue');
