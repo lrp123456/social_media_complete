@@ -220,6 +220,20 @@ export class KuaishouCrawler {
     }
   }
 
+  /**
+   * 登录态检测（不导航，不阻塞）。
+   * 快手任意 cp 页面右上角均有 .user-info-dpd 用户状态栏；登录失效时该元素消失。
+   * 替代 checkLoginStatus 的 URL/bodyText 误判逻辑（passport 域直接判 false、sidebar 选择器漏命中）。
+   */
+  async detectKuaishouLogin(page: Page): Promise<boolean> {
+    try {
+      return await HumanActions.cdpIsElementVisible(page, '.user-info-dpd');
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[Login] detectKuaishouLogin error');
+      return false;
+    }
+  }
+
   async handleLogin(
     page: Page,
     userId: number,
