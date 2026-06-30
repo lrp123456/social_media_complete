@@ -45,7 +45,7 @@ jest.mock('../../crawlers/douyinCrawler', () => {
   return { DouyinCrawler: jest.fn().mockImplementation(() => mockDyInstance), ReplyTarget: jest.fn() };
 });
 jest.mock('../../crawlers/kuaishouCrawler', () => {
-  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), detectKuaishouLogin: jest.fn().mockResolvedValue(true) };
+  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), detectKuaishouLogin: jest.fn().mockResolvedValue(true), detectKuaishouLoginV2: jest.fn<Promise<boolean>, []>().mockResolvedValue(true) };
   return { KuaishouCrawler: jest.fn().mockImplementation(() => mockKsInstance) };
 });
 jest.mock('../monitorDatabaseService', () => ({
