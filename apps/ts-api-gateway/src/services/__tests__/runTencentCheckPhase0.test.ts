@@ -1,10 +1,22 @@
 import { describe, it, expect, jest } from '@jest/globals';
 
+const mockIsProduction = jest.fn<() => boolean>().mockReturnValue(false);
+const mockIsDevelopment = jest.fn<() => boolean>().mockReturnValue(false);
+const mockGetConfig = jest.fn<() => unknown>().mockReturnValue({ NODE_ENV: 'test' });
+const mockLoadConfig = jest.fn<() => unknown>().mockReturnValue({ NODE_ENV: 'test' });
+const mockPrismaFindUnique = jest.fn<() => Promise<unknown>>();
+const mockPrismaUpdate = jest.fn<() => Promise<unknown>>();
+const mockCrawlSettingFindUnique = jest.fn<() => Promise<unknown>>().mockResolvedValue(null);
+const mockGetCrawlConfig = jest.fn<() => Promise<unknown>>().mockResolvedValue({ mode: 'simple', maxRootComments: 50 });
+const mockSendLoginAlert = jest.fn<() => Promise<unknown>>().mockResolvedValue(undefined);
+const mockGetFlowIdsForPlatform = jest.fn<() => string[]>().mockReturnValue(['creator']);
+const mockGetCrawlMode = jest.fn<() => Promise<unknown>>().mockResolvedValue('simple');
+
 jest.mock('@social-media/shared-config', () => ({
-  isProduction: jest.fn().mockReturnValue(false),
-  isDevelopment: jest.fn().mockReturnValue(false),
-  getConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
-  loadConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
+  isProduction: mockIsProduction,
+  isDevelopment: mockIsDevelopment,
+  getConfig: mockGetConfig,
+  loadConfig: mockLoadConfig,
   PlatformName: 'douyin',
 }));
 
@@ -14,32 +26,32 @@ jest.mock('../../lib/logger', () => ({
 
 jest.mock('../../lib/prisma', () => ({
   prisma: {
-    platformAccount: { findUnique: jest.fn(), update: jest.fn() },
-    crawlSetting: { findUnique: jest.fn().mockResolvedValue(null) },
+    platformAccount: { findUnique: mockPrismaFindUnique, update: mockPrismaUpdate },
+    crawlSetting: { findUnique: mockCrawlSettingFindUnique },
   },
 }));
 jest.mock('../../routes/config-automation', () => ({
-  getCrawlConfig: jest.fn().mockResolvedValue({ mode: 'simple', maxRootComments: 50 }),
+  getCrawlConfig: mockGetCrawlConfig,
 }));
 jest.mock('../../lib/redis', () => ({ getRedis: () => ({ del: jest.fn(), get: jest.fn(), set: jest.fn() }) }));
-jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: jest.fn().mockResolvedValue(undefined) } }));
+jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: mockSendLoginAlert } }));
 jest.mock('../loginFlowHelpers', () => ({
-  getFlowIdsForPlatform: jest.fn().mockReturnValue(['creator']),
+  getFlowIdsForPlatform: mockGetFlowIdsForPlatform,
   getLoginFlowConfig: jest.fn(),
   loginTabRegistry: { find: jest.fn(), captureQR: jest.fn() },
 }));
 
-const mockUpdateUserStatus = jest.fn();
+const mockUpdateUserStatus = jest.fn<() => Promise<unknown>>();
 jest.mock('../monitorDatabaseService', () => ({
-  getCrawlMode: jest.fn().mockResolvedValue('simple'),
+  getCrawlMode: mockGetCrawlMode,
   updateUserStatus: mockUpdateUserStatus,
 }));
 
-const mockDetectTencentLogin = jest.fn();
-const mockRegisterListener = jest.fn();
-const mockUnregisterListener = jest.fn();
-const mockCheckForUpdates = jest.fn().mockResolvedValue({ commentsQueue: [], riskControlDetected: false });
-const mockExecuteExitStrategy = jest.fn();
+const mockDetectTencentLogin = jest.fn<() => Promise<boolean>>();
+const mockRegisterListener = jest.fn<() => Promise<unknown>>();
+const mockUnregisterListener = jest.fn<() => Promise<unknown>>();
+const mockCheckForUpdates = jest.fn<() => Promise<unknown>>().mockResolvedValue({ commentsQueue: [], riskControlDetected: false });
+const mockExecuteExitStrategy = jest.fn<() => Promise<unknown>>();
 
 jest.mock('../../crawlers/tencentCrawler', () => ({
   TencentCrawler: jest.fn().mockImplementation(() => ({

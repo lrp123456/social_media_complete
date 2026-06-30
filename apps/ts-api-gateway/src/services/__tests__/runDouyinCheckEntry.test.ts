@@ -1,44 +1,55 @@
 import { describe, it, expect, jest } from '@jest/globals';
 
+const mockIsProduction = jest.fn<() => boolean>().mockReturnValue(false);
+const mockIsDevelopment = jest.fn<() => boolean>().mockReturnValue(false);
+const mockGetConfig = jest.fn<() => unknown>().mockReturnValue({ NODE_ENV: 'test' });
+const mockLoadConfig = jest.fn<() => unknown>().mockReturnValue({ NODE_ENV: 'test' });
+const mockPrismaFindUnique = jest.fn<() => Promise<unknown>>().mockResolvedValue(null);
+const mockSendLoginAlert = jest.fn<() => Promise<unknown>>().mockResolvedValue(undefined);
+const mockGetFlowIdsForPlatform = jest.fn<() => string[]>().mockReturnValue(['creator']);
+const mockGetCrawlMode = jest.fn<() => Promise<unknown>>().mockResolvedValue('simple');
+const mockGetCrawlConfigDb = jest.fn<() => Promise<unknown>>().mockResolvedValue({ mode: 'simple', maxRootComments: 50 });
+const mockGetCrawlConfigRoute = jest.fn<() => Promise<unknown>>().mockResolvedValue({ mode: 'simple', maxRootComments: 50 });
+
 jest.mock('@social-media/shared-config', () => ({
-  isProduction: jest.fn().mockReturnValue(false),
-  isDevelopment: jest.fn().mockReturnValue(false),
-  getConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
-  loadConfig: jest.fn().mockReturnValue({ NODE_ENV: 'test' }),
+  isProduction: mockIsProduction,
+  isDevelopment: mockIsDevelopment,
+  getConfig: mockGetConfig,
+  loadConfig: mockLoadConfig,
   PlatformName: 'douyin',
 }));
 
 jest.mock('@social-media/browser-core', () => ({
-  ExitStrategy: { getQuerySource: jest.fn().mockReturnValue('work_list'), getNextPageAction: jest.fn() },
-  HumanActions: { wait: jest.fn().mockResolvedValue(undefined) },
-  rootLogger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), child: jest.fn().mockReturnValue({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }) },
+  ExitStrategy: { getQuerySource: jest.fn<() => string>().mockReturnValue('work_list'), getNextPageAction: jest.fn() },
+  HumanActions: { wait: jest.fn<() => Promise<unknown>>().mockResolvedValue(undefined) },
+  rootLogger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn(), child: jest.fn<() => unknown>().mockReturnValue({ debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() }) },
 }));
 
 jest.mock('../../lib/logger', () => ({
   createLogger: () => ({ error: jest.fn(), warn: jest.fn(), info: jest.fn(), debug: jest.fn() }),
 }));
 
-jest.mock('../../lib/prisma', () => ({ prisma: { platformAccount: { findUnique: jest.fn().mockResolvedValue(null) } } }));
+jest.mock('../../lib/prisma', () => ({ prisma: { platformAccount: { findUnique: mockPrismaFindUnique } } }));
 jest.mock('../../lib/redis', () => ({ getRedis: () => ({ del: jest.fn(), get: jest.fn(), set: jest.fn() }) }));
-jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: jest.fn().mockResolvedValue(undefined) } }));
+jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: mockSendLoginAlert } }));
 jest.mock('../loginFlowHelpers', () => ({
-  getFlowIdsForPlatform: jest.fn().mockReturnValue(['creator']),
+  getFlowIdsForPlatform: mockGetFlowIdsForPlatform,
   getLoginFlowConfig: jest.fn(),
   loginTabRegistry: { find: jest.fn(), captureQR: jest.fn() },
 }));
 
 jest.mock('../monitorDatabaseService', () => ({
-  getCrawlMode: jest.fn().mockResolvedValue('simple'),
-  getCrawlConfig: jest.fn().mockResolvedValue({ mode: 'simple', maxRootComments: 50 }),
+  getCrawlMode: mockGetCrawlMode,
+  getCrawlConfig: mockGetCrawlConfigDb,
   updateUserStatus: jest.fn(),
 }));
 
 jest.mock('../../routes/config-automation', () => ({
-  getCrawlConfig: jest.fn().mockResolvedValue({ mode: 'simple', maxRootComments: 50 }),
+  getCrawlConfig: mockGetCrawlConfigRoute,
 }));
 
-const mockNavigateToCreatorHome = jest.fn();
-const mockCheckForUpdates = jest.fn().mockResolvedValue({ commentsQueue: [], riskControlDetected: false });
+const mockNavigateToCreatorHome = jest.fn<() => Promise<unknown>>();
+const mockCheckForUpdates = jest.fn<() => Promise<unknown>>().mockResolvedValue({ commentsQueue: [], riskControlDetected: false });
 
 jest.mock('../../crawlers/douyinCrawler', () => ({
   DouyinCrawler: jest.fn().mockImplementation(() => ({

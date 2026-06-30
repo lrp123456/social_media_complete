@@ -34,7 +34,10 @@ jest.mock('../unifiedQueue', () => ({
   getWindowQueue: jest.fn(),
 }));
 jest.mock('../../crawlers/tencentCrawler', () => {
-  const mockTcInstance = { handleLogin: jest.fn().mockResolvedValue(true) };
+  const mockTcInstance = {
+    handleLogin: jest.fn().mockResolvedValue(true),
+    detectTencentLogin: jest.fn().mockResolvedValue(true),
+  };
   return { TencentCrawler: jest.fn().mockImplementation(() => mockTcInstance), TencentReplyTarget: jest.fn() };
 });
 jest.mock('../../crawlers/douyinCrawler', () => {
