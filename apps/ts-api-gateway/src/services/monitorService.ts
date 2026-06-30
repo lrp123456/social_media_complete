@@ -1077,8 +1077,8 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
   const dyUrl = page.url();
   const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
   if (!dyOk) {
-    logger.warn({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口 page 偏离作品管理页，fast-fail');
-    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+    logger.error({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口导航后仍偏离工作页，抛错触发 failed 重试');
+    throw new Error(`[抖音] 入口导航后仍偏离工作页: ${dyUrl}`);
   }
 
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
@@ -1273,8 +1273,8 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
   // wrong-page fast-fail：偏离视频管理页 → fast-fail
   const ksUrl = page.url();
   if (!ksUrl.includes('/article/publish/video')) {
-    logger.warn({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口 page 偏离视频管理页，fast-fail');
-    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+    logger.error({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口导航后仍偏离视频管理页，抛错触发 failed 重试');
+    throw new Error(`[快手] 入口导航后仍偏离视频管理页: ${ksUrl}`);
   }
 
   // Phase 1 — 统一使用 work_list 数据源（photo_analysis 返回数量少且 ID 体系不同，
