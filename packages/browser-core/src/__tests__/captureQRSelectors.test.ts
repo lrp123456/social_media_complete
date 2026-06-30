@@ -98,9 +98,9 @@ describe('captureQR - qrRefreshSelector', () => {
     });
 
     const config = {
-      domain: 'example.com',
+      domain: 'channels.weixin.qq.com',
       label: '测试',
-      loginUrl: 'https://example.com/login',
+      loginUrl: 'https://channels.weixin.qq.com/login.html',
       closeOnLoginSuccess: false,
       loggedOutIndicators: [],
       loggedInIndicators: [],
@@ -143,5 +143,62 @@ describe('captureQR - qrRefreshSelector', () => {
     };
 
     await expect(registry.captureQR(page, config)).resolves.not.toThrow();
+  });
+});
+
+describe('captureQR - hostname guard', () => {
+  /** @type {import('../loginTabRegistry').LoginTabRegistry} */
+  let registry;
+
+  beforeEach(() => {
+    registry = new LoginTabRegistry();
+  });
+
+  it('should return null without screenshot when page hostname mismatches config', async () => {
+    let screenshotCalled = false;
+    const page = {
+      url: () => 'https://creator.douyin.com/creator-micro/home',
+      close: () => Promise.resolve(),
+      evaluate: () => Promise.resolve(),
+      $: () => Promise.resolve(null),
+      isClosed: () => false,
+      screenshot: () => { screenshotCalled = true; return Promise.resolve(Buffer.from('should-not-happen')); },
+      waitForSelector: () => Promise.resolve(null),
+      waitForTimeout: () => Promise.resolve(),
+      mainFrame: () => ({ url: () => 'https://creator.douyin.com/creator-micro/home' }),
+      frames: () => [],
+      mouse: { click: () => Promise.resolve() },
+    };
+    const config = {
+      domain: 'channels.weixin.qq.com',
+      loginUrl: 'https://channels.weixin.qq.com/login.html',
+      qrSelectors: ['img.qrcode'],
+    };
+    const buf = await registry.captureQR(page, config);
+    expect(buf).toBe(null);
+    expect(screenshotCalled).toBe(false);
+  });
+
+  it('should proceed when hostname matches config', async () => {
+    const page = {
+      url: () => 'https://channels.weixin.qq.com/login.html',
+      close: () => Promise.resolve(),
+      evaluate: () => Promise.resolve(),
+      $: () => Promise.resolve({ isVisible: () => Promise.resolve(false) }),
+      isClosed: () => false,
+      screenshot: () => Promise.resolve(Buffer.from('qr-ok')),
+      waitForSelector: () => Promise.resolve({ boundingBox: () => Promise.resolve({ x: 0, y: 0, width: 200, height: 200 }) }),
+      waitForTimeout: () => Promise.resolve(),
+      mainFrame: () => ({ url: () => 'https://channels.weixin.qq.com/login.html' }),
+      frames: () => [],
+      mouse: { click: () => Promise.resolve() },
+    };
+    const config = {
+      domain: 'channels.weixin.qq.com',
+      loginUrl: 'https://channels.weixin.qq.com/login.html',
+      qrSelectors: ['img.qrcode'],
+    };
+    const buf = await registry.captureQR(page, config);
+    expect(buf).not.toBe(null);
   });
 });

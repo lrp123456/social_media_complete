@@ -142,6 +142,19 @@ export class LoginTabRegistry {
 
   /** 截取 QR 码，带 padding 正方形裁剪，全页兜底。支持 iframe 内查找。 */
   async captureQR(page: any, config: LoginFlowConfig): Promise<Buffer | null> {
+    // 前置 hostname 校验：page 当前域名与 config.loginUrl 域名不符 → 快速返回 null
+    // 防止跨平台串号时在错误 page 上累积数十秒 waitForSelector 后发出错误全页截图
+    try {
+      const pageHost = new URL(page.url()).hostname;
+      const loginHost = new URL(config.loginUrl).hostname;
+      if (pageHost !== loginHost) {
+        console.warn(`[LoginTabRegistry] captureQR: page hostname "${pageHost}" !== loginUrl hostname "${loginHost}", skip capture`);
+        return null;
+      }
+    } catch {
+      // URL 解析失败（about:blank 等）→ 不阻塞，继续尝试
+    }
+
     const selectors = config.qrSelectors || [];
 
     // 0. 如配置了激活选择器，先检查 QR 是否已可见，不可见才点击激活
@@ -206,7 +219,7 @@ export class LoginTabRegistry {
     for (const sel of selectors) {
       for (const frame of frames) {
         try {
-          const el = await frame.waitForSelector(sel, { timeout: 8000, state: 'visible' });
+          const el = await frame.waitForSelector(sel, { timeout: 3000, state: 'visible' });
           if (!el) continue;
           await page.waitForTimeout(500);
           const box = await el.boundingBox();
@@ -254,7 +267,7 @@ export class LoginTabRegistry {
       }
       page = await ctx.newPage();
       console.info(`[LoginTabRegistry] openLoginTab: navigating to ${config.loginUrl}`);
-      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 12000 });
       await page.waitForTimeout(3000);
       const markData = JSON.stringify({ flowId, platform, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
       await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
