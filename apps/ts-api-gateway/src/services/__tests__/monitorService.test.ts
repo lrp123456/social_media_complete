@@ -128,8 +128,6 @@ describe('Phase1 wrong-page fast-fail', () => {
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/photo' };
     const task = { userId: 13, windowId: 'w4', platform: 'kuaishou' } as any;
     const { runKuaishouCheck } = require('../monitorService');
-    const result = await runKuaishouCheck(page, task, undefined);
-    expect(result.phase).toBe('Phase1');
-    expect(result.hasUpdate).toBe(false);
+    await expect(runKuaishouCheck(page, task, undefined)).rejects.toThrow(/偏离视频管理页/);
   });
 });
