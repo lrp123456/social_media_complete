@@ -1223,7 +1223,7 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
   const isSimpleMode = crawlConfig.mode === 'simple';
   const maxRootComments = crawlConfig.maxRootComments;
 
-  // Phase 0: 登录检测
+  // Phase 0: 登录检测（只检测不阻塞；失效发一张卡片+停调度，不跳登录页不等扫码）
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 5, detail: '正在检测快手登录状态' });
 
   // 先导航到快手创作者中心
@@ -1232,11 +1232,11 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     await ks.navigateToHome(page);
   }
 
-  // 检测登录状态（支持扫码等待）
-  const loginSuccess = await ks.handleLogin(page, task.userId, onProgress);
-  if (!loginSuccess) {
-    logger.error({ userId: task.userId }, '快手登录失败');
+  const isLoggedIn = await ks.detectKuaishouLogin(page);
+  if (!isLoggedIn) {
+    logger.warn({ userId: task.userId }, '快手登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
+    await sendLoginQR(page, task.userId, 'kuaishou');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
