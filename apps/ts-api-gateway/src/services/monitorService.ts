@@ -758,6 +758,19 @@ export async function delFlowState(userId: number, flowId: string): Promise<void
   await redis.del(getFlowStateKey(userId, flowId));
 }
 
+/** 监控登录成功后重置账号为 active + 清该平台所有 flowState。供 dispatch 入口与 triggerLoginProbe 复用。 */
+export async function markLoginRecovered(userId: number, platform: string): Promise<void> {
+  const { prisma } = await import('../lib/prisma');
+  await prisma.platformAccount.update({
+    where: { id: userId },
+    data: { status: 'active', cooldownUntil: BigInt(0) },
+  });
+  const { getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  for (const fid of getFlowIdsForPlatform(platform)) {
+    await delFlowState(userId, fid);
+  }
+}
+
 // ============================================================
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
@@ -975,14 +988,26 @@ export async function executeMonitorCheck(
 
   try {
     switch (task.platform) {
-      case 'douyin':
-        return await runDouyinCheck(page, task, onProgress);
-      case 'kuaishou':
-        return await runKuaishouCheck(page, task, onProgress);
-      case 'xiaohongshu':
-        return await runXiaohongshuCheck(page, task, onProgress);
-      case 'tencent':
-        return await runTencentCheck(page, task, onProgress);
+      case 'douyin': {
+        const r = await runDouyinCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'douyin');
+        return r;
+      }
+      case 'kuaishou': {
+        const r = await runKuaishouCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'kuaishou');
+        return r;
+      }
+      case 'xiaohongshu': {
+        const r = await runXiaohongshuCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'xiaohongshu');
+        return r;
+      }
+      case 'tencent': {
+        const r = await runTencentCheck(page, task, onProgress);
+        if (!r.riskDetected) await markLoginRecovered(task.userId, 'tencent');
+        return r;
+      }
       default:
         throw new Error(`不支持的监控平台: ${task.platform}`);
     }
