@@ -1972,7 +1972,7 @@ export function useAiReplyConfig() {
   return useQuery({
     queryKey: ['ai-reply-config'],
     queryFn: async () => {
-      const res = await api.get('/api/v1/config-ai-reply');
+      const res = await api.get('/config-ai-reply');
       return res.data.data as { model: string; systemPrompt: string; temperature: number; maxTokens: number; };
     },
   });
@@ -1982,7 +1982,7 @@ export function useUpdateAiReplyConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (cfg: Partial<{ model: string; systemPrompt: string; temperature: number; maxTokens: number; }>) => {
-      const res = await api.put('/api/v1/config-ai-reply', cfg);
+      const res = await api.put('/config-ai-reply', cfg);
       return res.data.data;
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-reply-config'] }); },
