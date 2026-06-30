@@ -1608,12 +1608,13 @@ export async function runTencentCheck(page: any, task: MonitorTask, onProgress?:
   const crawlConfig = await getCrawlConfig('tencent');
   const isSimpleMode = crawlConfig.mode === 'simple';
   const maxRootComments = crawlConfig.maxRootComments;
-  // Phase 0: 登录检测
+  // Phase 0: 登录检测（只检测不阻塞；失效发一张卡片+停调度）
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 10, detail: '正在检测视频号登录状态' });
-  const loggedIn = await tc.handleLogin(page, task.userId);
+  const loggedIn = await tc.detectTencentLogin(page);
   if (!loggedIn) {
-    logger.error({ userId: task.userId }, '视频号登录失败');
+    logger.warn({ userId: task.userId }, '视频号登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
+    await sendLoginQR(page, task.userId, 'tencent');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
