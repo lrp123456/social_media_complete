@@ -9,7 +9,7 @@ import { getRedis } from '../lib/redis';
 import { submitPublishTask } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
-import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds } from '../services/monitorService';
+import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds, triggerLoginProbe } from '../services/monitorService';
 import { enqueueReply, enqueueMonitor, getAllJobs, findJobByTaskId, getWindowQueue, getAllWindowQueues } from '../services/unifiedQueue';
 import { getMonitorAccountCommentStats } from './monitorAccountStats';
 
@@ -1167,6 +1167,29 @@ router.patch('/monitor/accounts/:userId/skip-pinned', async (req: Request, res: 
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+/** POST /api/v1/matrix/monitor/accounts/:userId/probe-login — 立即探测登录态（绕过 cooldown） */
+router.post('/monitor/accounts/:userId/probe-login', async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(String(req.params.userId), 10);
+    if (isNaN(userId)) return res.status(400).json({ error: '无效的 userId' });
+
+    const account = await prisma.platformAccount.findUnique({
+      where: { id: userId },
+      select: { platform: true, window: { select: { externalId: true } } },
+    });
+    if (!account) return res.status(404).json({ error: '未找到账号' });
+    const windowId = account.window?.externalId ? String(account.window.externalId) : '';
+    if (!windowId) return res.status(400).json({ error: '账号未关联浏览器窗口' });
+
+    // force=true 立即探测，绕过 30min cooldown
+    await triggerLoginProbe(userId, account.platform, windowId, undefined, true);
+    res.json({ message: '已触发登录探测', userId, platform: account.platform });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '[probe-login] 探测失败');
+    res.status(500).json({ error: err.message || '探测失败' });
   }
 });
 
