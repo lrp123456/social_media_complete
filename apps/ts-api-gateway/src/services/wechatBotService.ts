@@ -698,7 +698,7 @@ async function autoStartBot(): Promise<void> {
           const browser = await bm.getBrowser(windowId);
           if (!browser) { await botManager.sendTextMessage([userid], '❌ 无法连接浏览器'); return; }
 
-          const record = await loginTabRegistry.find(windowId, targetFlowId, browser, config.domain);
+          const record = await loginTabRegistry.find(windowId, targetPlatform, targetFlowId, browser, config.domain);
           if (record) {
             // 检查登录标签页是否已从登录页跳转（URL 不再包含 login/passport）
             let tabUrl = record.page.url();
@@ -741,9 +741,9 @@ async function autoStartBot(): Promise<void> {
             }
             // 登录成功：关闭标签页（或仅取消注册）
             if (config.closeOnLoginSuccess) {
-              await loginTabRegistry.closeLoginTab(windowId, targetFlowId);
+              await loginTabRegistry.closeLoginTab(windowId, targetPlatform, targetFlowId);
             } else {
-              await loginTabRegistry.unregister(windowId, targetFlowId);
+              await loginTabRegistry.unregister(windowId, targetPlatform, targetFlowId);
             }
           }
           // 恢复监控

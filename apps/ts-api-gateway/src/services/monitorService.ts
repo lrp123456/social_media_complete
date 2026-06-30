@@ -778,7 +778,7 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const browser = await bm.getBrowser(windowId);
         if (!browser) return;
 
-        const record = await loginTabRegistry.find(windowId, fid, browser, config.domain);
+        const record = await loginTabRegistry.find(windowId, platform, fid, browser, config.domain);
         if (!record) {
           await delFlowState(userId, fid);
           return;
@@ -787,9 +787,9 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         const result = await loginTabRegistry.checkLoginState(record.page, config);
         if (result === 'logged_in') {
           if (config.closeOnLoginSuccess) {
-            await loginTabRegistry.closeLoginTab(windowId, fid);
+            await loginTabRegistry.closeLoginTab(windowId, platform, fid);
           } else {
-            await loginTabRegistry.unregister(windowId, fid);
+            await loginTabRegistry.unregister(windowId, platform, fid);
           }
           await delFlowState(userId, fid);
 

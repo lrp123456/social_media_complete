@@ -96,7 +96,7 @@ export async function ensureLoginTab(
   if (!browser) return null;
 
   // 1. 查找已有登录标签页
-  let record = await loginTabRegistry.find(windowId, flowId, browser, config.domain);
+  let record = await loginTabRegistry.find(windowId, platform, flowId, browser, config.domain);
   // 2. 未找到则优先复用监控已打开的同域名平台 tab（不新建连接/tab）
   if (!record) {
     try {
@@ -111,20 +111,20 @@ export async function ensureLoginTab(
               const raw = localStorage.getItem(markKey);
               return raw ? JSON.parse(raw) : null;
             }, { markKey: '__login_tab_mark__' }).catch(() => null);
-            if (mark && mark.flowId === flowId) continue;
+            if (mark && mark.platform === platform && mark.flowId === flowId) continue;
             // 复用：导航到登录页并写入标记
             await page.goto(config.loginUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForTimeout(3000);
-            const markData = JSON.stringify({ flowId, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
+            const markData = JSON.stringify({ flowId, platform, userId, openedAt: Date.now(), loginUrl: config.loginUrl });
             await page.evaluate(({ data, markKey }: { data: string; markKey: string }) => {
               localStorage.setItem(markKey, data);
             }, { data: markData, markKey: '__login_tab_mark__' }).catch(() => {});
             record = {
               page, targetId: (page as any)._targetId || 'reused',
-              domain: config.domain, flowId,
+              domain: config.domain, flowId, platform,
               openedAt: Date.now(), userId, loginUrl: config.loginUrl,
             };
-            loginTabRegistry.register(windowId, flowId, record);
+            loginTabRegistry.register(windowId, platform, flowId, record);
             console.info(`[ensureLoginTab] reused existing platform tab for ${platform} (${windowId}:${flowId})`);
             break;
           } catch { continue; }
@@ -136,7 +136,7 @@ export async function ensureLoginTab(
   }
   // 3. 仍无可用页则打开新标签页
   if (!record) {
-    record = await loginTabRegistry.openLoginTab(windowId, userId, flowId, browser, config);
+    record = await loginTabRegistry.openLoginTab(windowId, platform, userId, flowId, browser, config);
   }
   if (!record) return null;
 

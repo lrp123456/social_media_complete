@@ -38,12 +38,13 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-1',
       domain: 'www.xiaohongshu.com',
       flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(),
       userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
-    registry.register('window123', 'mainsite', record);
-    const memKey = 'window123:mainsite';
+    registry.register('window123', 'xiaohongshu', 'mainsite', record);
+    const memKey = 'window123:xiaohongshu:mainsite';
     expect(registry.tabs.has(memKey)).toBe(true);
     expect(registry.tabs.get(memKey).userId).toBe(42);
   });
@@ -52,34 +53,37 @@ describe('LoginTabRegistry', () => {
     const record = {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
-    registry.register('window123', 'mainsite', record);
-    registry.unregister('window123', 'mainsite');
-    expect(registry.tabs.has('window123:mainsite')).toBe(false);
+    registry.register('window123', 'xiaohongshu', 'mainsite', record);
+    registry.unregister('window123', 'xiaohongshu', 'mainsite');
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(false);
   });
 
   it('should handle multiple flowIds for same window independently', () => {
     const mainsite = {
       page: mockPage('https://www.xiaohongshu.com/explore', 'target-1'),
       targetId: 'target-1', domain: 'www.xiaohongshu.com', flowId: 'mainsite',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://www.xiaohongshu.com/explore',
     };
     const creator = {
       page: mockPage('https://creator.xiaohongshu.com/home', 'target-2'),
       targetId: 'target-2', domain: 'creator.xiaohongshu.com', flowId: 'creator',
+      platform: 'xiaohongshu',
       openedAt: Date.now(), userId: 42,
       loginUrl: 'https://creator.xiaohongshu.com/home',
     };
-    registry.register('window123', 'mainsite', mainsite);
-    registry.register('window123', 'creator', creator);
-    expect(registry.tabs.has('window123:mainsite')).toBe(true);
-    expect(registry.tabs.has('window123:creator')).toBe(true);
-    registry.unregister('window123', 'mainsite');
-    expect(registry.tabs.has('window123:mainsite')).toBe(false);
-    expect(registry.tabs.has('window123:creator')).toBe(true);
+    registry.register('window123', 'xiaohongshu', 'mainsite', mainsite);
+    registry.register('window123', 'xiaohongshu', 'creator', creator);
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(true);
+    expect(registry.tabs.has('window123:xiaohongshu:creator')).toBe(true);
+    registry.unregister('window123', 'xiaohongshu', 'mainsite');
+    expect(registry.tabs.has('window123:xiaohongshu:mainsite')).toBe(false);
+    expect(registry.tabs.has('window123:xiaohongshu:creator')).toBe(true);
   });
 
   it('should detect logged_out via indicator', async () => {
@@ -155,14 +159,15 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-ks',
       domain: 'cp.kuaishou.com',
       flowId: 'creator',
+      platform: 'kuaishou',
       openedAt: Date.now(),
       userId: 11,
       loginUrl: 'https://passport.kuaishou.com/pc/account/login/?sid=kuaishou.web.cp.api',
     };
-    registry.register('windowKS', 'creator', record);
-    await registry.unregister('windowKS', 'creator');
+    registry.register('windowKS', 'kuaishou', 'creator', record);
+    await registry.unregister('windowKS', 'kuaishou', 'creator');
     expect(closed).toBe(true);
-    expect(registry.tabs.has('windowKS:creator')).toBe(false);
+    expect(registry.tabs.has('windowKS:kuaishou:creator')).toBe(false);
   });
 
   it('should NOT close page on unregister when URL is same domain (douyin)', async () => {
@@ -174,14 +179,15 @@ describe('LoginTabRegistry', () => {
       targetId: 'target-dy',
       domain: 'creator.douyin.com',
       flowId: 'creator',
+      platform: 'douyin',
       openedAt: Date.now(),
       userId: 7,
       loginUrl: 'https://creator.douyin.com/creator-micro/home',
     };
-    registry.register('windowDY', 'creator', record);
-    await registry.unregister('windowDY', 'creator');
+    registry.register('windowDY', 'douyin', 'creator', record);
+    await registry.unregister('windowDY', 'douyin', 'creator');
     expect(closed).toBe(false);
-    expect(registry.tabs.has('windowDY:creator')).toBe(false);
+    expect(registry.tabs.has('windowDY:douyin:creator')).toBe(false);
   });
 
   it('should isolate same flowId across platforms under shared window', () => {
