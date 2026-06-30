@@ -77,6 +77,92 @@ const PLATFORM_QR_SWITCH: Record<string, string> = {
 };
 
 /**
+ * 平台 QR 激活：点击平台切换按钮（快手 div.platform-switch）、qrActivationSelector 通用激活、
+ * 小红书缩略图预激活，并等待任一 qrSelectors 可见。返回是否成功激活（QR 可见）。
+ * 供 ensureLoginTab 导航后、强刷/F5 二次导航后、sendLoginQR 短路分支调用。
+ */
+export async function activatePlatformQR(page: any, platform: string, config: LoginFlowConfig): Promise<boolean> {
+  const selectors = config.qrSelectors || [];
+
+  // 1. 平台 QR 切换按钮（快手等）
+  const switchSelector = PLATFORM_QR_SWITCH[platform];
+  if (switchSelector) {
+    try {
+      if (isAntiDetectionV2()) {
+        if (await HumanActions.cdpIsElementVisible(page, switchSelector)) {
+          await HumanActions.cdpClick(page, switchSelector);
+          await new Promise(r => setTimeout(r, 2000));
+          console.info(`[activatePlatformQR] clicked QR switch "${switchSelector}" for ${platform} (v2)`);
+        }
+      } else {
+        const el = await page.$(switchSelector);
+        if (el) { await el.click(); await new Promise(r => setTimeout(r, 2000)); console.info(`[activatePlatformQR] clicked QR switch "${switchSelector}" for ${platform}`); }
+      }
+    } catch { /* switch may not be needed */ }
+  }
+
+  // 2. qrActivationSelector 通用激活（原 captureQR 逻辑，统一 CDP）
+  if (config.qrActivationSelector) {
+    try {
+      let qrAlreadyVisible = false;
+      for (const sel of selectors) {
+        try {
+          const el = await page.$(sel);
+          if (el && await el.isVisible().catch(() => false)) { qrAlreadyVisible = true; break; }
+        } catch { continue; }
+      }
+      if (!qrAlreadyVisible) {
+        if (isAntiDetectionV2()) {
+          if (await HumanActions.cdpIsElementVisible(page, config.qrActivationSelector)) {
+            await HumanActions.cdpClick(page, config.qrActivationSelector);
+            await new Promise(r => setTimeout(r, 2000));
+          }
+        } else {
+          const activator = await page.$(config.qrActivationSelector);
+          if (activator) {
+            const box = await activator.boundingBox();
+            if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            else await activator.click();
+            await page.waitForTimeout(2000);
+          }
+        }
+      }
+    } catch (err: any) { console.warn(`[activatePlatformQR] activation selector failed: ${err.message}`); }
+  }
+
+  // 3. 小红书缩略图预激活
+  if (platform === 'xiaohongshu') {
+    try {
+      if (isAntiDetectionV2()) {
+        if (!(await HumanActions.cdpIsElementVisible(page, 'div.css-dvxtzn'))) {
+          if (await HumanActions.cdpIsElementVisible(page, 'img.css-wemwzq')) {
+            await HumanActions.cdpClick(page, 'img.css-wemwzq');
+            await new Promise(r => setTimeout(r, 2500));
+          }
+        }
+      } else {
+        const alreadyOpen = await page.$('div.css-dvxtzn');
+        if (!alreadyOpen) {
+          const thumb = await page.$('img.css-wemwzq');
+          if (thumb) {
+            const box = await thumb.boundingBox();
+            if (box) await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+            else await thumb.click();
+            await new Promise(r => setTimeout(r, 2500));
+          }
+        }
+      }
+    } catch (err: any) { console.warn(`[activatePlatformQR] xiaohongshu activation failed: ${err.message}`); }
+  }
+
+  // 4. 等待任一 qrSelectors 可见
+  for (const sel of selectors) {
+    try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); return true; } catch { continue; }
+  }
+  return false;
+}
+
+/**
  * 查找或创建登录标签页，并执行平台特定的 QR 切换操作。
  * 供 wechatBotService 刷新/强制刷新、monitorService sendLoginQR 共用。
  * 返回 LoginTabRecord 或 null。调用方可通过 getLoginFlowConfig 获取 config。
@@ -141,57 +227,8 @@ export async function ensureLoginTab(
   }
   if (!record) return null;
 
-  // 3. 平台特定：点击 QR 切换按钮或激活 QR 弹窗
-  const switchSelector = PLATFORM_QR_SWITCH[platform];
-  if (switchSelector) {
-    try {
-      if (isAntiDetectionV2()) {
-        if (await HumanActions.cdpIsElementVisible(record.page, switchSelector)) {
-          await HumanActions.cdpClick(record.page, switchSelector);
-          await new Promise(r => setTimeout(r, 2000));
-          console.info(`[ensureLoginTab] clicked QR switch "${switchSelector}" for ${platform}`);
-        }
-      } else {
-        const switchEl = await record.page.$(switchSelector);
-        if (switchEl) {
-          await switchEl.click();
-          await new Promise(r => setTimeout(r, 2000));
-          console.info(`[ensureLoginTab] clicked QR switch "${switchSelector}" for ${platform}`);
-        }
-      }
-    } catch { /* switch may not be needed */ }
-  }
-  // 4. 平台特定：QR 弹窗预激活（如小红书创作者中心需点缩略图）
-  if (platform === 'xiaohongshu') {
-    try {
-      if (isAntiDetectionV2()) {
-        if (!(await HumanActions.cdpIsElementVisible(record.page, 'div.css-dvxtzn'))) {
-          if (await HumanActions.cdpIsElementVisible(record.page, 'img.css-wemwzq')) {
-            await HumanActions.cdpClick(record.page, 'img.css-wemwzq');
-            await new Promise(r => setTimeout(r, 2500));
-            console.info('[ensureLoginTab] xiaohongshu QR modal activated via CDP click');
-          }
-        }
-      } else {
-        const alreadyOpen = await record.page.$('div.css-dvxtzn');
-        if (!alreadyOpen) {
-          const thumb = await record.page.$('img.css-wemwzq');
-          if (thumb) {
-            const box = await thumb.boundingBox();
-            if (box) {
-              await record.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-            } else {
-              await thumb.click();
-            }
-            await new Promise(r => setTimeout(r, 2500));
-            console.info('[ensureLoginTab] xiaohongshu QR modal activated via CDP click');
-          }
-        }
-      }
-    } catch (err: any) {
-      console.warn(`[ensureLoginTab] xiaohongshu QR activation failed: ${err.message}`);
-    }
-  }
+  // 3. 平台 QR 激活（切换 + 预激活 + 等待可见）
+  await activatePlatformQR(record.page, platform, config);
 
   // 5. 通用：QR 码过期检测与刷新（快手等平台 QR 有时效限制）
   try {

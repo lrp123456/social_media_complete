@@ -171,44 +171,6 @@ export class LoginTabRegistry {
 
     const selectors = config.qrSelectors || [];
 
-    // 0. 如配置了激活选择器，先检查 QR 是否已可见，不可见才点击激活
-    if (config.qrActivationSelector) {
-      try {
-        // 先检查 QR 是否已经可见（避免对切换按钮多次点击导致 QR 消失）
-        let qrAlreadyVisible = false;
-        for (const sel of selectors) {
-          try {
-            const el = await page.$(sel);
-            if (el && await el.isVisible().catch(() => false)) {
-              qrAlreadyVisible = true;
-              break;
-            }
-          } catch { continue; }
-        }
-
-        if (!qrAlreadyVisible) {
-          const activator = await page.$(config.qrActivationSelector);
-          if (activator) {
-            const box = await activator.boundingBox();
-            if (box) {
-              await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-            } else {
-              await activator.click();
-            }
-            await page.waitForTimeout(2000);
-            for (const sel of selectors) {
-              try { await page.waitForSelector(sel, { timeout: 3000, state: 'visible' }); break; } catch { continue; }
-            }
-            console.info(`[LoginTabRegistry] captureQR: activated QR via "${config.qrActivationSelector}"`);
-          }
-        } else {
-          console.info('[LoginTabRegistry] captureQR: QR already visible, skipping activation click');
-        }
-      } catch (err: any) {
-        console.warn(`[LoginTabRegistry] captureQR: activation selector "${config.qrActivationSelector}" failed: ${err.message}`);
-      }
-    }
-
     // 收集所有 frame（主页面 + 子 iframe），视频号 QR 在 login-for-iframe 内
     const frames: any[] = [page, ...page.frames().filter((f: any) => f !== page.mainFrame())];
 
