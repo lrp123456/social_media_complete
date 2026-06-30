@@ -234,6 +234,60 @@ export class KuaishouCrawler {
     }
   }
 
+  /** 快手 account/current 接口 URL 片段 */
+  private static readonly KS_ACCOUNT_CURRENT_PATTERN = '/rest/v2/creator/pc/authority/account/current';
+
+  /**
+   * 登录态检测 V2（HAR 主 + DOM 兜底）。
+   * 主：拦截 account/current 响应 — result:1+logined:true 已登录 / result:109 未登录 / 403,429,超时抛 UNKNOWN_EXCEPTION。
+   * 兜底：5s 未拦截到接口则 DOM 智能轮询（500ms 步长、8s 上限），命中登录/未登录强特征；都不命中抛 PAGE_RENDER_TIMEOUT。
+   */
+  async detectKuaishouLoginV2(page: Page): Promise<boolean> {
+    const pid = await this.interceptor.register(page, [KuaishouCrawler.KS_ACCOUNT_CURRENT_PATTERN]);
+    try {
+      const resp = await this.interceptor.waitForResponse(
+        KuaishouCrawler.KS_ACCOUNT_CURRENT_PATTERN,
+        { timeoutMs: 5000 },
+      );
+      if (resp) {
+        const status = resp.status ?? 200;
+        const body = resp.body ?? {};
+        if (status === 403 || status === 429) {
+          throw new Error('UNKNOWN_EXCEPTION: account/current 风控/限流 ' + status);
+        }
+        const result = (body as any)?.result;
+        if (result === 1 && (body as any)?.data?.logined === true) return true;
+        if (result === 109 || (body as any)?.loginUrl || (body as any)?.data?.logined === false) return false;
+        throw new Error('UNKNOWN_EXCEPTION: account/current 非预期 result=' + result);
+      }
+      return await this.detectKuaishouLoginByDom(page);
+    } finally {
+      this.interceptor.unregister(pid);
+    }
+  }
+
+  /** DOM 兜底：500ms 步长、8s 上限，命中强特征返回，超时抛 PAGE_RENDER_TIMEOUT。 */
+  private async detectKuaishouLoginByDom(page: Page): Promise<boolean> {
+    const MAX_MS = 8000;
+    const STEP_MS = 500;
+    const start = Date.now();
+    while (Date.now() - start < MAX_MS) {
+      const hasMenu = await HumanActions.exists(page, 'ul.el-menu', STEP_MS).catch(() => false);
+      if (hasMenu) {
+        const hasName = await HumanActions.exists(page, '.user__name', STEP_MS).catch(() => false);
+        if (hasName) return true;
+      }
+      const hasLoginModal = await HumanActions.exists(page, 'div.passport-login-container', STEP_MS).catch(() => false);
+      if (hasLoginModal) return false;
+      const hasLogoutLink = await page
+        .evaluate(() => !!document.querySelector('a[href*="/rest/infra/logout"]'))
+        .catch(() => false);
+      if (hasLogoutLink) return false;
+      await new Promise((r) => setTimeout(r, STEP_MS));
+    }
+    throw new Error('PAGE_RENDER_TIMEOUT: 快手页面 8s 内未渲染出登录/未登录强特征');
+  }
+
   async handleLogin(
     page: Page,
     userId: number,
