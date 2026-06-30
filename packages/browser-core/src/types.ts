@@ -131,6 +131,8 @@ export interface LoginFlowConfig {
   qrSelectors: string[];
   /** 可选：激活 QR 码的选择器（如小红书创作者中心需点击缩略图弹出 QR 弹窗） */
   qrActivationSelector?: string;
+  /** 可选：QR 码过期时点击刷新按钮的选择器（如视频号 .refresh-wrap） */
+  qrRefreshSelector?: string;
 }
 
 /** 登录检测结果 */

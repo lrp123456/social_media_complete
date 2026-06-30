@@ -29,6 +29,7 @@ export function loadLoginFlowConfig(platform: string): LoginFlowConfig[] {
       loggedInIndicators: entry.loggedInIndicators || [],
       qrSelectors: entry.qrSelectors || [],
       qrActivationSelector: entry.qrActivationSelector || undefined,
+      qrRefreshSelector: entry.qrRefreshSelector || undefined,
     });
   }
   return result;
@@ -53,6 +54,7 @@ export function getLoginFlowConfig(platform: string, flowId: string): LoginFlowC
     loggedInIndicators: entry.loggedInIndicators || [],
     qrSelectors: entry.qrSelectors || [],
     qrActivationSelector: entry.qrActivationSelector || undefined,
+    qrRefreshSelector: entry.qrRefreshSelector || undefined,
   };
 }
 
