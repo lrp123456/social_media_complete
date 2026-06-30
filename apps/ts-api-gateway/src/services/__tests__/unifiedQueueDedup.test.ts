@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 // Shared mutable mock queue — var 确保被 jest.mock 闭包捕获
@@ -12,7 +13,7 @@ jest.mock('bullmq', () => ({
   Worker: jest.fn().mockImplementation(() => ({
     on: jest.fn(),
   })),
-  Job: jest.fn(),
+  Job: jest.fn().mockImplementation(() => ({ id: 'mock-job' } as any)),
 }));
 
 jest.mock('../../lib/redlock', () => ({
