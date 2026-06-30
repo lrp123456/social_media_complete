@@ -9,7 +9,7 @@ import { getRedis } from '../lib/redis';
 import { submitPublishTask } from '../services/publishService';
 import type { PublishTask } from '../platforms/types';
 import type { PlatformName } from '@social-media/shared-config';
-import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds, triggerLoginProbe } from '../services/monitorService';
+import { getAllSchedulerStatuses, resetSchedulerTimer, restartMonitorScheduler, markJobCancelled, cancelledJobIds, triggerLoginProbe, recoverLogin } from '../services/monitorService';
 import { enqueueReply, enqueueMonitor, getAllJobs, findJobByTaskId, getWindowQueue, getAllWindowQueues } from '../services/unifiedQueue';
 import { getMonitorAccountCommentStats } from './monitorAccountStats';
 
@@ -1193,6 +1193,28 @@ router.post('/monitor/accounts/:userId/probe-login', async (req: Request, res: R
   } catch (err: any) {
     logger.error({ err: err.message }, '[probe-login] 探测失败');
     res.status(500).json({ error: err.message || '探测失败' });
+  }
+});
+
+/** POST /api/v1/matrix/monitor/accounts/:userId/recover-login — 直接置已登录 + 启动倒计时（不检测不发卡片） */
+router.post('/monitor/accounts/:userId/recover-login', async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(String(req.params.userId), 10);
+    if (isNaN(userId)) return res.status(400).json({ error: '无效的 userId' });
+
+    const account = await prisma.platformAccount.findUnique({
+      where: { id: userId },
+      select: { platform: true, window: { select: { externalId: true } } },
+    });
+    if (!account) return res.status(404).json({ error: '未找到账号' });
+    const windowId = account.window?.externalId ? String(account.window.externalId) : '';
+    if (!windowId) return res.status(400).json({ error: '账号未关联浏览器窗口' });
+
+    const result = await recoverLogin(userId, account.platform, windowId);
+    res.json({ message: result.message, userId, platform: account.platform });
+  } catch (err: any) {
+    logger.error({ err: err.message }, '[recover-login] 失败');
+    res.status(500).json({ error: err.message || '恢复失败' });
   }
 });
 

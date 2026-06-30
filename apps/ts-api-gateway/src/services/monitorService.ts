@@ -773,6 +773,26 @@ export async function markLoginRecovered(userId: number, platform: string): Prom
   }
 }
 
+/**
+ * 恢复登录（前端"恢复登录"按钮）：直接置 active + 清 flowState + 启动倒计时。
+ * 不连浏览器、不检测、不发卡片。信任用户已扫码登录。
+ * 若实际未登录，下轮监控 runXxxCheck 发现失效会发一张卡片。
+ */
+export async function recoverLogin(userId: number, platform: string, windowId: string): Promise<{ message: string }> {
+  const { prisma } = await import('../lib/prisma');
+  await prisma.platformAccount.update({
+    where: { id: userId },
+    data: { status: 'active', cooldownUntil: BigInt(0) },
+  });
+  const { getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  for (const fid of getFlowIdsForPlatform(platform)) {
+    await delFlowState(userId, fid);
+  }
+  resetSchedulerTimer(windowId, platform);
+  logger.info({ userId, platform, windowId }, '[recoverLogin] 已置 active 并启动 3s 倒计时');
+  return { message: '已置为已登录并启动监控' };
+}
+
 // ============================================================
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
