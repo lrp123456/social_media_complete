@@ -814,10 +814,12 @@ export async function triggerLoginProbe(userId: number, platform: string, window
         if (!browser) return;
 
         const loginHost = getLoginHost(config.loginUrl, config.domain);
-        const record = await loginTabRegistry.find(windowId, platform, fid, browser, loginHost);
+        let record = await loginTabRegistry.find(windowId, platform, fid, browser, loginHost);
         if (!record) {
-          await delFlowState(userId, fid);
-          return;
+          // find null（无残留登录 tab）→ 回退 ensureLoginTab 打开/复用登录页再检测
+          const { ensureLoginTab } = await import('./loginFlowHelpers');
+          record = await ensureLoginTab(windowId, userId, platform, fid);
+          if (!record) { await delFlowState(userId, fid); return; }
         }
 
         const result = await loginTabRegistry.checkLoginState(record.page, config);
@@ -827,18 +829,9 @@ export async function triggerLoginProbe(userId: number, platform: string, window
           } else {
             await loginTabRegistry.unregister(windowId, platform, fid);
           }
-          await delFlowState(userId, fid);
-
-          const allStates = await getAllFlowStates(userId, platform);
-          if (allStates.size === 0) {
-            const { prisma } = await import('../lib/prisma');
-            await prisma.platformAccount.update({
-              where: { id: userId },
-              data: { status: 'active', cooldownUntil: BigInt(0) },
-            });
-          }
+          await markLoginRecovered(userId, platform);   // 复用 B1 helper
         } else {
-          const newLevel = Math.min((state.cooldownLevel || 0) + 1, 4);
+          const newLevel = Math.min((state?.cooldownLevel || 0) + 1, 4);
           const cooldownsMs = [30, 60, 120, 240, 240];
           const cooldownMs = cooldownsMs[newLevel] * 60 * 1000;
           await setFlowState(userId, fid, {
