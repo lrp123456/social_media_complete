@@ -1843,21 +1843,22 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       q.getJobs(['active']),
       q.getJobs(['waiting']),
     ]);
-    const activeUserIds = new Set<number>();
+    const activeKeys = new Set<string>();
     for (const j of [...activeJobs, ...waitingJobs]) {
       const data = j.data as any;
-      if (!data?.userId) continue;
+      if (!data?.windowId || !data?.platform) continue;
       // BullMQ API 判断状态，不需要手动查 Redis lock key
       if (await j.isActive() || await j.isWaiting()) {
-        activeUserIds.add(data.userId);
+        activeKeys.add(`${data.windowId}:${data.platform}`);
       }
     }
 
     // 入队（跳过已有任务的用户）
     let queued = 0;
     for (const u of matched) {
-      if (activeUserIds.has(u.id)) {
-        logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：已有运行中的任务');
+      const key = `${u.windowExternalId}:${u.platform}`;
+      if (activeKeys.has(key)) {
+        logger.debug({ userId: u.id, platform: u.platform }, '[调度] 跳过：同窗口同平台已有任务');
         continue;
       }
       const result = await enqueueMonitor({
@@ -1870,7 +1871,7 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       if (result.enqueued) queued++;
     }
 
-    if (queued === 0 && activeUserIds.size > 0) {
+    if (queued === 0 && activeKeys.size > 0) {
       // 全部用户已有任务运行中（外部手动触发入队的任务）
       // 设 scheduleAfterCompletion，等任务完成后 reportMonitorComplete 触发下一轮
       st.scheduleAfterCompletion = true;
@@ -1878,7 +1879,7 @@ async function runOneSchedule(windowId: string, platform: string): Promise<void>
       return;
     }
 
-    logger.info({ windowId, platform, queued, skipped: activeUserIds.size }, '[调度] 完成任务入队');
+    logger.info({ windowId, platform, queued, skipped: activeKeys.size }, '[调度] 完成任务入队');
     st.pendingTaskCount = queued;
     st.scheduleAfterCompletion = true;
     // 不立即 scheduleNext，等待所有任务完成后 reportMonitorComplete 触发
