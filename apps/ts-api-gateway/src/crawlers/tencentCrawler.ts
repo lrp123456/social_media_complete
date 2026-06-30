@@ -142,6 +142,20 @@ export class TencentCrawler {
   // ════════════════════════════════════════
 
   /**
+   * 登录态检测（不导航，不阻塞）。
+   * 在 /platform 页（非 /login）即视为已登录。供监控 Phase0 使用。
+   */
+  async detectTencentLogin(page: Page): Promise<boolean> {
+    try {
+      const url = page.url();
+      return url.includes('/platform') && !url.includes('/login');
+    } catch (error: any) {
+      logger.warn({ error: error.message }, '[Login] detectTencentLogin error');
+      return false;
+    }
+  }
+
+  /**
    * 检测登录状态 — 简化逻辑
    * 只看 URL：在 /platform 页面就是登录有效，在 /login 就是需要扫码
    * 能采集数据 = 登录有效，不依赖页面文本内容判断
