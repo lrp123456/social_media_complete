@@ -43,6 +43,7 @@ export default function MaterialTab() {
   const triggerRun = useTriggerMaterialRun();
   const statusQuery = useMaterialStatus();
   const candidatesQuery = useMaterialCandidates(1, 12);
+  const diskUsageQuery = useMaterialDiskUsage();
 
   const [form, setForm] = useState<MaterialUpdateConfig | null>(null);
   const initRef = useRef(false);
@@ -111,8 +112,6 @@ export default function MaterialTab() {
   if (configQuery.isLoading) return <PanelSkeleton rows={8} />;
   if (configQuery.isError) return <QueryError />;
   if (!form) return null;
-
-  const diskUsageQuery = useMaterialDiskUsage();
 
   const getKeyChips = (platformId: string) => {
     const platformStatus = statusQuery.data?.platforms?.find((p: any) => p.platformId === platformId);
