@@ -1014,7 +1014,7 @@ export async function executeMonitorCheck(
 // 抖音监控 — 3阶段流程
 // ============================================================
 
-async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const dy = getDouyinCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('douyin');
   const crawlConfig = await getCrawlConfig('douyin');
@@ -1027,6 +1027,14 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
   const currentUrl = page.url();
   if (!currentUrl.includes('creator.douyin.com')) {
     await dy.navigateToCreatorHome(page);
+  }
+
+  // wrong-page fast-fail：偏离 creator-micro 主页/内容管理 → fast-fail
+  const dyUrl = page.url();
+  const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
+  if (!dyOk) {
+    logger.warn({ userId: task.userId, url: dyUrl }, '[抖音] Phase1 入口 page 偏离作品管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
   // Phase 1: 发现新评论（视频列表扫描 + 对比数据库）
@@ -1187,7 +1195,7 @@ async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: (p: { p
 // 快手监控 — 3阶段流程
 // ============================================================
 
-async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const ks = getKuaishouCrawler(task.windowId);
   const crawlMode = await db.getCrawlMode('kuaishou');
   const crawlConfig = await getCrawlConfig('kuaishou');
@@ -1217,6 +1225,13 @@ async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?: (p: {
     '/rest/cp/creator/analysis/pc/photo/list',
     '/rest/cp/comment/pc/list',
   ]);
+
+  // wrong-page fast-fail：偏离视频管理页 → fast-fail
+  const ksUrl = page.url();
+  if (!ksUrl.includes('/article/publish/video')) {
+    logger.warn({ userId: task.userId, url: ksUrl }, '[快手] Phase1 入口 page 偏离视频管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+  }
 
   // Phase 1 — 统一使用 work_list 数据源（photo_analysis 返回数量少且 ID 体系不同，
   // 交替使用会导致 reconcile 误删视频，见 issue: 两源交替循环删除）
@@ -1564,7 +1579,7 @@ async function runXiaohongshuCheck(page: any, task: MonitorTask, onProgress?: (p
 // 视频号监控 — 3阶段流程
 // ============================================================
 
-async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
+export async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { phase: string; step: string; percent: number; detail?: string }) => void): Promise<MonitorResult> {
   const tc = getTencentCrawler(task.windowId);
   const crawlConfig = await getCrawlConfig('tencent');
   const isSimpleMode = crawlConfig.mode === 'simple';
@@ -1579,6 +1594,13 @@ async function runTencentCheck(page: any, task: MonitorTask, onProgress?: (p: { 
   }
 
   let crawlMode = await db.getCrawlMode('tencent');
+
+  // wrong-page fast-fail：若被其他进程导航到评论页（/platform/comment），Phase1 等不到作品管理页 → 直接返回
+  const tencentUrl = page.url();
+  if (tencentUrl.includes('/platform/comment') || tencentUrl.includes('/platform/home')) {
+    logger.warn({ userId: task.userId, url: tencentUrl }, '[视频号] Phase1 入口 page 偏离作品管理页，fast-fail');
+    return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
+  }
 
   // Phase 1: 检测更新（视频列表扫描 + 对比数据库）
   onProgress?.({ phase: 'Phase1', step: '扫描视频列表', percent: 20, detail: '正在获取视频列表并对比评论数' });
