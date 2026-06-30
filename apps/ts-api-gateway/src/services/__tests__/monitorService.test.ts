@@ -34,7 +34,10 @@ jest.mock('../unifiedQueue', () => ({
   getWindowQueue: jest.fn(),
 }));
 jest.mock('../../crawlers/tencentCrawler', () => {
-  const mockTcInstance = { handleLogin: jest.fn().mockResolvedValue(true) };
+  const mockTcInstance = {
+    handleLogin: jest.fn().mockResolvedValue(true),
+    detectTencentLogin: jest.fn().mockResolvedValue(true),
+  };
   return { TencentCrawler: jest.fn().mockImplementation(() => mockTcInstance), TencentReplyTarget: jest.fn() };
 });
 jest.mock('../../crawlers/douyinCrawler', () => {
@@ -42,7 +45,7 @@ jest.mock('../../crawlers/douyinCrawler', () => {
   return { DouyinCrawler: jest.fn().mockImplementation(() => mockDyInstance), ReplyTarget: jest.fn() };
 });
 jest.mock('../../crawlers/kuaishouCrawler', () => {
-  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), handleLogin: jest.fn().mockResolvedValue(true) };
+  const mockKsInstance = { registerListener: jest.fn().mockResolvedValue(undefined), navigateToHome: jest.fn().mockResolvedValue(undefined), detectKuaishouLogin: jest.fn().mockResolvedValue(true) };
   return { KuaishouCrawler: jest.fn().mockImplementation(() => mockKsInstance) };
 });
 jest.mock('../monitorDatabaseService', () => ({

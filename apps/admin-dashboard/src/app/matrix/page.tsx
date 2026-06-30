@@ -22,6 +22,7 @@ import {
   useTriggerMonitor,
   useToggleMonitor,
   useProbeLogin,
+  useRecoverLogin,
   useClearUserData,
   useEnableAllUsers,
   useRestoreAllPlatforms,
@@ -854,6 +855,7 @@ function MonitorTab() {
   const triggerAllMonitor = useTriggerAllMonitor();
   const toggleMonitor = useToggleMonitor();
   const probeLogin = useProbeLogin();
+  const recoverLogin = useRecoverLogin();
   const clearUserData = useClearUserData();
   const enableAllUsers = useEnableAllUsers();
   const restoreAllPlatforms = useRestoreAllPlatforms();
@@ -1705,17 +1707,17 @@ function MonitorTab() {
                                             <button
                                               onClick={async () => {
                                                 try {
-                                                  await probeLogin.mutateAsync(account.id);
-                                                  addToast('已触发登录探测，请稍候', 'success');
+                                                  await recoverLogin.mutateAsync(account.id);
+                                                  addToast('已置为已登录，3秒后开始监控', 'success');
                                                 } catch (e: any) {
-                                                  addToast(e?.response?.data?.error || '探测失败', 'error');
+                                                  addToast(e?.response?.data?.error || '恢复失败', 'error');
                                                 }
                                               }}
-                                              disabled={probeLogin.isPending}
+                                              disabled={recoverLogin.isPending}
                                               className="flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-orange-500/10 text-orange-500 hover:bg-orange-500/20 transition-colors disabled:opacity-30"
                                             >
-                                              <MaterialIcon icon={probeLogin.isPending ? 'pending' : 'login'} size="xs" />
-                                              {probeLogin.isPending ? '探测中…' : '恢复登录'}
+                                              <MaterialIcon icon={recoverLogin.isPending ? 'pending' : 'login'} size="xs" />
+                                              {recoverLogin.isPending ? '恢复中…' : '恢复登录'}
                                             </button>
                                           )}
                                           <button

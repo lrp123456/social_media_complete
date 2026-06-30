@@ -773,6 +773,26 @@ export async function markLoginRecovered(userId: number, platform: string): Prom
   }
 }
 
+/**
+ * 恢复登录（前端"恢复登录"按钮）：直接置 active + 清 flowState + 启动倒计时。
+ * 不连浏览器、不检测、不发卡片。信任用户已扫码登录。
+ * 若实际未登录，下轮监控 runXxxCheck 发现失效会发一张卡片。
+ */
+export async function recoverLogin(userId: number, platform: string, windowId: string): Promise<{ message: string }> {
+  const { prisma } = await import('../lib/prisma');
+  await prisma.platformAccount.update({
+    where: { id: userId },
+    data: { status: 'active', cooldownUntil: BigInt(0) },
+  });
+  const { getFlowIdsForPlatform } = await import('./loginFlowHelpers');
+  for (const fid of getFlowIdsForPlatform(platform)) {
+    await delFlowState(userId, fid);
+  }
+  resetSchedulerTimer(windowId, platform);
+  logger.info({ userId, platform, windowId }, '[recoverLogin] 已置 active 并启动 3s 倒计时');
+  return { message: '已置为已登录并启动监控' };
+}
+
 // ============================================================
 // login probe 恢复（数据库驱动 + per-flowId 冷却）
 // ============================================================
@@ -1045,12 +1065,15 @@ export async function runDouyinCheck(page: any, task: MonitorTask, onProgress?: 
   // 注册 API 拦截器（item_list 已屏蔽，只用 work_list）
   await dy.registerListener(page, ['/work_list', '/comment/list/select']);
 
-  const currentUrl = page.url();
-  if (!currentUrl.includes('creator.douyin.com')) {
+  // 入口按"是否在工作页"判导航（而非是否在 douyin 域），
+  // 避免上一轮退出策略残留子页（/data/following/follower 等）直接 fast-fail 0s 假成功
+  const entryUrl = page.url();
+  const onWorkPage = entryUrl.includes('/creator-micro/home') || entryUrl.includes('/creator-micro/content/manage');
+  if (!onWorkPage) {
     await dy.navigateToCreatorHome(page);
   }
 
-  // wrong-page fast-fail：偏离 creator-micro 主页/内容管理 → fast-fail
+  // 导航后再次校验，仍偏离才 fast-fail（兜底，非常态）
   const dyUrl = page.url();
   const dyOk = dyUrl.includes('/creator-micro/home') || dyUrl.includes('/creator-micro/content/manage');
   if (!dyOk) {
@@ -1223,7 +1246,7 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
   const isSimpleMode = crawlConfig.mode === 'simple';
   const maxRootComments = crawlConfig.maxRootComments;
 
-  // Phase 0: 登录检测
+  // Phase 0: 登录检测（只检测不阻塞；失效发一张卡片+停调度，不跳登录页不等扫码）
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 5, detail: '正在检测快手登录状态' });
 
   // 先导航到快手创作者中心
@@ -1232,11 +1255,11 @@ export async function runKuaishouCheck(page: any, task: MonitorTask, onProgress?
     await ks.navigateToHome(page);
   }
 
-  // 检测登录状态（支持扫码等待）
-  const loginSuccess = await ks.handleLogin(page, task.userId, onProgress);
-  if (!loginSuccess) {
-    logger.error({ userId: task.userId }, '快手登录失败');
+  const isLoggedIn = await ks.detectKuaishouLogin(page);
+  if (!isLoggedIn) {
+    logger.warn({ userId: task.userId }, '快手登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
+    await sendLoginQR(page, task.userId, 'kuaishou');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
@@ -1605,12 +1628,13 @@ export async function runTencentCheck(page: any, task: MonitorTask, onProgress?:
   const crawlConfig = await getCrawlConfig('tencent');
   const isSimpleMode = crawlConfig.mode === 'simple';
   const maxRootComments = crawlConfig.maxRootComments;
-  // Phase 0: 登录检测
+  // Phase 0: 登录检测（只检测不阻塞；失效发一张卡片+停调度）
   onProgress?.({ phase: 'Phase0', step: '检测登录状态', percent: 10, detail: '正在检测视频号登录状态' });
-  const loggedIn = await tc.handleLogin(page, task.userId);
+  const loggedIn = await tc.detectTencentLogin(page);
   if (!loggedIn) {
-    logger.error({ userId: task.userId }, '视频号登录失败');
+    logger.warn({ userId: task.userId }, '视频号登录态失效，发卡片并停调度');
     await db.updateUserStatus(task.userId, 'login_required');
+    await sendLoginQR(page, task.userId, 'tencent');
     return { hasUpdate: false, newComments: 0, updatedVideos: [], phase: 'Phase1', riskDetected: false };
   }
 
