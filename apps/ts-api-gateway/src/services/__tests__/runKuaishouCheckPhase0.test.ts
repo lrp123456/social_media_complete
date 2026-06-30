@@ -19,7 +19,7 @@ jest.mock('../../lib/prisma', () => ({
   },
 }));
 jest.mock('../../lib/redis', () => ({ getRedis: () => ({ del: jest.fn(), get: jest.fn(), set: jest.fn() }) }));
-jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: jest.fn() } }));
+jest.mock('../wechatBotService', () => ({ botManager: { sendLoginAlert: jest.fn().mockResolvedValue(undefined) } }));
 jest.mock('../loginFlowHelpers', () => ({
   getFlowIdsForPlatform: jest.fn().mockReturnValue(['creator']),
   getLoginFlowConfig: jest.fn(),
@@ -30,6 +30,8 @@ const mockUpdateUserStatus = jest.fn();
 jest.mock('../monitorDatabaseService', () => ({
   getCrawlMode: jest.fn().mockResolvedValue('simple'),
   updateUserStatus: mockUpdateUserStatus,
+}));
+jest.mock('../../routes/config-automation', () => ({
   getCrawlConfig: jest.fn().mockResolvedValue({ mode: 'simple', maxRootComments: 50 }),
 }));
 
@@ -52,6 +54,8 @@ jest.mock('../../crawlers/kuaishouCrawler', () => ({
 }));
 
 import { runKuaishouCheck } from '../monitorService';
+import { botManager } from '../wechatBotService';
+import { prisma } from '../../lib/prisma';
 
 describe('runKuaishouCheck Phase0', () => {
   beforeEach(() => {
@@ -61,11 +65,13 @@ describe('runKuaishouCheck Phase0', () => {
 
   it('未登录 → 标 login_required + return，不阻塞', async () => {
     mockDetectKuaishouLogin.mockResolvedValue(false);
+    (prisma.platformAccount.findUnique as jest.Mock).mockResolvedValue({ wechatUserid: 'test-user', windowId: 'w1' });
     const task = { userId: 11, windowId: 'w1', platform: 'kuaishou' } as any;
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/video' } as any;
     const result = await runKuaishouCheck(page, task);
     expect(result.hasUpdate).toBe(false);
     expect(mockUpdateUserStatus).toHaveBeenCalledWith(11, 'login_required');
+    expect(botManager.sendLoginAlert).toHaveBeenCalled();
   });
 
   it('已登录 → 继续（不调 updateUserStatus）', async () => {
@@ -74,5 +80,6 @@ describe('runKuaishouCheck Phase0', () => {
     const page = { url: () => 'https://cp.kuaishou.com/article/publish/video' } as any;
     await runKuaishouCheck(page, task);
     expect(mockUpdateUserStatus).not.toHaveBeenCalled();
+    expect(mockRegisterListener).toHaveBeenCalled();
   });
 });
