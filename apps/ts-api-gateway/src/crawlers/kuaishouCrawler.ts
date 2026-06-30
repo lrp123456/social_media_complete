@@ -233,6 +233,9 @@ export class KuaishouCrawler {
       return true;
     }
 
+    // 切 login_required：getAllActiveUsers 将排除该用户出调度，避免重复进 handleLogin 阻塞发 QR
+    await db.updateUserStatus(userId, 'login_required').catch(() => {});
+
     logger.info('[Login] Login required, navigating to login page');
     onProgress?.({ phase: '登录', step: '导航到登录页', percent: 6, detail: '正在打开快手登录页面' });
 
